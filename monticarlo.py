@@ -204,15 +204,25 @@ if __name__ == "__main__":
     gen_entries = {}
     user_entries = {}
 
+    label_width = max(
+        len(k.replace("_", " ").title())
+        for k in list(DEFAULT_GENERAL) + list(DEFAULT_USER)
+    )
+
     general_frame = ttk.LabelFrame(root, text="General Parameters")
     general_frame.pack(fill="x", padx=10, pady=5)
     for key, default in DEFAULT_GENERAL.items():
         row = ttk.Frame(general_frame)
         row.pack(fill="x", pady=2)
-        ttk.Label(row, text=key.replace("_", " ").title()).pack(side="left")
+        ttk.Label(
+            row,
+            text=key.replace("_", " ").title(),
+            width=label_width,
+            anchor="w",
+        ).pack(side="left")
         ent = ttk.Entry(row)
         ent.insert(0, str(default))
-        ent.pack(side="right", fill="x", expand=True)
+        ent.pack(side="left", fill="x", expand=True)
         gen_entries[key] = ent
 
     user_frame = ttk.LabelFrame(root, text="User-specific Parameters")
@@ -220,10 +230,15 @@ if __name__ == "__main__":
     for key, default in DEFAULT_USER.items():
         row = ttk.Frame(user_frame)
         row.pack(fill="x", pady=2)
-        ttk.Label(row, text=key.replace("_", " ").title()).pack(side="left")
+        ttk.Label(
+            row,
+            text=key.replace("_", " ").title(),
+            width=label_width,
+            anchor="w",
+        ).pack(side="left")
         ent = ttk.Entry(row)
         ent.insert(0, str(default))
-        ent.pack(side="right", fill="x", expand=True)
+        ent.pack(side="left", fill="x", expand=True)
         user_entries[key] = ent
 
     precomp_frame = ttk.LabelFrame(root, text="Pre-computations")
