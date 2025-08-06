@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import ttk
 import json
 import os
+import matplotlib.pyplot as plt
 
 # Monte Carlo setup
 np.random.seed()
@@ -74,7 +75,7 @@ def gross_from_net_with_ss(net_amt, social_security_yearly_amount):
             hi = mid
     return hi
 
-def simulate(base_yearly_need):
+def simulate(base_yearly_need, collect_paths=False):
     global retirement_age, current_age
     global current_roth, current_401a_and_403b
     global pre_retirement_mean_return, pre_retirement_std_dev
@@ -82,6 +83,9 @@ def simulate(base_yearly_need):
     global mortgage_years_in_retirement, mortgage_yearly_payment
 
     success = 0
+    success_paths = [] if collect_paths else None
+    failure_paths = [] if collect_paths else None
+
     for _ in range(number_of_simulations):
         # Grow pre-retirement balances using both mean return and volatility.
         years_to_retirement = retirement_age - current_age
@@ -93,8 +97,6 @@ def simulate(base_yearly_need):
         roth_start = current_roth * growth_factor
         pretax_start = current_401a_and_403b * growth_factor
 
-
-
         r_bal, p_bal = roth_start, pretax_start
         base_need = base_yearly_need
         mortgage_remaining = mortgage_years_in_retirement
@@ -104,9 +106,13 @@ def simulate(base_yearly_need):
         bond_returns  = np.random.normal(bond_mean_return, bond_std_dev, years_of_retirement)
         infls         = np.random.normal(inflation_mean, inflation_std_dev, years_of_retirement)
 
+        path = [r_bal + p_bal] if collect_paths else None
+
         for year_idx, (sr, br, i) in enumerate(zip(stock_returns, bond_returns, infls), start=1):
             if year_idx > death_year:
                 success += 1
+                if collect_paths:
+                    success_paths.append(path)
                 break  # retiree is assumed dead; stop withdrawals
 
             # portfolio return = weighted average of stock & bond returns
@@ -137,13 +143,52 @@ def simulate(base_yearly_need):
                 mortgage_remaining -= 1
             w = base_need + (mortgage_yearly_payment if mortgage_remaining > 0 else 0)
 
+            if collect_paths:
+                path.append(r_bal + p_bal)
+
             # if either balance goes negative → ruin
             if r_bal < 0 or p_bal < 0:
+                if collect_paths:
+                    failure_paths.append(path)
                 break
         else:
             success += 1
+            if collect_paths:
+                success_paths.append(path)
 
+    if collect_paths:
+        return success / number_of_simulations, success_paths, failure_paths
     return success / number_of_simulations
+
+
+def plot_paths(success_paths, failure_paths):
+    """Plot retirement fund paths for successful and failed simulations."""
+    if success_paths:
+        x, y = [], []
+        for path in success_paths:
+            x.extend(range(len(path)))
+            y.extend(path)
+        plt.figure()
+        plt.scatter(x, y, s=1)
+        plt.yscale("log")
+        plt.xlabel("Years in retirement")
+        plt.ylabel("Total funds ($)")
+        plt.title("Successful simulations")
+
+    if failure_paths:
+        x, y = [], []
+        for path in failure_paths:
+            x.extend(range(len(path)))
+            y.extend(path)
+        plt.figure()
+        plt.scatter(x, y, s=1)
+        plt.yscale("log")
+        plt.xlabel("Years in retirement")
+        plt.ylabel("Total funds ($)")
+        plt.title("Failed simulations")
+
+    if success_paths or failure_paths:
+        plt.show()
 
 # Default parameter values
 DEFAULT_GENERAL = {
@@ -308,7 +353,10 @@ def run_sim():
     """Run a single simulation using the current GUI inputs."""
     _load_inputs(parse_percent(user_entries["percent_in_stock_after_retirement"].get()))
 
-    rate = simulate(base_retirement_need) * 100
+    rate, success_paths, failure_paths = simulate(
+        base_retirement_need, collect_paths=True
+    )
+    rate *= 100
 
     if retirement_age < social_security_age:
         years_until_ss = social_security_age - retirement_age
@@ -327,6 +375,7 @@ def run_sim():
         ]
     results_var.set("\n".join(results))
     save_config()
+    plot_paths(success_paths, failure_paths)
 
 
 def optimize_percent():
