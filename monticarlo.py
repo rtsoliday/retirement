@@ -198,7 +198,7 @@ def plot_paths(success_paths, failure_paths):
     mean_y = [np.mean(mean_by_year[i]) for i in mean_x]
 
     if success_x or fail_x:
-        fig, ax = plt.subplots(figsize=(6.4, 3.6))
+        fig, ax = plt.subplots(figsize=(8, 4))
         trans_success = transforms.ScaledTranslation(2 / fig.dpi, 0, fig.dpi_scale_trans)
         trans_failure = transforms.ScaledTranslation(5 / fig.dpi, 0, fig.dpi_scale_trans)
 
