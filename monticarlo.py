@@ -163,43 +163,66 @@ def simulate(base_yearly_need, collect_paths=False):
 
 def plot_paths(success_paths, failure_paths):
     """Plot retirement fund paths for successful and failed simulations."""
+    import matplotlib.transforms as transforms
+
     failed_max_by_year = {}
     fail_x, fail_y = [], []
     if failure_paths:
         for path in failure_paths:
             for year_idx, val in enumerate(path):
-                fail_x.append(year_idx)
-                fail_y.append(val)
-                failed_max_by_year[year_idx] = max(
-                    failed_max_by_year.get(year_idx, float("-inf")), val
-                )
+                if val > 0:
+                    fail_x.append(year_idx)
+                    fail_y.append(val)
+                    failed_max_by_year[year_idx] = max(
+                        failed_max_by_year.get(year_idx, float("-inf")), val
+                    )
 
+    success_x, success_y, colors = [], [], []
     if success_paths:
-        x, y, colors = [], [], []
         for path in success_paths:
             for year_idx, val in enumerate(path):
-                x.append(year_idx)
-                y.append(val)
-                if val > failed_max_by_year.get(year_idx, float("-inf")):
-                    colors.append("lime")
-                else:
-                    colors.append("darkgreen")
-        plt.figure()
-        plt.scatter(x, y, s=1, c=colors, linewidths=1)
-        plt.yscale("log")
-        plt.xlabel("Years in retirement")
-        plt.ylabel("Total funds ($)")
-        plt.title("Successful simulations")
+                if val > 0:
+                    success_x.append(year_idx)
+                    success_y.append(val)
+                    if val > failed_max_by_year.get(year_idx, float("-inf")):
+                        colors.append("lime")
+                    else:
+                        colors.append("green")
 
-    if failure_paths:
-        plt.figure()
-        plt.scatter(fail_x, fail_y, s=1)
-        plt.yscale("log")
-        plt.xlabel("Years in retirement")
-        plt.ylabel("Total funds ($)")
-        plt.title("Failed simulations")
+    if success_x or fail_x:
+        fig, ax = plt.subplots()
+        trans_success = transforms.ScaledTranslation(2 / fig.dpi, 0, fig.dpi_scale_trans)
+        trans_failure = transforms.ScaledTranslation(5 / fig.dpi, 0, fig.dpi_scale_trans)
 
-    if success_paths or failure_paths:
+        if success_x:
+            ax.scatter(
+                success_x,
+                success_y,
+                s=1,
+                c=colors,
+                linewidths=1,
+                transform=ax.transData + trans_success,
+            )
+        if fail_x:
+            ax.scatter(
+                fail_x,
+                fail_y,
+                s=1,
+                c="red",
+                linewidths=1,
+                transform=ax.transData + trans_failure,
+            )
+
+        all_x = success_x + fail_x
+        all_y = success_y + fail_y
+        ax.set_yscale("log")
+        ax.set_xlabel("Years in retirement")
+        ax.set_ylabel("Total funds ($)")
+        ax.set_title("Simulation paths")
+        if all_x:
+            ax.set_xlim(0, max(all_x))
+        if all_y:
+            ax.set_ylim(min(all_y), max(all_y))
         plt.show()
 
 # Default parameter values
