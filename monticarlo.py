@@ -7,15 +7,15 @@ from tkinter import ttk
 # Monte Carlo setup
 np.random.seed()
 
-def sample_death_year(retire_age, n_years):
+def sample_death_year(retirement_age, years_of_retirement):
     """Return the year index (0-indexed) in which death occurs."""
-    for j in range(n_years):
-        age = retire_age + j
+    for j in range(years_of_retirement):
+        age = retirement_age + j
         if age >= len(death_probs):
-            return n_years
+            return years_of_retirement
         if np.random.random() < death_probs[age]:
             return j
-    return n_years  # lived through entire horizon
+    return years_of_retirement  # lived through entire horizon
 
 # IRS 2024 single-filer brackets and marginal rates
 brackets = [0, 11_600, 47_150, 100_525, 191_950, 243_725, 609_350]
@@ -43,16 +43,16 @@ def gross_from_net(net_amt):
             hi = mid
     return hi
 
-def gross_from_net_with_ss(net_amt, ss_gross):
+def gross_from_net_with_ss(net_amt, social_security_at_62):
     """
     Find G such that
-       (G + ss_gross) - tax_liability(G + ss_gross) == net_amt
+       (G + social_security_at_62) - tax_liability(G + social_security_at_62) == net_amt
     i.e. accounts + SS minus tax on total = net spending.
     """
-    lo, hi = max(0, net_amt - ss_gross), (net_amt + ss_gross) * 1.5
+    lo, hi = max(0, net_amt - social_security_at_62), (net_amt + social_security_at_62) * 1.5
     for _ in range(40):
         mid = (lo + hi) / 2
-        total = mid + ss_gross
+        total = mid + social_security_at_62
         if total - tax_liability(total) < net_amt:
             lo = mid
         else:
@@ -61,13 +61,13 @@ def gross_from_net_with_ss(net_amt, ss_gross):
 
 def simulate(yearly_net_withdrawal):
     success = 0
-    for _ in range(n_sim):
+    for _ in range(number_of_simulations):
         r_bal, p_bal = roth_start, pretax_start
         w = yearly_net_withdrawal
-        death_year = sample_death_year(retire_age, n_years)
-        stock_returns = np.random.normal(stock_mean_return, stock_std_dev, n_years)
-        bond_returns  = np.random.normal(bond_mean_return,  bond_std_dev,  n_years)
-        infls         = np.random.normal(infl_mean,           infl_std,     n_years)
+        death_year = sample_death_year(retirement_age, years_of_retirement)
+        stock_returns = np.random.normal(stock_mean_return, stock_std_dev, years_of_retirement)
+        bond_returns  = np.random.normal(bond_mean_return,  bond_std_dev,  years_of_retirement)
+        infls         = np.random.normal(inflation_mean,           inflation_std,     years_of_retirement)
 
         for year_idx, (sr, br, i) in enumerate(zip(stock_returns, bond_returns, infls), start=1):
             if year_idx > death_year:
@@ -75,17 +75,17 @@ def simulate(yearly_net_withdrawal):
                 break  # retiree is assumed dead; stop withdrawals
 
             # portfolio return = weighted average of stock & bond returns
-            port_ret = stock_ratio * sr + bond_ratio * br
+            port_ret = stock_to_bond_ratio_after_retirement * sr + bond_ratio * br
 
             # grow balances by portfolio return
             r_bal *= (1 + port_ret)
             p_bal *= (1 + port_ret)
 
             # pick the right gross calculation
-            if retire_age + year_idx < 62:
+            if retirement_age + year_idx < 62:
                 gross_w = gross_from_net(w)
             else:
-                gross_w = gross_from_net_with_ss(w, ss_gross)
+                gross_w = gross_from_net_with_ss(w, social_security_at_62)
 
             # withdraw from pre-tax first
             if p_bal >= gross_w:
@@ -105,66 +105,66 @@ def simulate(yearly_net_withdrawal):
         else:
             success += 1
 
-    return success / n_sim
+    return success / number_of_simulations
 
 # Default parameter values
 DEFAULT_GENERAL = {
-    "n_sim": 2_000,
-    "n_years": 60,
+    "number_of_simulations": 2_000,
     "stock_mean_return": 0.1046,
     "stock_std_dev": 0.208,
     "bond_mean_return": 0.03,
     "bond_std_dev": 0.053,
-    "infl_mean": 0.033,
-    "infl_std": 0.04,
+    "inflation_mean": 0.033,
+    "inflation_std": 0.04,
 }
 
 DEFAULT_USER = {
     "gender": "male",
     "current_age": 50,
-    "retire_age": 58,
-    "average_yearly_need": 77_334,
-    "roth_current": 100_000,
-    "pretax_current": 800_000,
-    "ss_gross": 33_456,
-    "stock_ratio": 0.99,
+    "retirement_age": 58,
+    "average_yearly_need": 75_000,
+    "current_roth": 100_000,
+    "current_401a_and_403b": 800_000,
+    "social_security_at_62": 30_000,
+    "stock_to_bond_ratio_after_retirement": 0.7,
 }
 
 
 def run_sim():
-    global n_sim, n_years, stock_mean_return, stock_std_dev, bond_mean_return
-    global bond_std_dev, infl_mean, infl_std, gender, current_age, retire_age
-    global average_yearly_need, roth_current, pretax_current, ss_gross
-    global stock_ratio, bond_ratio, retirement_yearly_need, roth_start
+    global number_of_simulations, years_of_retirement, stock_mean_return, stock_std_dev, bond_mean_return
+    global bond_std_dev, inflation_mean, inflation_std, gender, current_age, retirement_age
+    global average_yearly_need, current_roth, current_401a_and_403b, social_security_at_62
+    global stock_to_bond_ratio_after_retirement, bond_ratio, retirement_yearly_need, roth_start
     global pretax_start, death_probs
 
-    n_sim = int(gen_entries["n_sim"].get())
-    n_years = int(gen_entries["n_years"].get())
+    number_of_simulations = int(gen_entries["number_of_simulations"].get())
     stock_mean_return = float(gen_entries["stock_mean_return"].get())
     stock_std_dev = float(gen_entries["stock_std_dev"].get())
     bond_mean_return = float(gen_entries["bond_mean_return"].get())
     bond_std_dev = float(gen_entries["bond_std_dev"].get())
-    infl_mean = float(gen_entries["infl_mean"].get())
-    infl_std = float(gen_entries["infl_std"].get())
+    inflation_mean = float(gen_entries["inflation_mean"].get())
+    inflation_std = float(gen_entries["inflation_std"].get())
 
     gender = user_entries["gender"].get().strip().lower()
     current_age = int(user_entries["current_age"].get())
-    retire_age = int(user_entries["retire_age"].get())
+    retirement_age = int(user_entries["retirement_age"].get())
     average_yearly_need = float(user_entries["average_yearly_need"].get())
-    roth_current = float(user_entries["roth_current"].get())
-    pretax_current = float(user_entries["pretax_current"].get())
-    ss_gross = float(user_entries["ss_gross"].get())
-    stock_ratio = float(user_entries["stock_ratio"].get())
-    bond_ratio = 1 - stock_ratio
+    current_roth = float(user_entries["current_roth"].get())
+    current_401a_and_403b = float(user_entries["current_401a_and_403b"].get())
+    social_security_at_62 = float(user_entries["social_security_at_62"].get())
+    stock_to_bond_ratio_after_retirement = float(user_entries["stock_to_bond_ratio_after_retirement"].get())
+    bond_ratio = 1 - stock_to_bond_ratio_after_retirement
 
-    retirement_yearly_need = average_yearly_need * (1 + infl_mean) ** (
-        retire_age - current_age
+    years_of_retirement = 119 - retirement_age
+
+    retirement_yearly_need = average_yearly_need * (1 + inflation_mean) ** (
+        retirement_age - current_age
     )
-    roth_start = roth_current * (1 + stock_mean_return) ** (
-        retire_age - current_age
+    roth_start = current_roth * (1 + stock_mean_return) ** (
+        retirement_age - current_age
     )
-    pretax_start = pretax_current * (1 + stock_mean_return) ** (
-        retire_age - current_age
+    pretax_start = current_401a_and_403b * (1 + stock_mean_return) ** (
+        retirement_age - current_age
     )
 
     precomp_ret_need_var.set(
@@ -191,7 +191,7 @@ def run_sim():
     results = [
         f"Success rate: {rate:.1f}%",
         f"Gross needed in year 1: ${gross_from_net(retirement_yearly_need):,.0f}",
-        f"Gross needed in year {62 - retire_age} (with SS): ${gross_from_net_with_ss(retirement_yearly_need, ss_gross):,.0f}",
+        f"Gross needed in year {62 - retirement_age} (with SS): ${gross_from_net_with_ss(retirement_yearly_need, social_security_at_62):,.0f}",
     ]
     results_var.set("\n".join(results))
 
