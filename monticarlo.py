@@ -477,6 +477,19 @@ def run_sim():
     )
     rate *= 100
 
+    start_success = [p[0] for p in success_paths]
+    start_failure = [p[0] for p in failure_paths]
+    maroon_thresh = green_thresh = None
+    if retirement_age > current_age and start_success and start_failure:
+        success_min0 = min(start_success)
+        failure_max0 = max(start_failure)
+        maroon_candidates = [f for f in start_failure if f >= success_min0]
+        green_candidates = [s for s in start_success if s <= failure_max0]
+        if maroon_candidates:
+            maroon_thresh = min(maroon_candidates)
+        if green_candidates:
+            green_thresh = max(green_candidates)
+
     if retirement_age < social_security_age:
         years_until_ss = social_security_age - retirement_age
         need_at_ss = base_retirement_need * (1 + inflation_mean) ** years_until_ss
@@ -492,6 +505,14 @@ def run_sim():
             f"Success rate: {rate:.1f}%",
             f"Gross needed in year 1 (with SS): ${gross_from_net_with_ss(retirement_yearly_need, social_security_yearly_amount):,.0f}",
         ]
+    if maroon_thresh is not None:
+        results.append(
+            f"Warning: do not retire if total funds are below ${maroon_thresh:,.0f} in year 0 of retirement."
+        )
+    if green_thresh is not None:
+        results.append(
+            f"It is safe to retire if total funds are above ${green_thresh:,.0f} in year 0 of retirement."
+        )
     results_var.set("\n".join(results))
     save_config()
     plot_paths(success_paths, failure_paths)
