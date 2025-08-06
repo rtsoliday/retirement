@@ -304,14 +304,21 @@ def run_sim():
 
     rate = simulate(base_retirement_need) * 100
 
-    need_at_62 = base_retirement_need * (1 + inflation_mean) ** max(0, 62 - retirement_age)
-    if mortgage_years_in_retirement > max(0, 62 - retirement_age):
-        need_at_62 += mortgage_yearly_payment
-    results = [
-        f"Success rate: {rate:.1f}%",
-        f"Gross needed in year 1: ${gross_from_net(retirement_yearly_need):,.0f}",
-        f"Gross needed in year {62 - retirement_age} (with SS): ${gross_from_net_with_ss(need_at_62, social_security_at_62):,.0f}",
-    ]
+    if retirement_age < 62:
+        years_until_ss = 62 - retirement_age
+        need_at_62 = base_retirement_need * (1 + inflation_mean) ** years_until_ss
+        if mortgage_years_in_retirement > years_until_ss:
+            need_at_62 += mortgage_yearly_payment
+        results = [
+            f"Success rate: {rate:.1f}%",
+            f"Gross needed in year 1: ${gross_from_net(retirement_yearly_need):,.0f}",
+            f"Gross needed in year {years_until_ss} (with SS): ${gross_from_net_with_ss(need_at_62, social_security_at_62):,.0f}",
+        ]
+    else:
+        results = [
+            f"Success rate: {rate:.1f}%",
+            f"Gross needed in year 1 (with SS): ${gross_from_net_with_ss(retirement_yearly_need, social_security_at_62):,.0f}",
+        ]
     results_var.set("\n".join(results))
     save_config()
 
@@ -354,15 +361,23 @@ def optimize_percent():
     user_entries["percent_in_stock_after_retirement"].delete(0, tk.END)
     user_entries["percent_in_stock_after_retirement"].insert(0, f"{best_percent*100:.2f}%")
 
-    need_at_62 = base_retirement_need * (1 + inflation_mean) ** max(0, 62 - retirement_age)
-    if mortgage_years_in_retirement > max(0, 62 - retirement_age):
-        need_at_62 += mortgage_yearly_payment
-    results = [
-        f"Best percent in stock: {best_percent*100:.1f}%",
-        f"Success rate: {best_rate:.1f}%",
-        f"Gross needed in year 1: ${gross_from_net(retirement_yearly_need):,.0f}",
-        f"Gross needed in year {62 - retirement_age} (with SS): ${gross_from_net_with_ss(need_at_62, social_security_at_62):,.0f}",
-    ]
+    if retirement_age < 62:
+        years_until_ss = 62 - retirement_age
+        need_at_62 = base_retirement_need * (1 + inflation_mean) ** years_until_ss
+        if mortgage_years_in_retirement > years_until_ss:
+            need_at_62 += mortgage_yearly_payment
+        results = [
+            f"Best percent in stock: {best_percent*100:.1f}%",
+            f"Success rate: {best_rate:.1f}%",
+            f"Gross needed in year 1: ${gross_from_net(retirement_yearly_need):,.0f}",
+            f"Gross needed in year {years_until_ss} (with SS): ${gross_from_net_with_ss(need_at_62, social_security_at_62):,.0f}",
+        ]
+    else:
+        results = [
+            f"Best percent in stock: {best_percent*100:.1f}%",
+            f"Success rate: {best_rate:.1f}%",
+            f"Gross needed in year 1 (with SS): ${gross_from_net_with_ss(retirement_yearly_need, social_security_at_62):,.0f}",
+        ]
     results_var.set("\n".join(results))
 
 
