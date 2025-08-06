@@ -4,7 +4,7 @@ import csv
 from typing import Optional
 
 from kivy.app import App
-from kivy.lang import Builder
+from kivy.factory import Factory
 from kivy.properties import StringProperty
 from kivy.uix.popup import Popup
 from kivy.uix.label import Label
@@ -30,7 +30,7 @@ class RetirementApp(App):
     precomp_text = StringProperty("")
 
     def build(self):
-        return Builder.load_file("retirement.kv")
+        return Factory.RetirementRoot()
 
     # ------------------------------------------------------------------
     # Helpers
