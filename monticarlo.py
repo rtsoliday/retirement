@@ -80,7 +80,7 @@ def simulate(yearly_net_withdrawal):
                 break  # retiree is assumed dead; stop withdrawals
 
             # portfolio return = weighted average of stock & bond returns
-            port_ret = stock_to_bond_ratio_after_retirement * sr + bond_ratio * br
+            port_ret = percent_in_stock_after_retirement * sr + bond_ratio * br
 
             # grow balances by portfolio return
             r_bal *= (1 + port_ret)
@@ -130,6 +130,7 @@ PERCENT_FIELDS = {
     "bond_std_dev",
     "inflation_mean",
     "inflation_std_dev",
+    "percent_in_stock_after_retirement",
 }
 
 DEFAULT_USER = {
@@ -140,7 +141,7 @@ DEFAULT_USER = {
     "current_roth": 100_000,
     "current_401a_and_403b": 800_000,
     "social_security_at_62": 30_000,
-    "stock_to_bond_ratio_after_retirement": 0.7,
+    "percent_in_stock_after_retirement": 0.7,
 }
 
 
@@ -148,7 +149,7 @@ def run_sim():
     global number_of_simulations, years_of_retirement, stock_mean_return, stock_std_dev, bond_mean_return
     global bond_std_dev, inflation_mean, inflation_std_dev, gender, current_age, retirement_age
     global average_yearly_need, current_roth, current_401a_and_403b, social_security_at_62
-    global stock_to_bond_ratio_after_retirement, bond_ratio, retirement_yearly_need, roth_start
+    global percent_in_stock_after_retirement, bond_ratio, retirement_yearly_need, roth_start
     global pretax_start, death_probs
 
     number_of_simulations = int(gen_entries["number_of_simulations"].get())
@@ -166,8 +167,8 @@ def run_sim():
     current_roth = float(user_entries["current_roth"].get())
     current_401a_and_403b = float(user_entries["current_401a_and_403b"].get())
     social_security_at_62 = float(user_entries["social_security_at_62"].get())
-    stock_to_bond_ratio_after_retirement = float(user_entries["stock_to_bond_ratio_after_retirement"].get())
-    bond_ratio = 1 - stock_to_bond_ratio_after_retirement
+    percent_in_stock_after_retirement = parse_percent(user_entries["percent_in_stock_after_retirement"].get())
+    bond_ratio = 1 - percent_in_stock_after_retirement
 
     years_of_retirement = 119 - retirement_age
 
@@ -262,7 +263,10 @@ if __name__ == "__main__":
             user_entries[key] = gender_var
         else:
             ent = ttk.Entry(row)
-            ent.insert(0, str(default))
+            if key in PERCENT_FIELDS:
+                ent.insert(0, f"{default * 100:.2f}%")
+            else:
+                ent.insert(0, str(default))
             ent.pack(side="left", fill="x", expand=True)
             user_entries[key] = ent
 
