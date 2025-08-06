@@ -12,6 +12,11 @@ def parse_percent(val: str) -> float:
     """Convert a percentage string like '10%' to a float 0.10."""
     return float(val.strip().rstrip("%")) / 100
 
+
+def parse_dollars(val: str) -> float:
+    """Convert a currency string like '$1,234' to a float 1234.0."""
+    return float(val.replace("$", "").replace(",", "").strip())
+
 def sample_death_year(retirement_age, years_of_retirement):
     """Return the year index (0-indexed) in which death occurs."""
     for j in range(years_of_retirement):
@@ -133,6 +138,13 @@ PERCENT_FIELDS = {
     "percent_in_stock_after_retirement",
 }
 
+DOLLAR_FIELDS = {
+    "average_yearly_need",
+    "current_roth",
+    "current_401a_and_403b",
+    "social_security_at_62",
+}
+
 DEFAULT_USER = {
     "gender": "male",
     "current_age": 50,
@@ -163,10 +175,14 @@ def run_sim():
     gender = user_entries["gender"].get().strip().lower()
     current_age = int(user_entries["current_age"].get())
     retirement_age = int(user_entries["retirement_age"].get())
-    average_yearly_need = float(user_entries["average_yearly_need"].get())
-    current_roth = float(user_entries["current_roth"].get())
-    current_401a_and_403b = float(user_entries["current_401a_and_403b"].get())
-    social_security_at_62 = float(user_entries["social_security_at_62"].get())
+    average_yearly_need = parse_dollars(user_entries["average_yearly_need"].get())
+    current_roth = parse_dollars(user_entries["current_roth"].get())
+    current_401a_and_403b = parse_dollars(
+        user_entries["current_401a_and_403b"].get()
+    )
+    social_security_at_62 = parse_dollars(
+        user_entries["social_security_at_62"].get()
+    )
     percent_in_stock_after_retirement = parse_percent(user_entries["percent_in_stock_after_retirement"].get())
     bond_ratio = 1 - percent_in_stock_after_retirement
 
@@ -265,6 +281,8 @@ if __name__ == "__main__":
             ent = ttk.Entry(row)
             if key in PERCENT_FIELDS:
                 ent.insert(0, f"{default * 100:.2f}%")
+            elif key in DOLLAR_FIELDS:
+                ent.insert(0, f"${default:,.0f}")
             else:
                 ent.insert(0, str(default))
             ent.pack(side="left", fill="x", expand=True)
