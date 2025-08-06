@@ -3,6 +3,8 @@ from bisect import bisect_right
 import pandas as pd
 import tkinter as tk
 from tkinter import ttk
+import json
+import os
 
 # Monte Carlo setup
 np.random.seed()
@@ -157,6 +159,42 @@ DEFAULT_USER = {
 }
 
 
+CONFIG_FILE = "config.json"
+
+
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_config():
+    data = {
+        "general": {
+            "number_of_simulations": number_of_simulations,
+            "stock_mean_return": stock_mean_return,
+            "stock_std_dev": stock_std_dev,
+            "bond_mean_return": bond_mean_return,
+            "bond_std_dev": bond_std_dev,
+            "inflation_mean": inflation_mean,
+            "inflation_std_dev": inflation_std_dev,
+        },
+        "user": {
+            "gender": gender,
+            "current_age": current_age,
+            "retirement_age": retirement_age,
+            "average_yearly_need": average_yearly_need,
+            "current_roth": current_roth,
+            "current_401a_and_403b": current_401a_and_403b,
+            "social_security_at_62": social_security_at_62,
+            "percent_in_stock_after_retirement": percent_in_stock_after_retirement,
+        },
+    }
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
 def _load_inputs(percent_override: float | None = None):
     """Load GUI inputs into globals and perform common pre-computations."""
     global number_of_simulations, years_of_retirement, stock_mean_return, stock_std_dev
@@ -233,6 +271,7 @@ def run_sim():
         f"Gross needed in year {62 - retirement_age} (with SS): ${gross_from_net_with_ss(retirement_yearly_need, social_security_at_62):,.0f}",
     ]
     results_var.set("\n".join(results))
+    save_config()
 
 
 def optimize_percent():
@@ -282,6 +321,28 @@ def optimize_percent():
     results_var.set("\n".join(results))
 
 
+def load_defaults():
+    for key, default in DEFAULT_GENERAL.items():
+        ent = gen_entries[key]
+        ent.delete(0, tk.END)
+        if key in PERCENT_FIELDS:
+            ent.insert(0, f"{default * 100:.2f}%")
+        else:
+            ent.insert(0, str(default))
+    for key, default in DEFAULT_USER.items():
+        if key == "gender":
+            user_entries[key].set(default)
+        else:
+            ent = user_entries[key]
+            ent.delete(0, tk.END)
+            if key in PERCENT_FIELDS:
+                ent.insert(0, f"{default * 100:.2f}%")
+            elif key in DOLLAR_FIELDS:
+                ent.insert(0, f"${default:,.0f}")
+            else:
+                ent.insert(0, str(default))
+
+
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Retirement Simulator")
@@ -289,6 +350,10 @@ if __name__ == "__main__":
 
     gen_entries = {}
     user_entries = {}
+
+    config = load_config()
+    gen_cfg = config.get("general", {})
+    user_cfg = config.get("user", {})
 
     label_width = max(
         len(k.replace("_", " ").title())
@@ -307,10 +372,11 @@ if __name__ == "__main__":
             anchor="w",
         ).pack(side="left")
         ent = ttk.Entry(row)
+        val = gen_cfg.get(key, default)
         if key in PERCENT_FIELDS:
-            ent.insert(0, f"{default * 100:.2f}%")
+            ent.insert(0, f"{val * 100:.2f}%")
         else:
-            ent.insert(0, str(default))
+            ent.insert(0, str(val))
         ent.pack(side="left", fill="x", expand=True)
         gen_entries[key] = ent
 
@@ -325,8 +391,9 @@ if __name__ == "__main__":
             width=label_width,
             anchor="w",
         ).pack(side="left")
+        val = user_cfg.get(key, default)
         if key == "gender":
-            gender_var = tk.StringVar(value=default)
+            gender_var = tk.StringVar(value=val)
             rb_frame = ttk.Frame(row)
             rb_frame.pack(side="left", fill="x", expand=True)
             ttk.Radiobutton(rb_frame, text="M  ", variable=gender_var, value="male").pack(side="left")
@@ -335,11 +402,11 @@ if __name__ == "__main__":
         else:
             ent = ttk.Entry(row)
             if key in PERCENT_FIELDS:
-                ent.insert(0, f"{default * 100:.2f}%")
+                ent.insert(0, f"{val * 100:.2f}%")
             elif key in DOLLAR_FIELDS:
-                ent.insert(0, f"${default:,.0f}")
+                ent.insert(0, f"${val:,.0f}")
             else:
-                ent.insert(0, str(default))
+                ent.insert(0, str(val))
             ent.pack(side="left", fill="x", expand=True)
             user_entries[key] = ent
 
@@ -356,6 +423,7 @@ if __name__ == "__main__":
     run_frame.pack(fill="x", padx=10, pady=5)
     ttk.Button(run_frame, text="Run Simulations", command=run_sim).pack()
     ttk.Button(run_frame, text="Optimize % In Stocks", command=optimize_percent).pack()
+    ttk.Button(run_frame, text="Load Defaults", command=load_defaults).pack()
 
     results_frame = ttk.LabelFrame(root, text="Results")
     results_frame.pack(fill="both", expand=True, padx=10, pady=5)
