@@ -72,8 +72,25 @@ def gross_from_net_with_ss(net_amt, social_security_at_62):
     return hi
 
 def simulate(yearly_net_withdrawal):
+    global retirement_age, current_age
+    global current_roth, current_401a_and_403b
+    global pre_retirement_mean_return, pre_retirement_std_dev
+    global roth_start, pretax_start
+
     success = 0
     for _ in range(number_of_simulations):
+        # Grow pre-retirement balances using both mean return and volatility.
+        years_to_retirement = retirement_age - current_age
+        pre_ret_returns = np.random.normal(
+            pre_retirement_mean_return, pre_retirement_std_dev, years_to_retirement
+        )
+        growth_factor = np.prod(1 + pre_ret_returns)
+
+        roth_start = current_roth * growth_factor
+        pretax_start = current_401a_and_403b * growth_factor
+
+
+
         r_bal, p_bal = roth_start, pretax_start
         w = yearly_net_withdrawal
         death_year = sample_death_year(retirement_age, years_of_retirement)
@@ -233,22 +250,16 @@ def _load_inputs(percent_override: float | None = None):
     retirement_yearly_need = average_yearly_need * (1 + inflation_mean) ** (
         retirement_age - current_age
     )
-    roth_start = current_roth * (1 + pre_retirement_mean_return) ** (
-        retirement_age - current_age
-    )
-    pretax_start = current_401a_and_403b * (1 + pre_retirement_mean_return) ** (
-        retirement_age - current_age
-    )
 
     precomp_ret_need_var.set(
         f"Year 1 net need: ${retirement_yearly_need:,.0f}"
     )
-    precomp_roth_start_var.set(
-        f"Roth at retirement: ${roth_start:,.0f}"
-    )
-    precomp_pretax_start_var.set(
-        f"Pre-tax at retirement: ${pretax_start:,.0f}"
-    )
+    #precomp_roth_start_var.set(
+    #    f"Roth at retirement: ${roth_start:,.0f}"
+    #)
+    #precomp_pretax_start_var.set(
+    #    f"Pre-tax at retirement: ${pretax_start:,.0f}"
+    #)
 
     results_var.set("Working...")
     root.update_idletasks()
@@ -422,11 +433,11 @@ if __name__ == "__main__":
     precomp_frame = ttk.LabelFrame(root, text="Pre-computations")
     precomp_frame.pack(fill="x", padx=10, pady=5)
     precomp_ret_need_var = tk.StringVar()
-    precomp_roth_start_var = tk.StringVar()
-    precomp_pretax_start_var = tk.StringVar()
+    #precomp_roth_start_var = tk.StringVar()
+    #precomp_pretax_start_var = tk.StringVar()
     ttk.Label(precomp_frame, textvariable=precomp_ret_need_var).pack(anchor="w")
-    ttk.Label(precomp_frame, textvariable=precomp_roth_start_var).pack(anchor="w")
-    ttk.Label(precomp_frame, textvariable=precomp_pretax_start_var).pack(anchor="w")
+    #ttk.Label(precomp_frame, textvariable=precomp_roth_start_var).pack(anchor="w")
+    #ttk.Label(precomp_frame, textvariable=precomp_pretax_start_var).pack(anchor="w")
 
     run_frame = ttk.Frame(root)
     run_frame.pack(fill="x", padx=10, pady=5)
