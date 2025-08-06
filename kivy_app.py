@@ -20,7 +20,56 @@ from core import (
     gross_from_net_with_ss,
     simulate,
     save_config,
+    load_config,
 )
+
+
+# Default parameter values mirror those in the Tkinter app
+DEFAULT_GENERAL = {
+    "number_of_simulations": 2_000,
+    "pre_retirement_mean_return": 0.1472,
+    "pre_retirement_std_dev": 0.292,
+    "stock_mean_return": 0.1046,
+    "stock_std_dev": 0.208,
+    "bond_mean_return": 0.03,
+    "bond_std_dev": 0.053,
+    "inflation_mean": 0.033,
+    "inflation_std_dev": 0.04,
+}
+
+DEFAULT_USER = {
+    "gender": "male",
+    "current_age": 50,
+    "retirement_age": 58,
+    "average_yearly_need": 75_000,
+    "current_roth": 100_000,
+    "current_401a_and_403b": 800_000,
+    "full_social_security_at_67": 30_000,
+    "social_security_age_started": 62,
+    "mortgage_payment": 0,
+    "mortgage_years_left": 0,
+    "percent_in_stock_after_retirement": 0.7,
+}
+
+PERCENT_FIELDS = {
+    "pre_retirement_mean_return",
+    "pre_retirement_std_dev",
+    "stock_mean_return",
+    "stock_std_dev",
+    "bond_mean_return",
+    "bond_std_dev",
+    "inflation_mean",
+    "inflation_std_dev",
+    "percent_in_stock_after_retirement",
+}
+
+DOLLAR_FIELDS = {
+    "average_yearly_need",
+    "current_roth",
+    "current_401a_and_403b",
+    "full_social_security_at_67",
+    "mortgage_payment",
+}
 
 
 class RetirementApp(App):
@@ -31,6 +80,54 @@ class RetirementApp(App):
 
     def build(self):
         return Factory.RetirementRoot()
+
+    def on_start(self):
+        """Populate fields with defaults and any saved configuration."""
+        self.load_defaults()
+        self._apply_saved_config()
+
+    def load_defaults(self) -> None:
+        """Reset all input fields to built-in defaults."""
+        ids = self.root.ids
+        for key, default in DEFAULT_GENERAL.items():
+            if key in PERCENT_FIELDS:
+                ids[key].text = f"{default * 100:.2f}%"
+            else:
+                ids[key].text = str(default)
+        for key, default in DEFAULT_USER.items():
+            if key == "gender":
+                ids[key].text = default
+            elif key in PERCENT_FIELDS:
+                ids[key].text = f"{default * 100:.2f}%"
+            elif key in DOLLAR_FIELDS:
+                ids[key].text = f"${default:,.0f}"
+            else:
+                ids[key].text = str(default)
+
+    def _apply_saved_config(self) -> None:
+        """Load configuration from disk and update the UI."""
+        cfg = load_config()
+        ids = self.root.ids
+        gen_cfg = cfg.get("general", {})
+        user_cfg = cfg.get("user", {})
+        for key, val in gen_cfg.items():
+            if key not in ids:
+                continue
+            if key in PERCENT_FIELDS:
+                ids[key].text = f"{val * 100:.2f}%"
+            else:
+                ids[key].text = str(val)
+        for key, val in user_cfg.items():
+            if key not in ids:
+                continue
+            if key == "gender":
+                ids[key].text = val
+            elif key in PERCENT_FIELDS:
+                ids[key].text = f"{val * 100:.2f}%"
+            elif key in DOLLAR_FIELDS:
+                ids[key].text = f"${val:,.0f}"
+            else:
+                ids[key].text = str(val)
 
     # ------------------------------------------------------------------
     # Helpers
