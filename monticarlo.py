@@ -75,6 +75,30 @@ def gross_from_net_with_ss(net_amt, social_security_yearly_amount):
             hi = mid
     return hi
 
+
+def social_security_payout(full_ss_at_67, start_age):
+    """Calculate yearly Social Security benefit based on start age.
+
+    The full benefit is received at age 67. For earlier claiming, the benefit
+    is reduced by 5/9 of 1% for each of the first 36 months and 5/12 of 1%
+    for additional months. For delayed claiming (up to age 70), the benefit
+    increases by 2/3 of 1% per month.
+    """
+    if start_age == 67:
+        return full_ss_at_67
+    months_difference = (start_age - 67) * 12
+    if start_age < 67:
+        months_early = -months_difference
+        if months_early <= 36:
+            reduction = months_early * (5 / 9) / 100
+        else:
+            reduction = (36 * (5 / 9) + (months_early - 36) * (5 / 12)) / 100
+        return full_ss_at_67 * (1 - reduction)
+    else:
+        months_late = min(months_difference, 36)
+        increase = months_late * (2 / 3) / 100
+        return full_ss_at_67 * (1 + increase)
+
 def simulate(base_yearly_need, collect_paths=False):
     global retirement_age, current_age
     global current_roth, current_401a_and_403b
@@ -123,7 +147,7 @@ def simulate(base_yearly_need, collect_paths=False):
             p_bal *= (1 + port_ret)
 
             # pick the right gross calculation
-            if retirement_age + year_idx < social_security_age:
+            if retirement_age + year_idx < social_security_age_started:
                 gross_w = gross_from_net(w)
             else:
                 gross_w = gross_from_net_with_ss(w, social_security_yearly_amount)
@@ -338,7 +362,7 @@ DOLLAR_FIELDS = {
     "average_yearly_need",
     "current_roth",
     "current_401a_and_403b",
-    "social_security_yearly_amount",
+    "full_social_security_at_67",
     "mortgage_payment",
 }
 
@@ -349,11 +373,16 @@ DEFAULT_USER = {
     "average_yearly_need": 75_000,
     "current_roth": 100_000,
     "current_401a_and_403b": 800_000,
-    "social_security_yearly_amount": 30_000,
-    "social_security_age": 62,
+    "full_social_security_at_67": 30_000,
+    "social_security_age_started": 62,
     "mortgage_payment": 0,
     "mortgage_years_left": 0,
     "percent_in_stock_after_retirement": 0.7,
+}
+
+LABEL_OVERRIDES = {
+    "full_social_security_at_67": "Full Social Security at 67",
+    "social_security_age_started": "Social Security Age Started",
 }
 
 
@@ -387,8 +416,8 @@ def save_config():
             "average_yearly_need": average_yearly_need,
             "current_roth": current_roth,
             "current_401a_and_403b": current_401a_and_403b,
-            "social_security_yearly_amount": social_security_yearly_amount,
-            "social_security_age": social_security_age,
+            "full_social_security_at_67": full_social_security_at_67,
+            "social_security_age_started": social_security_age_started,
             "mortgage_payment": mortgage_payment,
             "mortgage_years_left": mortgage_years_left,
             "percent_in_stock_after_retirement": percent_in_stock_after_retirement,
@@ -404,7 +433,7 @@ def _load_inputs(percent_override: float | None = None):
     global pre_retirement_mean_return, pre_retirement_std_dev
     global bond_mean_return, bond_std_dev, inflation_mean, inflation_std_dev
     global gender, current_age, retirement_age, average_yearly_need, current_roth
-    global current_401a_and_403b, social_security_yearly_amount, social_security_age, retirement_yearly_need
+    global current_401a_and_403b, full_social_security_at_67, social_security_age_started, social_security_yearly_amount, retirement_yearly_need
     global mortgage_payment, mortgage_years_left, mortgage_yearly_payment
     global mortgage_years_in_retirement, base_retirement_need
     global roth_start, pretax_start, death_probs
@@ -425,8 +454,9 @@ def _load_inputs(percent_override: float | None = None):
     average_yearly_need = parse_dollars(user_entries["average_yearly_need"].get())
     current_roth = parse_dollars(user_entries["current_roth"].get())
     current_401a_and_403b = parse_dollars(user_entries["current_401a_and_403b"].get())
-    social_security_yearly_amount = parse_dollars(user_entries["social_security_yearly_amount"].get())
-    social_security_age = int(user_entries["social_security_age"].get())
+    full_social_security_at_67 = parse_dollars(user_entries["full_social_security_at_67"].get())
+    social_security_age_started = int(user_entries["social_security_age_started"].get())
+    social_security_yearly_amount = social_security_payout(full_social_security_at_67, social_security_age_started)
     mortgage_payment = parse_dollars(user_entries["mortgage_payment"].get())
     mortgage_years_left = int(user_entries["mortgage_years_left"].get())
     mortgage_yearly_payment = mortgage_payment * 12
@@ -490,8 +520,8 @@ def run_sim():
         if green_candidates:
             green_thresh = max(green_candidates)
 
-    if retirement_age < social_security_age:
-        years_until_ss = social_security_age - retirement_age
+    if retirement_age < social_security_age_started:
+        years_until_ss = social_security_age_started - retirement_age
         need_at_ss = base_retirement_need * (1 + inflation_mean) ** years_until_ss
         if mortgage_years_in_retirement > years_until_ss:
             need_at_ss += mortgage_yearly_payment
@@ -556,8 +586,8 @@ def optimize_percent():
     user_entries["percent_in_stock_after_retirement"].delete(0, tk.END)
     user_entries["percent_in_stock_after_retirement"].insert(0, f"{best_percent*100:.2f}%")
 
-    if retirement_age < social_security_age:
-        years_until_ss = social_security_age - retirement_age
+    if retirement_age < social_security_age_started:
+        years_until_ss = social_security_age_started - retirement_age
         need_at_ss = base_retirement_need * (1 + inflation_mean) ** years_until_ss
         if mortgage_years_in_retirement > years_until_ss:
             need_at_ss += mortgage_yearly_payment
@@ -611,7 +641,7 @@ if __name__ == "__main__":
     user_cfg = config.get("user", {})
 
     label_width = max(
-        len(k.replace("_", " ").title())
+        len(LABEL_OVERRIDES.get(k, k.replace("_", " ").title()))
         for k in list(DEFAULT_GENERAL) + list(DEFAULT_USER)
     )
 
@@ -622,7 +652,7 @@ if __name__ == "__main__":
         row.pack(fill="x", pady=2)
         ttk.Label(
             row,
-            text=key.replace("_", " ").title(),
+            text=LABEL_OVERRIDES.get(key, key.replace("_", " ").title()),
             width=label_width,
             anchor="w",
         ).pack(side="left")
@@ -642,7 +672,7 @@ if __name__ == "__main__":
         row.pack(fill="x", pady=2)
         ttk.Label(
             row,
-            text=key.replace("_", " ").title(),
+            text=LABEL_OVERRIDES.get(key, key.replace("_", " ").title()),
             width=label_width,
             anchor="w",
         ).pack(side="left")
