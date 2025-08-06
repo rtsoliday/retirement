@@ -3,6 +3,7 @@ from bisect import bisect_right
 import pandas as pd
 import tkinter as tk
 from tkinter import ttk
+from tkinter import messagebox
 import json
 import os
 import matplotlib.pyplot as plt
@@ -12,13 +13,31 @@ np.random.seed()
 
 
 def parse_percent(val: str) -> float:
-    """Convert a percentage string like '10%' to a float 0.10."""
-    return float(val.strip().rstrip("%")) / 100
+    """Convert a percentage string like '10%' to a float 0.10.
+
+    Values outside 0–100% are rejected.
+    """
+    try:
+        pct = float(val.strip().rstrip("%")) / 100
+    except ValueError as exc:
+        raise ValueError(f"Invalid percentage: {val!r}") from exc
+    if not 0 <= pct <= 1:
+        raise ValueError("Percentage must be between 0% and 100%")
+    return pct
 
 
 def parse_dollars(val: str) -> float:
-    """Convert a currency string like '$1,234' to a float 1234.0."""
-    return float(val.replace("$", "").replace(",", "").strip())
+    """Convert a currency string like '$1,234' to a float 1234.0.
+
+    Negative values are rejected.
+    """
+    try:
+        amt = float(val.replace("$", "").replace(",", "").strip())
+    except ValueError as exc:
+        raise ValueError(f"Invalid dollar amount: {val!r}") from exc
+    if amt < 0:
+        raise ValueError("Dollar amount cannot be negative")
+    return amt
 
 def sample_death_year(retirement_age, years_of_retirement):
     """Return the year index (0-indexed) in which death occurs."""
@@ -439,6 +458,8 @@ def _load_inputs(percent_override: float | None = None):
     global roth_start, pretax_start, death_probs
 
     number_of_simulations = int(gen_entries["number_of_simulations"].get())
+    if number_of_simulations <= 0:
+        raise ValueError("Number of simulations must be positive")
     pre_retirement_mean_return = parse_percent(gen_entries["pre_retirement_mean_return"].get())
     pre_retirement_std_dev = parse_percent(gen_entries["pre_retirement_std_dev"].get())
     stock_mean_return = parse_percent(gen_entries["stock_mean_return"].get())
@@ -451,14 +472,24 @@ def _load_inputs(percent_override: float | None = None):
     gender = user_entries["gender"].get().strip().lower()
     current_age = int(user_entries["current_age"].get())
     retirement_age = int(user_entries["retirement_age"].get())
+    if current_age < 0 or retirement_age < 0:
+        raise ValueError("Ages must be non-negative")
+    if retirement_age <= current_age:
+        raise ValueError("Retirement age must be greater than current age")
+    if retirement_age >= 119:
+        raise ValueError("Retirement age must be less than 119")
     average_yearly_need = parse_dollars(user_entries["average_yearly_need"].get())
     current_roth = parse_dollars(user_entries["current_roth"].get())
     current_401a_and_403b = parse_dollars(user_entries["current_401a_and_403b"].get())
     full_social_security_at_67 = parse_dollars(user_entries["full_social_security_at_67"].get())
     social_security_age_started = int(user_entries["social_security_age_started"].get())
+    if social_security_age_started < 0:
+        raise ValueError("Social Security age must be non-negative")
     social_security_yearly_amount = social_security_payout(full_social_security_at_67, social_security_age_started)
     mortgage_payment = parse_dollars(user_entries["mortgage_payment"].get())
     mortgage_years_left = int(user_entries["mortgage_years_left"].get())
+    if mortgage_years_left < 0:
+        raise ValueError("Mortgage years left cannot be negative")
     mortgage_yearly_payment = mortgage_payment * 12
 
     years_of_retirement = 119 - retirement_age
@@ -493,6 +524,8 @@ def _load_inputs(percent_override: float | None = None):
     death_probs = death_row.drop("Year").astype(float).values
 
     if percent_override is not None:
+        if not 0 <= percent_override <= 1:
+            raise ValueError("Percent in stock after retirement must be between 0 and 100")
         global percent_in_stock_after_retirement, bond_ratio
         percent_in_stock_after_retirement = percent_override
         bond_ratio = 1 - percent_override
@@ -500,7 +533,11 @@ def _load_inputs(percent_override: float | None = None):
 
 def run_sim():
     """Run a single simulation using the current GUI inputs."""
-    _load_inputs(parse_percent(user_entries["percent_in_stock_after_retirement"].get()))
+    try:
+        _load_inputs(parse_percent(user_entries["percent_in_stock_after_retirement"].get()))
+    except ValueError as exc:
+        messagebox.showerror("Input error", str(exc))
+        return
 
     rate, success_paths, failure_paths = simulate(
         base_retirement_need, collect_paths=True
@@ -550,7 +587,11 @@ def run_sim():
 
 def optimize_percent():
     """Search for the stock percentage that maximizes success rate."""
-    _load_inputs(1.0)
+    try:
+        _load_inputs(1.0)
+    except ValueError as exc:
+        messagebox.showerror("Input error", str(exc))
+        return
 
     best_percent = 1.0
     best_rate = simulate(base_retirement_need) * 100
