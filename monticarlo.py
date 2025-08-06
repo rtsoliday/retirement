@@ -157,12 +157,13 @@ DEFAULT_USER = {
 }
 
 
-def run_sim():
-    global number_of_simulations, years_of_retirement, stock_mean_return, stock_std_dev, bond_mean_return
-    global bond_std_dev, inflation_mean, inflation_std_dev, gender, current_age, retirement_age
-    global average_yearly_need, current_roth, current_401a_and_403b, social_security_at_62
-    global percent_in_stock_after_retirement, bond_ratio, retirement_yearly_need, roth_start
-    global pretax_start, death_probs
+def _load_inputs(percent_override: float | None = None):
+    """Load GUI inputs into globals and perform common pre-computations."""
+    global number_of_simulations, years_of_retirement, stock_mean_return, stock_std_dev
+    global bond_mean_return, bond_std_dev, inflation_mean, inflation_std_dev
+    global gender, current_age, retirement_age, average_yearly_need, current_roth
+    global current_401a_and_403b, social_security_at_62, retirement_yearly_need
+    global roth_start, pretax_start, death_probs
 
     number_of_simulations = int(gen_entries["number_of_simulations"].get())
     stock_mean_return = parse_percent(gen_entries["stock_mean_return"].get())
@@ -177,14 +178,8 @@ def run_sim():
     retirement_age = int(user_entries["retirement_age"].get())
     average_yearly_need = parse_dollars(user_entries["average_yearly_need"].get())
     current_roth = parse_dollars(user_entries["current_roth"].get())
-    current_401a_and_403b = parse_dollars(
-        user_entries["current_401a_and_403b"].get()
-    )
-    social_security_at_62 = parse_dollars(
-        user_entries["social_security_at_62"].get()
-    )
-    percent_in_stock_after_retirement = parse_percent(user_entries["percent_in_stock_after_retirement"].get())
-    bond_ratio = 1 - percent_in_stock_after_retirement
+    current_401a_and_403b = parse_dollars(user_entries["current_401a_and_403b"].get())
+    social_security_at_62 = parse_dollars(user_entries["social_security_at_62"].get())
 
     years_of_retirement = 119 - retirement_age
 
@@ -209,8 +204,6 @@ def run_sim():
     )
 
     results_var.set("Working...")
-
-    # Update the GUI so the pre-computations are visible before running simulations
     root.update_idletasks()
 
     file = (
@@ -222,10 +215,67 @@ def run_sim():
     death_row = df[df["Year"] == 2025].iloc[0]
     death_probs = death_row.drop("Year").astype(float).values
 
+    if percent_override is not None:
+        global percent_in_stock_after_retirement, bond_ratio
+        percent_in_stock_after_retirement = percent_override
+        bond_ratio = 1 - percent_override
+
+
+def run_sim():
+    """Run a single simulation using the current GUI inputs."""
+    _load_inputs(parse_percent(user_entries["percent_in_stock_after_retirement"].get()))
+
     rate = simulate(retirement_yearly_need) * 100
 
     results = [
         f"Success rate: {rate:.1f}%",
+        f"Gross needed in year 1: ${gross_from_net(retirement_yearly_need):,.0f}",
+        f"Gross needed in year {62 - retirement_age} (with SS): ${gross_from_net_with_ss(retirement_yearly_need, social_security_at_62):,.0f}",
+    ]
+    results_var.set("\n".join(results))
+
+
+def optimize_percent():
+    """Search for the stock percentage that maximizes success rate."""
+    _load_inputs(1.0)
+
+    best_percent = 1.0
+    best_rate = simulate(retirement_yearly_need) * 100
+    prev_rate = best_rate
+    percent = 0.9
+
+    while percent >= 0:
+        percent_in_stock_after_retirement = percent
+        bond_ratio = 1 - percent
+        rate = simulate(retirement_yearly_need) * 100
+        if rate < prev_rate:
+            break
+        if rate >= best_rate:
+            best_rate = rate
+            best_percent = percent
+        prev_rate = rate
+        percent -= 0.10
+
+    percent = best_percent - 0.05
+    prev_rate = best_rate
+    while percent >= 0:
+        percent_in_stock_after_retirement = percent
+        bond_ratio = 1 - percent
+        rate = simulate(retirement_yearly_need) * 100
+        if rate < prev_rate:
+            break
+        if rate >= best_rate:
+            best_rate = rate
+            best_percent = percent
+        prev_rate = rate
+        percent -= 0.05
+
+    user_entries["percent_in_stock_after_retirement"].delete(0, tk.END)
+    user_entries["percent_in_stock_after_retirement"].insert(0, f"{best_percent*100:.2f}%")
+
+    results = [
+        f"Best percent in stock: {best_percent*100:.1f}%",
+        f"Success rate: {best_rate:.1f}%",
         f"Gross needed in year 1: ${gross_from_net(retirement_yearly_need):,.0f}",
         f"Gross needed in year {62 - retirement_age} (with SS): ${gross_from_net_with_ss(retirement_yearly_need, social_security_at_62):,.0f}",
     ]
@@ -305,6 +355,7 @@ if __name__ == "__main__":
     run_frame = ttk.Frame(root)
     run_frame.pack(fill="x", padx=10, pady=5)
     ttk.Button(run_frame, text="Run Simulations", command=run_sim).pack()
+    ttk.Button(run_frame, text="Optimize % In Stocks", command=optimize_percent).pack()
 
     results_frame = ttk.LabelFrame(root, text="Results")
     results_frame.pack(fill="both", expand=True, padx=10, pady=5)
