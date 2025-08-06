@@ -178,16 +178,29 @@ def plot_paths(success_paths, failure_paths):
                     )
 
     success_x, success_y, colors = [], [], []
+    success_min_by_year = {}
     if success_paths:
         for path in success_paths:
             for year_idx, val in enumerate(path):
                 if val > 0:
                     success_x.append(year_idx)
                     success_y.append(val)
+                    success_min_by_year[year_idx] = min(
+                        success_min_by_year.get(year_idx, float("inf")), val
+                    )
                     if val > failed_max_by_year.get(year_idx, float("-inf")):
                         colors.append("lime")
                     else:
                         colors.append("green")
+
+    fail_red_x, fail_red_y, fail_maroon_x, fail_maroon_y = [], [], [], []
+    for x, y in zip(fail_x, fail_y):
+        if y < success_min_by_year.get(x, float("inf")):
+            fail_red_x.append(x)
+            fail_red_y.append(y)
+        else:
+            fail_maroon_x.append(x)
+            fail_maroon_y.append(y)
     # compute mean funds by year across all paths
     mean_by_year = {}
     for path in (success_paths or []) + (failure_paths or []):
@@ -197,34 +210,69 @@ def plot_paths(success_paths, failure_paths):
     mean_x = sorted(mean_by_year.keys())
     mean_y = [np.mean(mean_by_year[i]) for i in mean_x]
 
-    if success_x or fail_x:
+    if success_x or fail_red_x or fail_maroon_x:
         fig, ax = plt.subplots(figsize=(8, 4))
         trans_success = transforms.ScaledTranslation(2 / fig.dpi, 0, fig.dpi_scale_trans)
         trans_failure = transforms.ScaledTranslation(5 / fig.dpi, 0, fig.dpi_scale_trans)
 
+        legend_handles = []
+        legend_labels = []
+        legend_items = []
+
         if success_x:
-            ax.scatter(
+            success_scatter = ax.scatter(
                 success_x,
                 success_y,
                 s=1,
                 c=colors,
                 linewidths=1,
                 transform=ax.transData + trans_success,
+                label="Success",
             )
-        if fail_x:
-            ax.scatter(
-                fail_x,
-                fail_y,
+            legend_handles.append(success_scatter)
+            legend_labels.append("Success")
+            legend_items.append(success_scatter)
+
+        fail_scatter_maroon = fail_scatter_red = fail_scatter_handle = None
+        if fail_maroon_x:
+            fail_scatter_maroon = ax.scatter(
+                fail_maroon_x,
+                fail_maroon_y,
+                s=1,
+                c="maroon",
+                linewidths=1,
+                transform=ax.transData + trans_failure,
+                label="Failure",
+            )
+            fail_scatter_handle = fail_scatter_maroon
+        if fail_red_x:
+            fail_scatter_red = ax.scatter(
+                fail_red_x,
+                fail_red_y,
                 s=1,
                 c="red",
                 linewidths=1,
                 transform=ax.transData + trans_failure,
+                label="Failure" if fail_scatter_handle is None else "_nolegend_",
             )
-        if mean_x:
-            ax.plot(mean_x, mean_y, color="black", linewidth=1)
+            if fail_scatter_handle is None:
+                fail_scatter_handle = fail_scatter_red
+        if fail_scatter_handle:
+            legend_handles.append(fail_scatter_handle)
+            legend_labels.append("Failure")
+            legend_items.append([fail_scatter_maroon, fail_scatter_red])
 
-        all_x = success_x + fail_x
-        all_y = success_y + fail_y
+        mean_line = None
+        if mean_x:
+            mean_line = ax.plot(
+                mean_x, mean_y, color="black", linewidth=1, label="Mean"
+            )[0]
+            legend_handles.append(mean_line)
+            legend_labels.append("Mean")
+            legend_items.append(mean_line)
+
+        all_x = success_x + fail_red_x + fail_maroon_x
+        all_y = success_y + fail_red_y + fail_maroon_y
         ax.set_yscale("log")
         ax.set_xlabel("Years in retirement")
         ax.set_ylabel("Total funds ($)")
@@ -233,6 +281,32 @@ def plot_paths(success_paths, failure_paths):
             ax.set_xlim(0, max(all_x))
         if all_y:
             ax.set_ylim(min(all_y), max(all_y))
+
+        if legend_handles:
+            legend = ax.legend(legend_handles, legend_labels)
+            lookup = {}
+            for leg_handle, orig in zip(legend.legend_handles, legend_items):
+                leg_handle.set_picker(True)
+                lookup[leg_handle] = orig
+
+            def on_pick(event):
+                leg_handle = event.artist
+                orig = lookup.get(leg_handle)
+                if orig is None:
+                    return
+                if isinstance(orig, list):
+                    visible = not orig[0].get_visible()
+                    for art in orig:
+                        if art is not None:
+                            art.set_visible(visible)
+                else:
+                    visible = not orig.get_visible()
+                    orig.set_visible(visible)
+                leg_handle.set_alpha(1.0 if visible else 0.2)
+                fig.canvas.draw()
+
+            fig.canvas.mpl_connect("pick_event", on_pick)
+
         plt.show()
 
 # Default parameter values
