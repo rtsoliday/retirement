@@ -7,6 +7,11 @@ from tkinter import ttk
 # Monte Carlo setup
 np.random.seed()
 
+
+def parse_percent(val: str) -> float:
+    """Convert a percentage string like '10%' to a float 0.10."""
+    return float(val.strip().rstrip("%")) / 100
+
 def sample_death_year(retirement_age, years_of_retirement):
     """Return the year index (0-indexed) in which death occurs."""
     for j in range(years_of_retirement):
@@ -118,6 +123,15 @@ DEFAULT_GENERAL = {
     "inflation_std_dev": 0.04,
 }
 
+PERCENT_FIELDS = {
+    "stock_mean_return",
+    "stock_std_dev",
+    "bond_mean_return",
+    "bond_std_dev",
+    "inflation_mean",
+    "inflation_std_dev",
+}
+
 DEFAULT_USER = {
     "gender": "male",
     "current_age": 50,
@@ -138,12 +152,12 @@ def run_sim():
     global pretax_start, death_probs
 
     number_of_simulations = int(gen_entries["number_of_simulations"].get())
-    stock_mean_return = float(gen_entries["stock_mean_return"].get())
-    stock_std_dev = float(gen_entries["stock_std_dev"].get())
-    bond_mean_return = float(gen_entries["bond_mean_return"].get())
-    bond_std_dev = float(gen_entries["bond_std_dev"].get())
-    inflation_mean = float(gen_entries["inflation_mean"].get())
-    inflation_std_dev = float(gen_entries["inflation_std_dev"].get())
+    stock_mean_return = parse_percent(gen_entries["stock_mean_return"].get())
+    stock_std_dev = parse_percent(gen_entries["stock_std_dev"].get())
+    bond_mean_return = parse_percent(gen_entries["bond_mean_return"].get())
+    bond_std_dev = parse_percent(gen_entries["bond_std_dev"].get())
+    inflation_mean = parse_percent(gen_entries["inflation_mean"].get())
+    inflation_std_dev = parse_percent(gen_entries["inflation_std_dev"].get())
 
     gender = user_entries["gender"].get().strip().lower()
     current_age = int(user_entries["current_age"].get())
@@ -221,7 +235,10 @@ if __name__ == "__main__":
             anchor="w",
         ).pack(side="left")
         ent = ttk.Entry(row)
-        ent.insert(0, str(default))
+        if key in PERCENT_FIELDS:
+            ent.insert(0, f"{default * 100:.2f}%")
+        else:
+            ent.insert(0, str(default))
         ent.pack(side="left", fill="x", expand=True)
         gen_entries[key] = ent
 
@@ -236,10 +253,18 @@ if __name__ == "__main__":
             width=label_width,
             anchor="w",
         ).pack(side="left")
-        ent = ttk.Entry(row)
-        ent.insert(0, str(default))
-        ent.pack(side="left", fill="x", expand=True)
-        user_entries[key] = ent
+        if key == "gender":
+            gender_var = tk.StringVar(value=default)
+            rb_frame = ttk.Frame(row)
+            rb_frame.pack(side="left", fill="x", expand=True)
+            ttk.Radiobutton(rb_frame, text="M  ", variable=gender_var, value="male").pack(side="left")
+            ttk.Radiobutton(rb_frame, text="F", variable=gender_var, value="female").pack(side="left")
+            user_entries[key] = gender_var
+        else:
+            ent = ttk.Entry(row)
+            ent.insert(0, str(default))
+            ent.pack(side="left", fill="x", expand=True)
+            user_entries[key] = ent
 
     precomp_frame = ttk.LabelFrame(root, text="Pre-computations")
     precomp_frame.pack(fill="x", padx=10, pady=5)
