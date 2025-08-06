@@ -66,8 +66,8 @@ def simulate(yearly_net_withdrawal):
         w = yearly_net_withdrawal
         death_year = sample_death_year(retirement_age, years_of_retirement)
         stock_returns = np.random.normal(stock_mean_return, stock_std_dev, years_of_retirement)
-        bond_returns  = np.random.normal(bond_mean_return,  bond_std_dev,  years_of_retirement)
-        infls         = np.random.normal(inflation_mean,           inflation_std,     years_of_retirement)
+        bond_returns  = np.random.normal(bond_mean_return, bond_std_dev, years_of_retirement)
+        infls         = np.random.normal(inflation_mean, inflation_std_dev, years_of_retirement)
 
         for year_idx, (sr, br, i) in enumerate(zip(stock_returns, bond_returns, infls), start=1):
             if year_idx > death_year:
@@ -115,7 +115,7 @@ DEFAULT_GENERAL = {
     "bond_mean_return": 0.03,
     "bond_std_dev": 0.053,
     "inflation_mean": 0.033,
-    "inflation_std": 0.04,
+    "inflation_std_dev": 0.04,
 }
 
 DEFAULT_USER = {
@@ -132,7 +132,7 @@ DEFAULT_USER = {
 
 def run_sim():
     global number_of_simulations, years_of_retirement, stock_mean_return, stock_std_dev, bond_mean_return
-    global bond_std_dev, inflation_mean, inflation_std, gender, current_age, retirement_age
+    global bond_std_dev, inflation_mean, inflation_std_dev, gender, current_age, retirement_age
     global average_yearly_need, current_roth, current_401a_and_403b, social_security_at_62
     global stock_to_bond_ratio_after_retirement, bond_ratio, retirement_yearly_need, roth_start
     global pretax_start, death_probs
@@ -143,7 +143,7 @@ def run_sim():
     bond_mean_return = float(gen_entries["bond_mean_return"].get())
     bond_std_dev = float(gen_entries["bond_std_dev"].get())
     inflation_mean = float(gen_entries["inflation_mean"].get())
-    inflation_std = float(gen_entries["inflation_std"].get())
+    inflation_std_dev = float(gen_entries["inflation_std_dev"].get())
 
     gender = user_entries["gender"].get().strip().lower()
     current_age = int(user_entries["current_age"].get())
