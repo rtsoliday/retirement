@@ -163,25 +163,37 @@ def simulate(base_yearly_need, collect_paths=False):
 
 def plot_paths(success_paths, failure_paths):
     """Plot retirement fund paths for successful and failed simulations."""
+    failed_max_by_year = {}
+    fail_x, fail_y = [], []
+    if failure_paths:
+        for path in failure_paths:
+            for year_idx, val in enumerate(path):
+                fail_x.append(year_idx)
+                fail_y.append(val)
+                failed_max_by_year[year_idx] = max(
+                    failed_max_by_year.get(year_idx, float("-inf")), val
+                )
+
     if success_paths:
-        x, y = [], []
+        x, y, colors = [], [], []
         for path in success_paths:
-            x.extend(range(len(path)))
-            y.extend(path)
+            for year_idx, val in enumerate(path):
+                x.append(year_idx)
+                y.append(val)
+                if val > failed_max_by_year.get(year_idx, float("-inf")):
+                    colors.append("lime")
+                else:
+                    colors.append("darkgreen")
         plt.figure()
-        plt.scatter(x, y, s=1)
+        plt.scatter(x, y, s=1, c=colors, linewidths=1)
         plt.yscale("log")
         plt.xlabel("Years in retirement")
         plt.ylabel("Total funds ($)")
         plt.title("Successful simulations")
 
     if failure_paths:
-        x, y = [], []
-        for path in failure_paths:
-            x.extend(range(len(path)))
-            y.extend(path)
         plt.figure()
-        plt.scatter(x, y, s=1)
+        plt.scatter(fail_x, fail_y, s=1)
         plt.yscale("log")
         plt.xlabel("Years in retirement")
         plt.ylabel("Total funds ($)")
