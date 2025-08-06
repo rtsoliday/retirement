@@ -1,0 +1,188 @@
+#:kivy 2.1.0
+
+<RetirementRoot@ScrollView>:
+    do_scroll_x: False
+    BoxLayout:
+        orientation: 'vertical'
+        size_hint_y: None
+        height: self.minimum_height
+
+        Label:
+            text: 'General Parameters'
+            size_hint_y: None
+            height: '30dp'
+
+        GridLayout:
+            cols: 2
+            size_hint_y: None
+            height: self.minimum_height
+            row_default_height: '30dp'
+            row_force_default: True
+
+            Label: 
+                text: 'Number of simulations'
+            TextInput:
+                id: number_of_simulations
+                text: '2000'
+                multiline: False
+            Label: 
+                text: 'Pre-retirement mean return'
+            TextInput:
+                id: pre_retirement_mean_return
+                text: '14.72%'
+                multiline: False
+            Label: 
+                text: 'Pre-retirement std dev'
+            TextInput:
+                id: pre_retirement_std_dev
+                text: '29.2%'
+                multiline: False
+            Label: 
+                text: 'Stock mean return'
+            TextInput:
+                id: stock_mean_return
+                text: '10.46%'
+                multiline: False
+            Label: 
+                text: 'Stock std dev'
+            TextInput:
+                id: stock_std_dev
+                text: '20.8%'
+                multiline: False
+            Label: 
+                text: 'Bond mean return'
+            TextInput:
+                id: bond_mean_return
+                text: '3%'
+                multiline: False
+            Label: 
+                text: 'Bond std dev'
+            TextInput:
+                id: bond_std_dev
+                text: '5.3%'
+                multiline: False
+            Label: 
+                text: 'Inflation mean'
+            TextInput:
+                id: inflation_mean
+                text: '3.3%'
+                multiline: False
+            Label: 
+                text: 'Inflation std dev'
+            TextInput:
+                id: inflation_std_dev
+                text: '4%'
+                multiline: False
+
+        Label:
+            text: 'User-specific Parameters'
+            size_hint_y: None
+            height: '30dp'
+
+        GridLayout:
+            cols: 2
+            size_hint_y: None
+            height: self.minimum_height
+            row_default_height: '30dp'
+            row_force_default: True
+
+            Label: 
+                text: 'Gender'
+            Spinner:
+                id: gender
+                text: 'male'
+                values: ['male', 'female']
+            Label: 
+                text: 'Current age'
+            TextInput:
+                id: current_age
+                text: '50'
+                multiline: False
+            Label: 
+                text: 'Retirement age'
+            TextInput:
+                id: retirement_age
+                text: '58'
+                multiline: False
+            Label: 
+                text: 'Average yearly need'
+            TextInput:
+                id: average_yearly_need
+                text: '$75,000'
+                multiline: False
+            Label: 
+                text: 'Current Roth'
+            TextInput:
+                id: current_roth
+                text: '$100,000'
+                multiline: False
+            Label: 
+                text: 'Current 401a/403b'
+            TextInput:
+                id: current_401a_and_403b
+                text: '$800,000'
+                multiline: False
+            Label: 
+                text: 'Full Social Security at 67'
+            TextInput:
+                id: full_social_security_at_67
+                text: '$30,000'
+                multiline: False
+            Label: 
+                text: 'Social Security age started'
+            TextInput:
+                id: social_security_age_started
+                text: '62'
+                multiline: False
+            Label: 
+                text: 'Mortgage payment'
+            TextInput:
+                id: mortgage_payment
+                text: '$0'
+                multiline: False
+            Label: 
+                text: 'Mortgage years left'
+            TextInput:
+                id: mortgage_years_left
+                text: '0'
+                multiline: False
+            Label: 
+                text: '% in stock after retirement'
+            TextInput:
+                id: percent_in_stock_after_retirement
+                text: '70%'
+                multiline: False
+
+        Label:
+            text: 'Pre-computations'
+            size_hint_y: None
+            height: '30dp'
+        Label:
+            id: precomp_label
+            text: app.precomp_text
+            size_hint_y: None
+            height: '30dp'
+
+        BoxLayout:
+            size_hint_y: None
+            height: '40dp'
+            Button:
+                text: 'Run Simulations'
+                on_release: app.run_simulation()
+            Button:
+                text: 'Optimize % In Stocks'
+                on_release: app.optimize_percent()
+
+        Label:
+            text: 'Results'
+            size_hint_y: None
+            height: '30dp'
+        Label:
+            id: results_label
+            text: app.result_text
+            size_hint_y: None
+            height: self.texture_size[1]
+            text_size: self.width, None
+            valign: 'top'
+
+RetirementRoot:
