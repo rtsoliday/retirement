@@ -71,11 +71,12 @@ def gross_from_net_with_ss(net_amt, social_security_at_62):
             hi = mid
     return hi
 
-def simulate(yearly_net_withdrawal):
+def simulate(base_yearly_need):
     global retirement_age, current_age
     global current_roth, current_401a_and_403b
     global pre_retirement_mean_return, pre_retirement_std_dev
     global roth_start, pretax_start
+    global mortgage_years_in_retirement, mortgage_yearly_payment
 
     success = 0
     for _ in range(number_of_simulations):
@@ -92,7 +93,9 @@ def simulate(yearly_net_withdrawal):
 
 
         r_bal, p_bal = roth_start, pretax_start
-        w = yearly_net_withdrawal
+        base_need = base_yearly_need
+        mortgage_remaining = mortgage_years_in_retirement
+        w = base_need + (mortgage_yearly_payment if mortgage_remaining > 0 else 0)
         death_year = sample_death_year(retirement_age, years_of_retirement)
         stock_returns = np.random.normal(stock_mean_return, stock_std_dev, years_of_retirement)
         bond_returns  = np.random.normal(bond_mean_return, bond_std_dev, years_of_retirement)
@@ -125,8 +128,11 @@ def simulate(yearly_net_withdrawal):
                 rem_net = rem_gross - tax_liability(rem_gross)
                 r_bal -= rem_net
 
-            # inflation-adjust next year's net need
-            w *= (1 + i)
+            # inflation-adjust base need and recompute net need
+            base_need *= (1 + i)
+            if mortgage_remaining > 0:
+                mortgage_remaining -= 1
+            w = base_need + (mortgage_yearly_payment if mortgage_remaining > 0 else 0)
 
             # if either balance goes negative → ruin
             if r_bal < 0 or p_bal < 0:
@@ -166,6 +172,7 @@ DOLLAR_FIELDS = {
     "current_roth",
     "current_401a_and_403b",
     "social_security_at_62",
+    "mortgage_payment",
 }
 
 DEFAULT_USER = {
@@ -176,6 +183,8 @@ DEFAULT_USER = {
     "current_roth": 100_000,
     "current_401a_and_403b": 800_000,
     "social_security_at_62": 30_000,
+    "mortgage_payment": 0,
+    "mortgage_years_left": 0,
     "percent_in_stock_after_retirement": 0.7,
 }
 
@@ -211,6 +220,8 @@ def save_config():
             "current_roth": current_roth,
             "current_401a_and_403b": current_401a_and_403b,
             "social_security_at_62": social_security_at_62,
+            "mortgage_payment": mortgage_payment,
+            "mortgage_years_left": mortgage_years_left,
             "percent_in_stock_after_retirement": percent_in_stock_after_retirement,
         },
     }
@@ -225,6 +236,8 @@ def _load_inputs(percent_override: float | None = None):
     global bond_mean_return, bond_std_dev, inflation_mean, inflation_std_dev
     global gender, current_age, retirement_age, average_yearly_need, current_roth
     global current_401a_and_403b, social_security_at_62, retirement_yearly_need
+    global mortgage_payment, mortgage_years_left, mortgage_yearly_payment
+    global mortgage_years_in_retirement, base_retirement_need
     global roth_start, pretax_start, death_probs
 
     number_of_simulations = int(gen_entries["number_of_simulations"].get())
@@ -244,11 +257,17 @@ def _load_inputs(percent_override: float | None = None):
     current_roth = parse_dollars(user_entries["current_roth"].get())
     current_401a_and_403b = parse_dollars(user_entries["current_401a_and_403b"].get())
     social_security_at_62 = parse_dollars(user_entries["social_security_at_62"].get())
+    mortgage_payment = parse_dollars(user_entries["mortgage_payment"].get())
+    mortgage_years_left = int(user_entries["mortgage_years_left"].get())
+    mortgage_yearly_payment = mortgage_payment * 12
 
     years_of_retirement = 119 - retirement_age
 
-    retirement_yearly_need = average_yearly_need * (1 + inflation_mean) ** (
-        retirement_age - current_age
+    years_to_retirement = retirement_age - current_age
+    base_retirement_need = average_yearly_need * (1 + inflation_mean) ** years_to_retirement
+    mortgage_years_in_retirement = max(0, mortgage_years_left - years_to_retirement)
+    retirement_yearly_need = base_retirement_need + (
+        mortgage_yearly_payment if mortgage_years_in_retirement > 0 else 0
     )
 
     precomp_ret_need_var.set(
@@ -283,12 +302,15 @@ def run_sim():
     """Run a single simulation using the current GUI inputs."""
     _load_inputs(parse_percent(user_entries["percent_in_stock_after_retirement"].get()))
 
-    rate = simulate(retirement_yearly_need) * 100
+    rate = simulate(base_retirement_need) * 100
 
+    need_at_62 = base_retirement_need * (1 + inflation_mean) ** max(0, 62 - retirement_age)
+    if mortgage_years_in_retirement > max(0, 62 - retirement_age):
+        need_at_62 += mortgage_yearly_payment
     results = [
         f"Success rate: {rate:.1f}%",
         f"Gross needed in year 1: ${gross_from_net(retirement_yearly_need):,.0f}",
-        f"Gross needed in year {62 - retirement_age} (with SS): ${gross_from_net_with_ss(retirement_yearly_need, social_security_at_62):,.0f}",
+        f"Gross needed in year {62 - retirement_age} (with SS): ${gross_from_net_with_ss(need_at_62, social_security_at_62):,.0f}",
     ]
     results_var.set("\n".join(results))
     save_config()
@@ -299,14 +321,14 @@ def optimize_percent():
     _load_inputs(1.0)
 
     best_percent = 1.0
-    best_rate = simulate(retirement_yearly_need) * 100
+    best_rate = simulate(base_retirement_need) * 100
     prev_rate = best_rate
     percent = 0.9
 
     while percent >= 0:
         percent_in_stock_after_retirement = percent
         bond_ratio = 1 - percent
-        rate = simulate(retirement_yearly_need) * 100
+        rate = simulate(base_retirement_need) * 100
         if rate < prev_rate:
             break
         if rate >= best_rate:
@@ -320,7 +342,7 @@ def optimize_percent():
     while percent >= 0:
         percent_in_stock_after_retirement = percent
         bond_ratio = 1 - percent
-        rate = simulate(retirement_yearly_need) * 100
+        rate = simulate(base_retirement_need) * 100
         if rate < prev_rate:
             break
         if rate >= best_rate:
@@ -332,11 +354,14 @@ def optimize_percent():
     user_entries["percent_in_stock_after_retirement"].delete(0, tk.END)
     user_entries["percent_in_stock_after_retirement"].insert(0, f"{best_percent*100:.2f}%")
 
+    need_at_62 = base_retirement_need * (1 + inflation_mean) ** max(0, 62 - retirement_age)
+    if mortgage_years_in_retirement > max(0, 62 - retirement_age):
+        need_at_62 += mortgage_yearly_payment
     results = [
         f"Best percent in stock: {best_percent*100:.1f}%",
         f"Success rate: {best_rate:.1f}%",
         f"Gross needed in year 1: ${gross_from_net(retirement_yearly_need):,.0f}",
-        f"Gross needed in year {62 - retirement_age} (with SS): ${gross_from_net_with_ss(retirement_yearly_need, social_security_at_62):,.0f}",
+        f"Gross needed in year {62 - retirement_age} (with SS): ${gross_from_net_with_ss(need_at_62, social_security_at_62):,.0f}",
     ]
     results_var.set("\n".join(results))
 
