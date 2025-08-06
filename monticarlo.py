@@ -7,6 +7,7 @@ from tkinter import messagebox
 import json
 import os
 import matplotlib.pyplot as plt
+from dataclasses import dataclass, field
 
 # Monte Carlo setup
 np.random.seed()
@@ -74,7 +75,7 @@ def parse_dollars(val: str) -> float:
         raise ValueError("Dollar amount cannot be negative")
     return amt
 
-def sample_death_year(retirement_age, years_of_retirement):
+def sample_death_year(retirement_age, years_of_retirement, death_probs):
     """Return the year index (0-indexed) in which death occurs."""
     for j in range(years_of_retirement):
         age = retirement_age + j
@@ -88,32 +89,68 @@ def sample_death_year(retirement_age, years_of_retirement):
 brackets = [0, 11_600, 47_150, 100_525, 191_950, 243_725, 609_350]
 rates    = [0.10, 0.12, 0.22,   0.24,    0.32,    0.35,    0.37]
 
-def tax_liability(income):
+
+@dataclass
+class SimulationConfig:
+    number_of_simulations: int
+    pre_retirement_mean_return: float
+    pre_retirement_std_dev: float
+    stock_mean_return: float
+    stock_std_dev: float
+    bond_mean_return: float
+    bond_std_dev: float
+    inflation_mean: float
+    inflation_std_dev: float
+    gender: str
+    current_age: int
+    retirement_age: int
+    average_yearly_need: float
+    current_roth: float
+    current_401a_and_403b: float
+    full_social_security_at_67: float
+    social_security_age_started: int
+    social_security_yearly_amount: float
+    mortgage_payment: float
+    mortgage_years_left: int
+    percent_in_stock_after_retirement: float
+    bond_ratio: float
+    years_of_retirement: int
+    base_retirement_need: float
+    retirement_yearly_need: float
+    mortgage_years_in_retirement: int
+    mortgage_yearly_payment: float
+    tax_brackets: list[float] = field(default_factory=lambda: brackets.copy())
+    tax_rates: list[float] = field(default_factory=lambda: rates.copy())
+    death_probs: np.ndarray = field(default_factory=lambda: np.array([]))
+
+def tax_liability(income, cfg: SimulationConfig) -> float:
     tax = 0.0
-    for i in range(len(rates)):
-        lower = brackets[i]
-        upper = brackets[i+1] if i+1 < len(brackets) else income
+    for i in range(len(cfg.tax_rates)):
+        lower = cfg.tax_brackets[i]
+        upper = cfg.tax_brackets[i + 1] if i + 1 < len(cfg.tax_brackets) else income
         if income > lower:
-            tax += (min(income, upper) - lower) * rates[i]
+            tax += (min(income, upper) - lower) * cfg.tax_rates[i]
         else:
             break
     return tax
 
-def gross_from_net(net_amt):
+
+def gross_from_net(net_amt, cfg: SimulationConfig) -> float:
     """Find G such that G - tax_liability(G) = net_amt."""
     lo, hi = net_amt, net_amt * 1.5 + 20_000
     for _ in range(40):
         mid = (lo + hi) / 2
-        if mid - tax_liability(mid) < net_amt:
+        if mid - tax_liability(mid, cfg) < net_amt:
             lo = mid
         else:
             hi = mid
     return hi
 
-def gross_from_net_with_ss(net_amt, social_security_yearly_amount):
+
+def gross_from_net_with_ss(net_amt, social_security_yearly_amount, cfg: SimulationConfig) -> float:
     """
     Find G such that
-       (G + social_security_yearly_amount) - tax_liability(G + social_security_yearly_amount) == net_amt
+       (G + social_security_yearly_amount) - tax_liability(G + social_security_yearly_amount, cfg) == net_amt
     i.e. accounts + SS minus tax on total = net spending.
     """
     lo, hi = (
@@ -123,7 +160,7 @@ def gross_from_net_with_ss(net_amt, social_security_yearly_amount):
     for _ in range(40):
         mid = (lo + hi) / 2
         total = mid + social_security_yearly_amount
-        if total - tax_liability(total) < net_amt:
+        if total - tax_liability(total, cfg) < net_amt:
             lo = mid
         else:
             hi = mid
@@ -153,36 +190,36 @@ def social_security_payout(full_ss_at_67, start_age):
         increase = months_late * (2 / 3) / 100
         return full_ss_at_67 * (1 + increase)
 
-def simulate(base_yearly_need, collect_paths=False):
-    global retirement_age, current_age
-    global current_roth, current_401a_and_403b
-    global pre_retirement_mean_return, pre_retirement_std_dev
-    global roth_start, pretax_start
-    global mortgage_years_in_retirement, mortgage_yearly_payment
-
+def simulate(cfg: SimulationConfig, collect_paths: bool = False):
     success = 0
     success_paths = [] if collect_paths else None
     failure_paths = [] if collect_paths else None
 
-    for _ in range(number_of_simulations):
-        # Grow pre-retirement balances using both mean return and volatility.
-        years_to_retirement = retirement_age - current_age
+    for _ in range(cfg.number_of_simulations):
+        years_to_retirement = cfg.retirement_age - cfg.current_age
         pre_ret_returns = np.random.normal(
-            pre_retirement_mean_return, pre_retirement_std_dev, years_to_retirement
+            cfg.pre_retirement_mean_return, cfg.pre_retirement_std_dev, years_to_retirement
         )
         growth_factor = np.prod(1 + pre_ret_returns)
 
-        roth_start = current_roth * growth_factor
-        pretax_start = current_401a_and_403b * growth_factor
+        r_bal = cfg.current_roth * growth_factor
+        p_bal = cfg.current_401a_and_403b * growth_factor
 
-        r_bal, p_bal = roth_start, pretax_start
-        base_need = base_yearly_need
-        mortgage_remaining = mortgage_years_in_retirement
-        w = base_need + (mortgage_yearly_payment if mortgage_remaining > 0 else 0)
-        death_year = sample_death_year(retirement_age, years_of_retirement)
-        stock_returns = np.random.normal(stock_mean_return, stock_std_dev, years_of_retirement)
-        bond_returns  = np.random.normal(bond_mean_return, bond_std_dev, years_of_retirement)
-        infls         = np.random.normal(inflation_mean, inflation_std_dev, years_of_retirement)
+        base_need = cfg.base_retirement_need
+        mortgage_remaining = cfg.mortgage_years_in_retirement
+        w = base_need + (cfg.mortgage_yearly_payment if mortgage_remaining > 0 else 0)
+        death_year = sample_death_year(
+            cfg.retirement_age, cfg.years_of_retirement, cfg.death_probs
+        )
+        stock_returns = np.random.normal(
+            cfg.stock_mean_return, cfg.stock_std_dev, cfg.years_of_retirement
+        )
+        bond_returns = np.random.normal(
+            cfg.bond_mean_return, cfg.bond_std_dev, cfg.years_of_retirement
+        )
+        infls = np.random.normal(
+            cfg.inflation_mean, cfg.inflation_std_dev, cfg.years_of_retirement
+        )
 
         path = [r_bal + p_bal] if collect_paths else None
 
@@ -191,40 +228,40 @@ def simulate(base_yearly_need, collect_paths=False):
                 success += 1
                 if collect_paths:
                     success_paths.append(path)
-                break  # retiree is assumed dead; stop withdrawals
+                break
 
-            # portfolio return = weighted average of stock & bond returns
-            port_ret = percent_in_stock_after_retirement * sr + bond_ratio * br
+            port_ret = (
+                cfg.percent_in_stock_after_retirement * sr + cfg.bond_ratio * br
+            )
 
-            # grow balances by portfolio return
             r_bal *= (1 + port_ret)
             p_bal *= (1 + port_ret)
 
-            # pick the right gross calculation
-            if retirement_age + year_idx < social_security_age_started:
-                gross_w = gross_from_net(w)
+            if cfg.retirement_age + year_idx < cfg.social_security_age_started:
+                gross_w = gross_from_net(w, cfg)
             else:
-                gross_w = gross_from_net_with_ss(w, social_security_yearly_amount)
+                gross_w = gross_from_net_with_ss(
+                    w, cfg.social_security_yearly_amount, cfg
+                )
 
-            # withdraw from pre-tax first
             if p_bal >= gross_w:
                 p_bal -= gross_w
             else:
                 rem_gross = gross_w - p_bal
                 p_bal = 0
-                rem_net = rem_gross - tax_liability(rem_gross)
+                rem_net = rem_gross - tax_liability(rem_gross, cfg)
                 r_bal -= rem_net
 
-            # inflation-adjust base need and recompute net need
             base_need *= (1 + i)
             if mortgage_remaining > 0:
                 mortgage_remaining -= 1
-            w = base_need + (mortgage_yearly_payment if mortgage_remaining > 0 else 0)
+            w = base_need + (
+                cfg.mortgage_yearly_payment if mortgage_remaining > 0 else 0
+            )
 
             if collect_paths:
                 path.append(r_bal + p_bal)
 
-            # if either balance goes negative → ruin
             if r_bal < 0 or p_bal < 0:
                 if collect_paths:
                     failure_paths.append(path)
@@ -235,8 +272,8 @@ def simulate(base_yearly_need, collect_paths=False):
                 success_paths.append(path)
 
     if collect_paths:
-        return success / number_of_simulations, success_paths, failure_paths
-    return success / number_of_simulations
+        return success / cfg.number_of_simulations, success_paths, failure_paths
+    return success / cfg.number_of_simulations
 
 
 def plot_paths(success_paths, failure_paths):
@@ -473,53 +510,48 @@ def load_config():
     return {}
 
 
-def save_config():
+def save_config(cfg: SimulationConfig):
     data = {
         "general": {
-            "number_of_simulations": number_of_simulations,
-            "pre_retirement_mean_return": pre_retirement_mean_return,
-            "pre_retirement_std_dev": pre_retirement_std_dev,
-            "stock_mean_return": stock_mean_return,
-            "stock_std_dev": stock_std_dev,
-            "bond_mean_return": bond_mean_return,
-            "bond_std_dev": bond_std_dev,
-            "inflation_mean": inflation_mean,
-            "inflation_std_dev": inflation_std_dev,
+            "number_of_simulations": cfg.number_of_simulations,
+            "pre_retirement_mean_return": cfg.pre_retirement_mean_return,
+            "pre_retirement_std_dev": cfg.pre_retirement_std_dev,
+            "stock_mean_return": cfg.stock_mean_return,
+            "stock_std_dev": cfg.stock_std_dev,
+            "bond_mean_return": cfg.bond_mean_return,
+            "bond_std_dev": cfg.bond_std_dev,
+            "inflation_mean": cfg.inflation_mean,
+            "inflation_std_dev": cfg.inflation_std_dev,
         },
         "user": {
-            "gender": gender,
-            "current_age": current_age,
-            "retirement_age": retirement_age,
-            "average_yearly_need": average_yearly_need,
-            "current_roth": current_roth,
-            "current_401a_and_403b": current_401a_and_403b,
-            "full_social_security_at_67": full_social_security_at_67,
-            "social_security_age_started": social_security_age_started,
-            "mortgage_payment": mortgage_payment,
-            "mortgage_years_left": mortgage_years_left,
-            "percent_in_stock_after_retirement": percent_in_stock_after_retirement,
+            "gender": cfg.gender,
+            "current_age": cfg.current_age,
+            "retirement_age": cfg.retirement_age,
+            "average_yearly_need": cfg.average_yearly_need,
+            "current_roth": cfg.current_roth,
+            "current_401a_and_403b": cfg.current_401a_and_403b,
+            "full_social_security_at_67": cfg.full_social_security_at_67,
+            "social_security_age_started": cfg.social_security_age_started,
+            "mortgage_payment": cfg.mortgage_payment,
+            "mortgage_years_left": cfg.mortgage_years_left,
+            "percent_in_stock_after_retirement": cfg.percent_in_stock_after_retirement,
         },
     }
     with open(CONFIG_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
 
-def _load_inputs(percent_override: float | None = None):
-    """Load GUI inputs into globals and perform common pre-computations."""
-    global number_of_simulations, years_of_retirement, stock_mean_return, stock_std_dev
-    global pre_retirement_mean_return, pre_retirement_std_dev
-    global bond_mean_return, bond_std_dev, inflation_mean, inflation_std_dev
-    global gender, current_age, retirement_age, average_yearly_need, current_roth
-    global current_401a_and_403b, full_social_security_at_67, social_security_age_started, social_security_yearly_amount, retirement_yearly_need
-    global mortgage_payment, mortgage_years_left, mortgage_yearly_payment
-    global mortgage_years_in_retirement, base_retirement_need
-    global roth_start, pretax_start, death_probs
-
+def _load_inputs(percent_override: float | None = None) -> SimulationConfig:
+    """Parse GUI inputs and return a SimulationConfig."""
     number_of_simulations = int(gen_entries["number_of_simulations"].get())
     if number_of_simulations <= 0:
         raise ValueError("Number of simulations must be positive")
-    pre_retirement_mean_return = parse_percent(gen_entries["pre_retirement_mean_return"].get())
-    pre_retirement_std_dev = parse_percent(gen_entries["pre_retirement_std_dev"].get())
+    pre_retirement_mean_return = parse_percent(
+        gen_entries["pre_retirement_mean_return"].get()
+    )
+    pre_retirement_std_dev = parse_percent(
+        gen_entries["pre_retirement_std_dev"].get()
+    )
     stock_mean_return = parse_percent(gen_entries["stock_mean_return"].get())
     stock_std_dev = parse_percent(gen_entries["stock_std_dev"].get())
     bond_mean_return = parse_percent(gen_entries["bond_mean_return"].get())
@@ -539,11 +571,17 @@ def _load_inputs(percent_override: float | None = None):
     average_yearly_need = parse_dollars(user_entries["average_yearly_need"].get())
     current_roth = parse_dollars(user_entries["current_roth"].get())
     current_401a_and_403b = parse_dollars(user_entries["current_401a_and_403b"].get())
-    full_social_security_at_67 = parse_dollars(user_entries["full_social_security_at_67"].get())
-    social_security_age_started = int(user_entries["social_security_age_started"].get())
+    full_social_security_at_67 = parse_dollars(
+        user_entries["full_social_security_at_67"].get()
+    )
+    social_security_age_started = int(
+        user_entries["social_security_age_started"].get()
+    )
     if social_security_age_started < 0:
         raise ValueError("Social Security age must be non-negative")
-    social_security_yearly_amount = social_security_payout(full_social_security_at_67, social_security_age_started)
+    social_security_yearly_amount = social_security_payout(
+        full_social_security_at_67, social_security_age_started
+    )
     mortgage_payment = parse_dollars(user_entries["mortgage_payment"].get())
     mortgage_years_left = int(user_entries["mortgage_years_left"].get())
     if mortgage_years_left < 0:
@@ -562,13 +600,6 @@ def _load_inputs(percent_override: float | None = None):
     precomp_ret_need_var.set(
         f"Year 1 net need: ${retirement_yearly_need:,.0f}"
     )
-    #precomp_roth_start_var.set(
-    #    f"Roth at retirement: ${roth_start:,.0f}"
-    #)
-    #precomp_pretax_start_var.set(
-    #    f"Pre-tax at retirement: ${pretax_start:,.0f}"
-    #)
-
     results_var.set("Working...")
     root.update_idletasks()
 
@@ -581,31 +612,68 @@ def _load_inputs(percent_override: float | None = None):
     death_row = df[df["Year"] == 2025].iloc[0]
     death_probs = death_row.drop("Year").astype(float).values
 
-    if percent_override is not None:
+    if percent_override is None:
+        percent_in_stock_after_retirement = parse_percent(
+            user_entries["percent_in_stock_after_retirement"].get()
+        )
+    else:
         if not 0 <= percent_override <= 1:
-            raise ValueError("Percent in stock after retirement must be between 0 and 100")
-        global percent_in_stock_after_retirement, bond_ratio
+            raise ValueError(
+                "Percent in stock after retirement must be between 0 and 100"
+            )
         percent_in_stock_after_retirement = percent_override
-        bond_ratio = 1 - percent_override
+    bond_ratio = 1 - percent_in_stock_after_retirement
+
+    cfg = SimulationConfig(
+        number_of_simulations=number_of_simulations,
+        pre_retirement_mean_return=pre_retirement_mean_return,
+        pre_retirement_std_dev=pre_retirement_std_dev,
+        stock_mean_return=stock_mean_return,
+        stock_std_dev=stock_std_dev,
+        bond_mean_return=bond_mean_return,
+        bond_std_dev=bond_std_dev,
+        inflation_mean=inflation_mean,
+        inflation_std_dev=inflation_std_dev,
+        gender=gender,
+        current_age=current_age,
+        retirement_age=retirement_age,
+        average_yearly_need=average_yearly_need,
+        current_roth=current_roth,
+        current_401a_and_403b=current_401a_and_403b,
+        full_social_security_at_67=full_social_security_at_67,
+        social_security_age_started=social_security_age_started,
+        social_security_yearly_amount=social_security_yearly_amount,
+        mortgage_payment=mortgage_payment,
+        mortgage_years_left=mortgage_years_left,
+        percent_in_stock_after_retirement=percent_in_stock_after_retirement,
+        bond_ratio=bond_ratio,
+        years_of_retirement=years_of_retirement,
+        base_retirement_need=base_retirement_need,
+        retirement_yearly_need=retirement_yearly_need,
+        mortgage_years_in_retirement=mortgage_years_in_retirement,
+        mortgage_yearly_payment=mortgage_yearly_payment,
+        death_probs=death_probs,
+    )
+    return cfg
 
 
 def run_sim():
     """Run a single simulation using the current GUI inputs."""
     try:
-        _load_inputs(parse_percent(user_entries["percent_in_stock_after_retirement"].get()))
+        cfg = _load_inputs(
+            parse_percent(user_entries["percent_in_stock_after_retirement"].get())
+        )
     except ValueError as exc:
         messagebox.showerror("Input error", str(exc))
         return
 
-    rate, success_paths, failure_paths = simulate(
-        base_retirement_need, collect_paths=True
-    )
+    rate, success_paths, failure_paths = simulate(cfg, collect_paths=True)
     rate *= 100
 
     start_success = [p[0] for p in success_paths]
     start_failure = [p[0] for p in failure_paths]
     maroon_thresh = green_thresh = None
-    if retirement_age > current_age and start_success and start_failure:
+    if cfg.retirement_age > cfg.current_age and start_success and start_failure:
         success_min0 = min(start_success)
         failure_max0 = max(start_failure)
         maroon_candidates = [f for f in start_failure if f >= success_min0]
@@ -615,20 +683,20 @@ def run_sim():
         if green_candidates:
             green_thresh = max(green_candidates)
 
-    if retirement_age < social_security_age_started:
-        years_until_ss = social_security_age_started - retirement_age
-        need_at_ss = base_retirement_need * (1 + inflation_mean) ** years_until_ss
-        if mortgage_years_in_retirement > years_until_ss:
-            need_at_ss += mortgage_yearly_payment
+    if cfg.retirement_age < cfg.social_security_age_started:
+        years_until_ss = cfg.social_security_age_started - cfg.retirement_age
+        need_at_ss = cfg.base_retirement_need * (1 + cfg.inflation_mean) ** years_until_ss
+        if cfg.mortgage_years_in_retirement > years_until_ss:
+            need_at_ss += cfg.mortgage_yearly_payment
         results = [
             f"Success rate: {rate:.1f}%",
-            f"Gross needed in year 1: ${gross_from_net(retirement_yearly_need):,.0f}",
-            f"Gross needed in year {years_until_ss} (with SS): ${gross_from_net_with_ss(need_at_ss, social_security_yearly_amount):,.0f}",
+            f"Gross needed in year 1: ${gross_from_net(cfg.retirement_yearly_need, cfg):,.0f}",
+            f"Gross needed in year {years_until_ss} (with SS): ${gross_from_net_with_ss(need_at_ss, cfg.social_security_yearly_amount, cfg):,.0f}",
         ]
     else:
         results = [
             f"Success rate: {rate:.1f}%",
-            f"Gross needed in year 1 (with SS): ${gross_from_net_with_ss(retirement_yearly_need, social_security_yearly_amount):,.0f}",
+            f"Gross needed in year 1 (with SS): ${gross_from_net_with_ss(cfg.retirement_yearly_need, cfg.social_security_yearly_amount, cfg):,.0f}",
         ]
     if maroon_thresh is not None:
         results.append(
@@ -639,27 +707,29 @@ def run_sim():
             f"It is safe to retire if total funds are above ${green_thresh:,.0f} in year 0 of retirement."
         )
     results_var.set("\n".join(results))
-    save_config()
+    save_config(cfg)
     plot_paths(success_paths, failure_paths)
 
 
 def optimize_percent():
     """Search for the stock percentage that maximizes success rate."""
     try:
-        _load_inputs(1.0)
+        cfg = _load_inputs(1.0)
     except ValueError as exc:
         messagebox.showerror("Input error", str(exc))
         return
 
     best_percent = 1.0
-    best_rate = simulate(base_retirement_need) * 100
+    cfg.percent_in_stock_after_retirement = 1.0
+    cfg.bond_ratio = 0.0
+    best_rate = simulate(cfg) * 100
     prev_rate = best_rate
     percent = 0.9
 
     while percent >= 0:
-        percent_in_stock_after_retirement = percent
-        bond_ratio = 1 - percent
-        rate = simulate(base_retirement_need) * 100
+        cfg.percent_in_stock_after_retirement = percent
+        cfg.bond_ratio = 1 - percent
+        rate = simulate(cfg) * 100
         if rate < prev_rate:
             break
         if rate >= best_rate:
@@ -671,9 +741,9 @@ def optimize_percent():
     percent = best_percent - 0.05
     prev_rate = best_rate
     while percent >= 0:
-        percent_in_stock_after_retirement = percent
-        bond_ratio = 1 - percent
-        rate = simulate(base_retirement_need) * 100
+        cfg.percent_in_stock_after_retirement = percent
+        cfg.bond_ratio = 1 - percent
+        rate = simulate(cfg) * 100
         if rate < prev_rate:
             break
         if rate >= best_rate:
@@ -685,22 +755,22 @@ def optimize_percent():
     user_entries["percent_in_stock_after_retirement"].delete(0, tk.END)
     user_entries["percent_in_stock_after_retirement"].insert(0, f"{best_percent*100:.2f}%")
 
-    if retirement_age < social_security_age_started:
-        years_until_ss = social_security_age_started - retirement_age
-        need_at_ss = base_retirement_need * (1 + inflation_mean) ** years_until_ss
-        if mortgage_years_in_retirement > years_until_ss:
-            need_at_ss += mortgage_yearly_payment
+    if cfg.retirement_age < cfg.social_security_age_started:
+        years_until_ss = cfg.social_security_age_started - cfg.retirement_age
+        need_at_ss = cfg.base_retirement_need * (1 + cfg.inflation_mean) ** years_until_ss
+        if cfg.mortgage_years_in_retirement > years_until_ss:
+            need_at_ss += cfg.mortgage_yearly_payment
         results = [
             f"Best percent in stock: {best_percent*100:.1f}%",
             f"Success rate: {best_rate:.1f}%",
-            f"Gross needed in year 1: ${gross_from_net(retirement_yearly_need):,.0f}",
-            f"Gross needed in year {years_until_ss} (with SS): ${gross_from_net_with_ss(need_at_ss, social_security_yearly_amount):,.0f}",
+            f"Gross needed in year 1: ${gross_from_net(cfg.retirement_yearly_need, cfg):,.0f}",
+            f"Gross needed in year {years_until_ss} (with SS): ${gross_from_net_with_ss(need_at_ss, cfg.social_security_yearly_amount, cfg):,.0f}",
         ]
     else:
         results = [
             f"Best percent in stock: {best_percent*100:.1f}%",
             f"Success rate: {best_rate:.1f}%",
-            f"Gross needed in year 1 (with SS): ${gross_from_net_with_ss(retirement_yearly_need, social_security_yearly_amount):,.0f}",
+            f"Gross needed in year 1 (with SS): ${gross_from_net_with_ss(cfg.retirement_yearly_need, cfg.social_security_yearly_amount, cfg):,.0f}",
         ]
     results_var.set("\n".join(results))
 
