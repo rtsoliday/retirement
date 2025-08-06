@@ -122,6 +122,8 @@ def simulate(yearly_net_withdrawal):
 # Default parameter values
 DEFAULT_GENERAL = {
     "number_of_simulations": 2_000,
+    "pre_retirement_mean_return": 0.1472,
+    "pre_retirement_std_dev": 0.292,
     "stock_mean_return": 0.1046,
     "stock_std_dev": 0.208,
     "bond_mean_return": 0.03,
@@ -131,6 +133,8 @@ DEFAULT_GENERAL = {
 }
 
 PERCENT_FIELDS = {
+    "pre_retirement_mean_return",
+    "pre_retirement_std_dev",
     "stock_mean_return",
     "stock_std_dev",
     "bond_mean_return",
@@ -173,6 +177,8 @@ def save_config():
     data = {
         "general": {
             "number_of_simulations": number_of_simulations,
+            "pre_retirement_mean_return": pre_retirement_mean_return,
+            "pre_retirement_std_dev": pre_retirement_std_dev,
             "stock_mean_return": stock_mean_return,
             "stock_std_dev": stock_std_dev,
             "bond_mean_return": bond_mean_return,
@@ -198,12 +204,15 @@ def save_config():
 def _load_inputs(percent_override: float | None = None):
     """Load GUI inputs into globals and perform common pre-computations."""
     global number_of_simulations, years_of_retirement, stock_mean_return, stock_std_dev
+    global pre_retirement_mean_return, pre_retirement_std_dev
     global bond_mean_return, bond_std_dev, inflation_mean, inflation_std_dev
     global gender, current_age, retirement_age, average_yearly_need, current_roth
     global current_401a_and_403b, social_security_at_62, retirement_yearly_need
     global roth_start, pretax_start, death_probs
 
     number_of_simulations = int(gen_entries["number_of_simulations"].get())
+    pre_retirement_mean_return = parse_percent(gen_entries["pre_retirement_mean_return"].get())
+    pre_retirement_std_dev = parse_percent(gen_entries["pre_retirement_std_dev"].get())
     stock_mean_return = parse_percent(gen_entries["stock_mean_return"].get())
     stock_std_dev = parse_percent(gen_entries["stock_std_dev"].get())
     bond_mean_return = parse_percent(gen_entries["bond_mean_return"].get())
@@ -224,10 +233,10 @@ def _load_inputs(percent_override: float | None = None):
     retirement_yearly_need = average_yearly_need * (1 + inflation_mean) ** (
         retirement_age - current_age
     )
-    roth_start = current_roth * (1 + stock_mean_return) ** (
+    roth_start = current_roth * (1 + pre_retirement_mean_return) ** (
         retirement_age - current_age
     )
-    pretax_start = current_401a_and_403b * (1 + stock_mean_return) ** (
+    pretax_start = current_401a_and_403b * (1 + pre_retirement_mean_return) ** (
         retirement_age - current_age
     )
 
@@ -346,7 +355,7 @@ def load_defaults():
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Retirement Simulator")
-    root.geometry("360x640")
+    root.geometry("360x840")
 
     gen_entries = {}
     user_entries = {}
