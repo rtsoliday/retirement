@@ -208,6 +208,11 @@ def run_sim():
         f"Pre-tax at retirement: ${pretax_start:,.0f}"
     )
 
+    results_var.set("Working...")
+
+    # Update the GUI so the pre-computations are visible before running simulations
+    root.update_idletasks()
+
     file = (
         "DeathProbsE_M_Alt2_TR2025.csv"
         if gender.startswith("m")
@@ -299,7 +304,7 @@ if __name__ == "__main__":
 
     run_frame = ttk.Frame(root)
     run_frame.pack(fill="x", padx=10, pady=5)
-    ttk.Button(run_frame, text="Run Simulation", command=run_sim).pack()
+    ttk.Button(run_frame, text="Run Simulations", command=run_sim).pack()
 
     results_frame = ttk.LabelFrame(root, text="Results")
     results_frame.pack(fill="both", expand=True, padx=10, pady=5)
