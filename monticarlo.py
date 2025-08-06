@@ -1,6 +1,8 @@
 import numpy as np
 from bisect import bisect_right
 import pandas as pd
+import tkinter as tk
+from tkinter import ttk
 
 # Monte Carlo setup
 np.random.seed()
@@ -105,41 +107,142 @@ def simulate(yearly_net_withdrawal):
 
     return success / n_sim
 
-# General Parameters
-n_sim, n_years = 2_000, 60 # 60 years to cover up to age 118
-stock_mean_return, stock_std_dev = 0.1046, 0.208 # based on 1926-2023 S&P 500 returns
-bond_mean_return,  bond_std_dev  = 0.03,   0.053 # based on 1926-2023 10-year Treasury returns
-infl_mean, infl_std   = 0.033, 0.04 # based on 1926-2023 CPI returns
+# Default parameter values
+DEFAULT_GENERAL = {
+    "n_sim": 2_000,
+    "n_years": 60,
+    "stock_mean_return": 0.1046,
+    "stock_std_dev": 0.208,
+    "bond_mean_return": 0.03,
+    "bond_std_dev": 0.053,
+    "infl_mean": 0.033,
+    "infl_std": 0.04,
+}
 
-# User-specific Parameters
-gender = 'male'
-current_age = 50 # current age
-retire_age  = 58 # starting retirement age
-average_yearly_need = 77_334 # average yearly spending need today
-roth_current, pretax_current = 100_000, 800_000 # current balances in Roth and pre-tax (401k or 403b) accounts
-ss_gross = 33_456 # gross Social Security income starting at age 62
-stock_ratio = 0.99
-bond_ratio  = 1 - stock_ratio
+DEFAULT_USER = {
+    "gender": "male",
+    "current_age": 50,
+    "retire_age": 58,
+    "average_yearly_need": 77_334,
+    "roth_current": 100_000,
+    "pretax_current": 800_000,
+    "ss_gross": 33_456,
+    "stock_ratio": 0.99,
+}
 
-# Pre-computations. Assume all funds are invested in stocks until retirement.
-retirement_yearly_need = average_yearly_need * (1 + infl_mean) ** (retire_age - current_age)
-roth_start = roth_current * (1 + stock_mean_return) ** (retire_age - current_age)
-pretax_start = pretax_current * (1 + stock_mean_return) ** (retire_age - current_age)
 
-# Load mortality data
-if (gender == 'male'):
-    df = pd.read_csv('DeathProbsE_M_Alt2_TR2025.csv')
-else:
-    df = pd.read_csv('DeathProbsE_F_Alt2_TR2025.csv')
-death_row = df[df['Year'] == 2025].iloc[0]  # row for 2025
-death_probs = death_row.drop('Year').astype(float).values  # probabilities for ages 0–119
+def run_sim():
+    global n_sim, n_years, stock_mean_return, stock_std_dev, bond_mean_return
+    global bond_std_dev, infl_mean, infl_std, gender, current_age, retire_age
+    global average_yearly_need, roth_current, pretax_current, ss_gross
+    global stock_ratio, bond_ratio, retirement_yearly_need, roth_start
+    global pretax_start, death_probs
 
-# Run simulation
-rate = simulate(retirement_yearly_need) * 100
+    n_sim = int(gen_entries["n_sim"].get())
+    n_years = int(gen_entries["n_years"].get())
+    stock_mean_return = float(gen_entries["stock_mean_return"].get())
+    stock_std_dev = float(gen_entries["stock_std_dev"].get())
+    bond_mean_return = float(gen_entries["bond_mean_return"].get())
+    bond_std_dev = float(gen_entries["bond_std_dev"].get())
+    infl_mean = float(gen_entries["infl_mean"].get())
+    infl_std = float(gen_entries["infl_std"].get())
 
-# Display results
-print(f"\nRetirement age: {retire_age}")
-print(f"{stock_ratio * 100:,.0f}/{bond_ratio * 100:,.0f} allocation success rate with ${retirement_yearly_need:,} net withdrawal: {rate:.1f}%")
-print(f"Gross needed in year 1 to net ${retirement_yearly_need:,}: ${gross_from_net(retirement_yearly_need):,.0f}")
-print(f"Gross needed in year {62 - retire_age} to net ${retirement_yearly_need:,} (with SS): ${gross_from_net_with_ss(retirement_yearly_need, ss_gross):,.0f}")
+    gender = user_entries["gender"].get().strip().lower()
+    current_age = int(user_entries["current_age"].get())
+    retire_age = int(user_entries["retire_age"].get())
+    average_yearly_need = float(user_entries["average_yearly_need"].get())
+    roth_current = float(user_entries["roth_current"].get())
+    pretax_current = float(user_entries["pretax_current"].get())
+    ss_gross = float(user_entries["ss_gross"].get())
+    stock_ratio = float(user_entries["stock_ratio"].get())
+    bond_ratio = 1 - stock_ratio
+
+    retirement_yearly_need = average_yearly_need * (1 + infl_mean) ** (
+        retire_age - current_age
+    )
+    roth_start = roth_current * (1 + stock_mean_return) ** (
+        retire_age - current_age
+    )
+    pretax_start = pretax_current * (1 + stock_mean_return) ** (
+        retire_age - current_age
+    )
+
+    precomp_ret_need_var.set(
+        f"Year 1 net need: ${retirement_yearly_need:,.0f}"
+    )
+    precomp_roth_start_var.set(
+        f"Roth at retirement: ${roth_start:,.0f}"
+    )
+    precomp_pretax_start_var.set(
+        f"Pre-tax at retirement: ${pretax_start:,.0f}"
+    )
+
+    file = (
+        "DeathProbsE_M_Alt2_TR2025.csv"
+        if gender.startswith("m")
+        else "DeathProbsE_F_Alt2_TR2025.csv"
+    )
+    df = pd.read_csv(file)
+    death_row = df[df["Year"] == 2025].iloc[0]
+    death_probs = death_row.drop("Year").astype(float).values
+
+    rate = simulate(retirement_yearly_need) * 100
+
+    results = [
+        f"Success rate: {rate:.1f}%",
+        f"Gross needed in year 1: ${gross_from_net(retirement_yearly_need):,.0f}",
+        f"Gross needed in year {62 - retire_age} (with SS): ${gross_from_net_with_ss(retirement_yearly_need, ss_gross):,.0f}",
+    ]
+    results_var.set("\n".join(results))
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    root.title("Retirement Simulator")
+    root.geometry("360x640")
+
+    gen_entries = {}
+    user_entries = {}
+
+    general_frame = ttk.LabelFrame(root, text="General Parameters")
+    general_frame.pack(fill="x", padx=10, pady=5)
+    for key, default in DEFAULT_GENERAL.items():
+        row = ttk.Frame(general_frame)
+        row.pack(fill="x", pady=2)
+        ttk.Label(row, text=key.replace("_", " ").title()).pack(side="left")
+        ent = ttk.Entry(row)
+        ent.insert(0, str(default))
+        ent.pack(side="right", fill="x", expand=True)
+        gen_entries[key] = ent
+
+    user_frame = ttk.LabelFrame(root, text="User-specific Parameters")
+    user_frame.pack(fill="x", padx=10, pady=5)
+    for key, default in DEFAULT_USER.items():
+        row = ttk.Frame(user_frame)
+        row.pack(fill="x", pady=2)
+        ttk.Label(row, text=key.replace("_", " ").title()).pack(side="left")
+        ent = ttk.Entry(row)
+        ent.insert(0, str(default))
+        ent.pack(side="right", fill="x", expand=True)
+        user_entries[key] = ent
+
+    precomp_frame = ttk.LabelFrame(root, text="Pre-computations")
+    precomp_frame.pack(fill="x", padx=10, pady=5)
+    precomp_ret_need_var = tk.StringVar()
+    precomp_roth_start_var = tk.StringVar()
+    precomp_pretax_start_var = tk.StringVar()
+    ttk.Label(precomp_frame, textvariable=precomp_ret_need_var).pack(anchor="w")
+    ttk.Label(precomp_frame, textvariable=precomp_roth_start_var).pack(anchor="w")
+    ttk.Label(precomp_frame, textvariable=precomp_pretax_start_var).pack(anchor="w")
+
+    run_frame = ttk.Frame(root)
+    run_frame.pack(fill="x", padx=10, pady=5)
+    ttk.Button(run_frame, text="Run Simulation", command=run_sim).pack()
+
+    results_frame = ttk.LabelFrame(root, text="Results")
+    results_frame.pack(fill="both", expand=True, padx=10, pady=5)
+    results_var = tk.StringVar()
+    ttk.Label(results_frame, textvariable=results_var, wraplength=320).pack(anchor="w")
+
+    root.mainloop()
 
