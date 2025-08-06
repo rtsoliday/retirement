@@ -12,6 +12,41 @@ import matplotlib.pyplot as plt
 np.random.seed()
 
 
+class ToolTip:
+    """Simple hover tooltip for a widget."""
+
+    def __init__(self, widget, text: str):
+        self.widget = widget
+        self.text = text
+        self.tipwindow = None
+        widget.bind("<Enter>", self._show)
+        widget.bind("<Leave>", self._hide)
+
+    def _show(self, _event=None):
+        if self.tipwindow or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 10
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            tw,
+            text=self.text,
+            justify=tk.LEFT,
+            background="#ffffe0",
+            relief=tk.SOLID,
+            borderwidth=1,
+            font=("tahoma", "8", "normal"),
+        ).pack(ipadx=1)
+
+    def _hide(self, _event=None):
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw is not None:
+            tw.destroy()
+
+
 def parse_percent(val: str) -> float:
     """Convert a percentage string like '10%' to a float 0.10.
 
@@ -404,6 +439,29 @@ LABEL_OVERRIDES = {
     "social_security_age_started": "Social Security Age Started",
 }
 
+ENTRY_HELP = {
+    "number_of_simulations": "How many Monte Carlo runs to perform.",
+    "pre_retirement_mean_return": "Expected annual return before retirement (percentage).",
+    "pre_retirement_std_dev": "Volatility of pre-retirement returns (percentage).",
+    "stock_mean_return": "Average yearly stock market return (percentage).",
+    "stock_std_dev": "Volatility of stock returns (percentage).",
+    "bond_mean_return": "Average yearly bond return (percentage).",
+    "bond_std_dev": "Volatility of bond returns (percentage).",
+    "inflation_mean": "Expected average annual inflation rate (percentage).",
+    "inflation_std_dev": "Volatility of annual inflation (percentage).",
+    "gender": "Select the retiree's gender for mortality assumptions.",
+    "current_age": "Current age of the retiree.",
+    "retirement_age": "Age at which retirement begins.",
+    "average_yearly_need": "Estimated yearly spending in today's dollars.",
+    "current_roth": "Current balance in Roth accounts.",
+    "current_401a_and_403b": "Current balance in 401a/403b accounts.",
+    "full_social_security_at_67": "Annual Social Security benefit if started at age 67.",
+    "social_security_age_started": "Age when Social Security benefits start.",
+    "mortgage_payment": "Yearly mortgage payment in retirement.",
+    "mortgage_years_left": "Number of years remaining on the mortgage currently.",
+    "percent_in_stock_after_retirement": "Fraction of portfolio in stocks during retirement.",
+}
+
 
 CONFIG_FILE = "config.json"
 
@@ -705,6 +763,7 @@ if __name__ == "__main__":
             ent.insert(0, str(val))
         ent.pack(side="left", fill="x", expand=True)
         gen_entries[key] = ent
+        ToolTip(ent, ENTRY_HELP.get(key, ""))
 
     user_frame = ttk.LabelFrame(root, text="User-specific Parameters")
     user_frame.pack(fill="x", padx=10, pady=5)
@@ -725,6 +784,7 @@ if __name__ == "__main__":
             ttk.Radiobutton(rb_frame, text="M  ", variable=gender_var, value="male").pack(side="left")
             ttk.Radiobutton(rb_frame, text="F", variable=gender_var, value="female").pack(side="left")
             user_entries[key] = gender_var
+            ToolTip(rb_frame, ENTRY_HELP.get(key, ""))
         else:
             ent = ttk.Entry(row)
             if key in PERCENT_FIELDS:
@@ -735,6 +795,7 @@ if __name__ == "__main__":
                 ent.insert(0, str(val))
             ent.pack(side="left", fill="x", expand=True)
             user_entries[key] = ent
+            ToolTip(ent, ENTRY_HELP.get(key, ""))
 
     precomp_frame = ttk.LabelFrame(root, text="Pre-computations")
     precomp_frame.pack(fill="x", padx=10, pady=5)
