@@ -188,9 +188,17 @@ def plot_paths(success_paths, failure_paths):
                         colors.append("lime")
                     else:
                         colors.append("green")
+    # compute mean funds by year across all paths
+    mean_by_year = {}
+    for path in (success_paths or []) + (failure_paths or []):
+        for year_idx, val in enumerate(path):
+            if val > 0:
+                mean_by_year.setdefault(year_idx, []).append(val)
+    mean_x = sorted(mean_by_year.keys())
+    mean_y = [np.mean(mean_by_year[i]) for i in mean_x]
 
     if success_x or fail_x:
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=(6.4, 3.6))
         trans_success = transforms.ScaledTranslation(2 / fig.dpi, 0, fig.dpi_scale_trans)
         trans_failure = transforms.ScaledTranslation(5 / fig.dpi, 0, fig.dpi_scale_trans)
 
@@ -212,6 +220,8 @@ def plot_paths(success_paths, failure_paths):
                 linewidths=1,
                 transform=ax.transData + trans_failure,
             )
+        if mean_x:
+            ax.plot(mean_x, mean_y, color="black", linewidth=1)
 
         all_x = success_x + fail_x
         all_y = success_y + fail_y
