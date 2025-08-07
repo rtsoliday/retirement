@@ -302,8 +302,8 @@ def _load_inputs(percent_override: float | None = None) -> SimulationConfig:
     retirement_age = int(user_entries["retirement_age"].get())
     if current_age < 0 or retirement_age < 0:
         raise ValueError("Ages must be non-negative")
-    if retirement_age <= current_age:
-        raise ValueError("Retirement age must be greater than current age")
+    if retirement_age < current_age:
+        raise ValueError("Retirement age must be greater than or equal to current age")
     if retirement_age >= 119:
         raise ValueError("Retirement age must be less than 119")
     average_yearly_need = parse_dollars(user_entries["average_yearly_need"].get())
