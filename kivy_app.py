@@ -8,6 +8,7 @@ from kivy.factory import Factory
 from kivy.properties import StringProperty
 from kivy.uix.popup import Popup
 from kivy.uix.label import Label
+from kivy.metrics import dp
 
 import numpy as np
 
@@ -285,7 +286,26 @@ class RetirementApp(App):
             )
 
         self.result_text = "\n".join(results)
+        self._last_success_paths = success_paths
+        self._last_failure_paths = failure_paths
+        btn = self.root.ids.get("plot_button")
+        if btn is not None:
+            btn.opacity = 1
+            btn.disabled = False
+            btn.height = dp(40)
         save_config(cfg)
+
+    def show_plot(self) -> None:
+        """Display a plot of the latest simulation paths."""
+        if not (
+            getattr(self, "_last_success_paths", None)
+            or getattr(self, "_last_failure_paths", None)
+        ):
+            self._error("Run simulations first")
+            return
+        from monticarlo import plot_paths
+
+        plot_paths(self._last_success_paths, self._last_failure_paths)
 
     def optimize_percent(self) -> None:
         try:

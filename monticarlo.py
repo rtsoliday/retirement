@@ -54,6 +54,8 @@ class ToolTip:
 
 def plot_paths(success_paths, failure_paths):
     """Plot retirement fund paths for successful and failed simulations."""
+    import matplotlib
+    matplotlib.use("TkAgg")
     import matplotlib.pyplot as plt
     import matplotlib.transforms as transforms
 

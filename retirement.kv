@@ -187,3 +187,12 @@
             height: self.texture_size[1]
             text_size: self.width, None
             valign: 'top'
+
+        Button:
+            id: plot_button
+            text: 'Show Plot'
+            size_hint_y: None
+            height: 0
+            opacity: 0
+            disabled: True
+            on_release: app.show_plot()
