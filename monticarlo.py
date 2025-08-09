@@ -1,6 +1,4 @@
-import numpy as np
-import tkinter as tk
-from tkinter import ttk, messagebox
+from typing import Optional
 
 from core import (
     SimulationConfig,
@@ -17,47 +15,13 @@ from core import (
     rates,
 )
 
-
-class ToolTip:
-    """Simple hover tooltip for a widget."""
-
-    def __init__(self, widget, text: str):
-        self.widget = widget
-        self.text = text
-        self.tipwindow = None
-        widget.bind("<Enter>", self._show)
-        widget.bind("<Leave>", self._hide)
-
-    def _show(self, _event=None):
-        if self.tipwindow or not self.text:
-            return
-        x = self.widget.winfo_rootx() + 20
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 10
-        self.tipwindow = tw = tk.Toplevel(self.widget)
-        tw.wm_overrideredirect(True)
-        tw.wm_geometry(f"+{x}+{y}")
-        tk.Label(
-            tw,
-            text=self.text,
-            justify=tk.LEFT,
-            background="#ffffe0",
-            relief=tk.SOLID,
-            borderwidth=1,
-            font=("tahoma", "8", "normal"),
-        ).pack(ipadx=1)
-
-    def _hide(self, _event=None):
-        tw = self.tipwindow
-        self.tipwindow = None
-        if tw is not None:
-            tw.destroy()
-
 def plot_paths(success_paths, failure_paths):
     """Plot retirement fund paths for successful and failed simulations."""
     import matplotlib
     matplotlib.use("TkAgg")
     import matplotlib.pyplot as plt
     import matplotlib.transforms as transforms
+    import numpy as np
 
     failed_max_by_year = {}
     fail_x, fail_y = [], []
@@ -226,6 +190,7 @@ PERCENT_FIELDS = {
     "inflation_mean",
     "inflation_std_dev",
     "percent_in_stock_after_retirement",
+    "min_percent_in_stock",
 }
 
 DOLLAR_FIELDS = {
@@ -248,6 +213,8 @@ DEFAULT_USER = {
     "mortgage_payment": 0,
     "mortgage_years_left": 0,
     "percent_in_stock_after_retirement": 0.7,
+    "stock_reduction_alpha": 1.0,
+    "min_percent_in_stock": 0.2,
 }
 
 LABEL_OVERRIDES = {
@@ -276,9 +243,11 @@ ENTRY_HELP = {
     "mortgage_payment": "Yearly mortgage payment in retirement.",
     "mortgage_years_left": "Number of years remaining on the mortgage currently.",
     "percent_in_stock_after_retirement": "Fraction of portfolio in stocks during retirement.",
+    "stock_reduction_alpha": "Controls how quickly stock allocation falls as surplus grows.",
+    "min_percent_in_stock": "Minimum portion to keep in stocks regardless of surplus.",
 }
 
-def _load_inputs(percent_override: float | None = None) -> SimulationConfig:
+def _load_inputs(percent_override: Optional[float] = None) -> SimulationConfig:
     """Parse GUI inputs and return a SimulationConfig."""
     import pandas as pd
     number_of_simulations = int(gen_entries["number_of_simulations"].get())
@@ -322,6 +291,8 @@ def _load_inputs(percent_override: float | None = None) -> SimulationConfig:
     )
     mortgage_payment = parse_dollars(user_entries["mortgage_payment"].get())
     mortgage_years_left = int(user_entries["mortgage_years_left"].get())
+    stock_reduction_alpha = float(user_entries["stock_reduction_alpha"].get())
+    min_percent_in_stock = parse_percent(user_entries["min_percent_in_stock"].get())
     if mortgage_years_left < 0:
         raise ValueError("Mortgage years left cannot be negative")
     mortgage_yearly_payment = mortgage_payment * 12
@@ -385,6 +356,8 @@ def _load_inputs(percent_override: float | None = None) -> SimulationConfig:
         mortgage_years_left=mortgage_years_left,
         percent_in_stock_after_retirement=percent_in_stock_after_retirement,
         bond_ratio=bond_ratio,
+        stock_reduction_alpha=stock_reduction_alpha,
+        min_percent_in_stock=min_percent_in_stock,
         years_of_retirement=years_of_retirement,
         base_retirement_need=base_retirement_need,
         retirement_yearly_need=retirement_yearly_need,
@@ -536,6 +509,45 @@ def load_defaults():
 
 
 if __name__ == "__main__":
+    # GUI imports are kept inside the main guard so tests can import this module
+    # without requiring tkinter to be installed in the environment.
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+
+    class ToolTip:
+        """Simple hover tooltip for a widget."""
+
+        def __init__(self, widget, text: str):
+            self.widget = widget
+            self.text = text
+            self.tipwindow = None
+            widget.bind("<Enter>", self._show)
+            widget.bind("<Leave>", self._hide)
+
+        def _show(self, _event=None):
+            if self.tipwindow or not self.text:
+                return
+            x = self.widget.winfo_rootx() + 20
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 10
+            self.tipwindow = tw = tk.Toplevel(self.widget)
+            tw.wm_overrideredirect(True)
+            tw.wm_geometry(f"+{x}+{y}")
+            tk.Label(
+                tw,
+                text=self.text,
+                justify=tk.LEFT,
+                background="#ffffe0",
+                relief=tk.SOLID,
+                borderwidth=1,
+                font=("tahoma", "8", "normal"),
+            ).pack(ipadx=1)
+
+        def _hide(self, _event=None):
+            tw = self.tipwindow
+            self.tipwindow = None
+            if tw is not None:
+                tw.destroy()
+
     root = tk.Tk()
     root.title("Retirement Simulator")
     root.geometry("360x840")

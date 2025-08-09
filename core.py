@@ -81,6 +81,8 @@ class SimulationConfig:
     mortgage_years_left: int
     percent_in_stock_after_retirement: float
     bond_ratio: float
+    stock_reduction_alpha: float
+    min_percent_in_stock: float
     years_of_retirement: int
     base_retirement_need: float
     retirement_yearly_need: float
@@ -204,7 +206,22 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
                     success_paths.append(path)
                 break
 
-            port_ret = cfg.percent_in_stock_after_retirement * sr + cfg.bond_ratio * br
+            remaining_years = cfg.years_of_retirement - year_idx + 1
+            total_need = w * remaining_years
+            if total_need > 0:
+                ratio = (r_bal + p_bal) / total_need
+            else:  # avoid division by zero
+                ratio = float("inf")
+            if ratio <= 1:
+                stock_pct = cfg.percent_in_stock_after_retirement
+            else:
+                stock_pct = max(
+                    cfg.min_percent_in_stock,
+                    cfg.percent_in_stock_after_retirement
+                    / (1 + cfg.stock_reduction_alpha * (ratio - 1)),
+                )
+            bond_pct = 1 - stock_pct
+            port_ret = stock_pct * sr + bond_pct * br
 
             r_bal *= (1 + port_ret)
             p_bal *= (1 + port_ret)
@@ -284,6 +301,8 @@ def save_config(cfg: SimulationConfig) -> None:
             "mortgage_payment": cfg.mortgage_payment,
             "mortgage_years_left": cfg.mortgage_years_left,
             "percent_in_stock_after_retirement": cfg.percent_in_stock_after_retirement,
+            "stock_reduction_alpha": cfg.stock_reduction_alpha,
+            "min_percent_in_stock": cfg.min_percent_in_stock,
         },
     }
     with open(CONFIG_FILE, "w") as f:
