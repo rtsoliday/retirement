@@ -168,6 +168,7 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
     success = 0
     success_paths = [] if collect_paths else None
     failure_paths = [] if collect_paths else None
+    stock_pct_paths = [] if collect_paths else None
 
     for _ in range(cfg.number_of_simulations):
         years_to_retirement = cfg.retirement_age - cfg.current_age
@@ -196,6 +197,7 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
         )
 
         path = [r_bal + p_bal] if collect_paths else None
+        stock_pct_path = [] if collect_paths else None
 
         for year_idx, (sr, br, i) in enumerate(
             zip(stock_returns, bond_returns, infls), start=1
@@ -204,6 +206,7 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
                 success += 1
                 if collect_paths:
                     success_paths.append(path)
+                    stock_pct_paths.append(stock_pct_path)
                 break
 
             remaining_years = cfg.years_of_retirement - year_idx + 1
@@ -221,6 +224,8 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
                     / (1 + cfg.stock_reduction_alpha * (ratio - 1)),
                 )
             bond_pct = 1 - stock_pct
+            if collect_paths:
+                stock_pct_path.append(stock_pct * 100)
             port_ret = stock_pct * sr + bond_pct * br
 
             r_bal *= (1 + port_ret)
@@ -254,14 +259,21 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
             if r_bal < 0 or p_bal < 0:
                 if collect_paths:
                     failure_paths.append(path)
+                    stock_pct_paths.append(stock_pct_path)
                 break
         else:
             success += 1
             if collect_paths:
                 success_paths.append(path)
+                stock_pct_paths.append(stock_pct_path)
 
     if collect_paths:
-        return success / cfg.number_of_simulations, success_paths, failure_paths
+        return (
+            success / cfg.number_of_simulations,
+            success_paths,
+            failure_paths,
+            stock_pct_paths,
+        )
     return success / cfg.number_of_simulations
 
 

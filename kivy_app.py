@@ -253,7 +253,7 @@ class RetirementApp(App):
             self._error(str(exc))
             return
 
-        rate, success_paths, failure_paths = simulate(cfg, collect_paths=True)
+        rate, success_paths, failure_paths, pct_paths = simulate(cfg, collect_paths=True)
         rate *= 100
 
         start_success = [p[0] for p in success_paths]
@@ -296,6 +296,7 @@ class RetirementApp(App):
         self.result_text = "\n".join(results)
         self._last_success_paths = success_paths
         self._last_failure_paths = failure_paths
+        self._last_pct_paths = pct_paths
         btn = self.root.ids.get("plot_button")
         if btn is not None:
             btn.opacity = 1
@@ -311,9 +312,12 @@ class RetirementApp(App):
         ):
             self._error("Run simulations first")
             return
-        from monticarlo import plot_paths
+        from monticarlo import plot_paths, plot_percent_in_stock
 
         plot_paths(self._last_success_paths, self._last_failure_paths)
+        checkbox = self.root.ids.get("pct_checkbox")
+        if checkbox and checkbox.active:
+            plot_percent_in_stock(self._last_pct_paths)
 
     def optimize_percent(self) -> None:
         try:

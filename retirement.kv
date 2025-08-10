@@ -200,6 +200,18 @@
             text_size: self.width, None
             valign: 'top'
 
+        BoxLayout:
+            size_hint_y: None
+            height: '30dp'
+            CheckBox:
+                id: pct_checkbox
+                active: False
+            Label:
+                text: 'Percent in stock plot'
+                halign: 'left'
+                valign: 'middle'
+                text_size: self.size
+
         Button:
             id: plot_button
             text: 'Show Plot'

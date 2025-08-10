@@ -167,6 +167,29 @@ def plot_paths(success_paths, failure_paths):
 
         plt.show()
 
+
+def plot_percent_in_stock(stock_pct_paths):
+    """Plot percentage of the portfolio in stocks for each simulation."""
+    import matplotlib
+    matplotlib.use("TkAgg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    xs, ys = [], []
+    for path in stock_pct_paths or []:
+        for year_idx, val in enumerate(path):
+            if np.isfinite(val):
+                xs.append(year_idx)
+                ys.append(val)
+
+    if xs:
+        plt.figure(figsize=(8, 4))
+        plt.scatter(xs, ys, s=1)
+        plt.xlabel("Years in retirement")
+        plt.ylabel("Percent in stock")
+        plt.title("Percent in stock by year")
+        plt.show()
+
 # Default parameter values
 DEFAULT_GENERAL = {
     "number_of_simulations": 2_000,
@@ -200,6 +223,9 @@ DOLLAR_FIELDS = {
     "full_social_security_at_67",
     "mortgage_payment",
 }
+
+# Optional tkinter variable controlling percent plotting; assigned in main GUI block.
+plot_pct_var = None
 
 DEFAULT_USER = {
     "gender": "male",
@@ -370,6 +396,7 @@ def _load_inputs(percent_override: Optional[float] = None) -> SimulationConfig:
 
 def run_sim():
     """Run a single simulation using the current GUI inputs."""
+    global plot_pct_var
     try:
         cfg = _load_inputs(
             parse_percent(user_entries["percent_in_stock_after_retirement"].get())
@@ -378,7 +405,7 @@ def run_sim():
         messagebox.showerror("Input error", str(exc))
         return
 
-    rate, success_paths, failure_paths = simulate(cfg, collect_paths=True)
+    rate, success_paths, failure_paths, stock_pct_paths = simulate(cfg, collect_paths=True)
     rate *= 100
 
     start_success = [p[0] for p in success_paths]
@@ -420,6 +447,8 @@ def run_sim():
     results_var.set("\n".join(results))
     save_config(cfg)
     plot_paths(success_paths, failure_paths)
+    if plot_pct_var and plot_pct_var.get():
+        plot_percent_in_stock(stock_pct_paths)
 
 
 def optimize_percent():
@@ -631,6 +660,12 @@ if __name__ == "__main__":
     ttk.Button(run_frame, text="Run Simulations", command=run_sim).pack()
     ttk.Button(run_frame, text="Optimize % In Stocks", command=optimize_percent).pack()
     ttk.Button(run_frame, text="Load Defaults", command=load_defaults).pack()
+    plot_pct_var = tk.IntVar(value=0)
+    ttk.Checkbutton(
+        run_frame,
+        text="Percent in stock plot",
+        variable=plot_pct_var,
+    ).pack()
 
     results_frame = ttk.LabelFrame(root, text="Results")
     results_frame.pack(fill="both", expand=True, padx=10, pady=5)
