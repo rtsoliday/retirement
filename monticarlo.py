@@ -1,4 +1,6 @@
-from typing import Optional
+import numpy as np
+import tkinter as tk
+from tkinter import ttk, messagebox
 
 from core import (
     SimulationConfig,
@@ -15,13 +17,47 @@ from core import (
     rates,
 )
 
+
+class ToolTip:
+    """Simple hover tooltip for a widget."""
+
+    def __init__(self, widget, text: str):
+        self.widget = widget
+        self.text = text
+        self.tipwindow = None
+        widget.bind("<Enter>", self._show)
+        widget.bind("<Leave>", self._hide)
+
+    def _show(self, _event=None):
+        if self.tipwindow or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 10
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            tw,
+            text=self.text,
+            justify=tk.LEFT,
+            background="#ffffe0",
+            relief=tk.SOLID,
+            borderwidth=1,
+            font=("tahoma", "8", "normal"),
+        ).pack(ipadx=1)
+
+    def _hide(self, _event=None):
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw is not None:
+            tw.destroy()
+
 def plot_paths(success_paths, failure_paths):
     """Plot retirement fund paths for successful and failed simulations."""
     import matplotlib
     matplotlib.use("TkAgg")
     import matplotlib.pyplot as plt
     import matplotlib.transforms as transforms
-    import numpy as np
 
     failed_max_by_year = {}
     fail_x, fail_y = [], []
@@ -167,29 +203,6 @@ def plot_paths(success_paths, failure_paths):
 
         plt.show()
 
-
-def plot_percent_in_stock(stock_pct_paths):
-    """Plot percentage of the portfolio in stocks for each simulation."""
-    import matplotlib
-    matplotlib.use("TkAgg")
-    import matplotlib.pyplot as plt
-    import numpy as np
-
-    xs, ys = [], []
-    for path in stock_pct_paths or []:
-        for year_idx, val in enumerate(path):
-            if np.isfinite(val):
-                xs.append(year_idx)
-                ys.append(val)
-
-    if xs:
-        plt.figure(figsize=(8, 4))
-        plt.scatter(xs, ys, s=1)
-        plt.xlabel("Years in retirement")
-        plt.ylabel("Percent in stock")
-        plt.title("Percent in stock by year")
-        plt.show()
-
 # Default parameter values
 DEFAULT_GENERAL = {
     "number_of_simulations": 2_000,
@@ -213,7 +226,6 @@ PERCENT_FIELDS = {
     "inflation_mean",
     "inflation_std_dev",
     "percent_in_stock_after_retirement",
-    "min_percent_in_stock",
 }
 
 DOLLAR_FIELDS = {
@@ -223,9 +235,6 @@ DOLLAR_FIELDS = {
     "full_social_security_at_67",
     "mortgage_payment",
 }
-
-# Optional tkinter variable controlling percent plotting; assigned in main GUI block.
-plot_pct_var = None
 
 DEFAULT_USER = {
     "gender": "male",
@@ -239,8 +248,6 @@ DEFAULT_USER = {
     "mortgage_payment": 0,
     "mortgage_years_left": 0,
     "percent_in_stock_after_retirement": 0.7,
-    "stock_reduction_alpha": 1.0,
-    "min_percent_in_stock": 0.2,
 }
 
 LABEL_OVERRIDES = {
@@ -269,11 +276,9 @@ ENTRY_HELP = {
     "mortgage_payment": "Yearly mortgage payment in retirement.",
     "mortgage_years_left": "Number of years remaining on the mortgage currently.",
     "percent_in_stock_after_retirement": "Fraction of portfolio in stocks during retirement.",
-    "stock_reduction_alpha": "Controls how quickly stock allocation falls as surplus grows.",
-    "min_percent_in_stock": "Minimum portion to keep in stocks regardless of surplus.",
 }
 
-def _load_inputs(percent_override: Optional[float] = None) -> SimulationConfig:
+def _load_inputs(percent_override: float | None = None) -> SimulationConfig:
     """Parse GUI inputs and return a SimulationConfig."""
     import pandas as pd
     number_of_simulations = int(gen_entries["number_of_simulations"].get())
@@ -317,8 +322,6 @@ def _load_inputs(percent_override: Optional[float] = None) -> SimulationConfig:
     )
     mortgage_payment = parse_dollars(user_entries["mortgage_payment"].get())
     mortgage_years_left = int(user_entries["mortgage_years_left"].get())
-    stock_reduction_alpha = float(user_entries["stock_reduction_alpha"].get())
-    min_percent_in_stock = parse_percent(user_entries["min_percent_in_stock"].get())
     if mortgage_years_left < 0:
         raise ValueError("Mortgage years left cannot be negative")
     mortgage_yearly_payment = mortgage_payment * 12
@@ -382,8 +385,6 @@ def _load_inputs(percent_override: Optional[float] = None) -> SimulationConfig:
         mortgage_years_left=mortgage_years_left,
         percent_in_stock_after_retirement=percent_in_stock_after_retirement,
         bond_ratio=bond_ratio,
-        stock_reduction_alpha=stock_reduction_alpha,
-        min_percent_in_stock=min_percent_in_stock,
         years_of_retirement=years_of_retirement,
         base_retirement_need=base_retirement_need,
         retirement_yearly_need=retirement_yearly_need,
@@ -396,7 +397,6 @@ def _load_inputs(percent_override: Optional[float] = None) -> SimulationConfig:
 
 def run_sim():
     """Run a single simulation using the current GUI inputs."""
-    global plot_pct_var
     try:
         cfg = _load_inputs(
             parse_percent(user_entries["percent_in_stock_after_retirement"].get())
@@ -405,7 +405,7 @@ def run_sim():
         messagebox.showerror("Input error", str(exc))
         return
 
-    rate, success_paths, failure_paths, stock_pct_paths = simulate(cfg, collect_paths=True)
+    rate, success_paths, failure_paths = simulate(cfg, collect_paths=True)
     rate *= 100
 
     start_success = [p[0] for p in success_paths]
@@ -447,8 +447,6 @@ def run_sim():
     results_var.set("\n".join(results))
     save_config(cfg)
     plot_paths(success_paths, failure_paths)
-    if plot_pct_var and plot_pct_var.get():
-        plot_percent_in_stock(stock_pct_paths)
 
 
 def optimize_percent():
@@ -538,45 +536,6 @@ def load_defaults():
 
 
 if __name__ == "__main__":
-    # GUI imports are kept inside the main guard so tests can import this module
-    # without requiring tkinter to be installed in the environment.
-    import tkinter as tk
-    from tkinter import ttk, messagebox
-
-    class ToolTip:
-        """Simple hover tooltip for a widget."""
-
-        def __init__(self, widget, text: str):
-            self.widget = widget
-            self.text = text
-            self.tipwindow = None
-            widget.bind("<Enter>", self._show)
-            widget.bind("<Leave>", self._hide)
-
-        def _show(self, _event=None):
-            if self.tipwindow or not self.text:
-                return
-            x = self.widget.winfo_rootx() + 20
-            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 10
-            self.tipwindow = tw = tk.Toplevel(self.widget)
-            tw.wm_overrideredirect(True)
-            tw.wm_geometry(f"+{x}+{y}")
-            tk.Label(
-                tw,
-                text=self.text,
-                justify=tk.LEFT,
-                background="#ffffe0",
-                relief=tk.SOLID,
-                borderwidth=1,
-                font=("tahoma", "8", "normal"),
-            ).pack(ipadx=1)
-
-        def _hide(self, _event=None):
-            tw = self.tipwindow
-            self.tipwindow = None
-            if tw is not None:
-                tw.destroy()
-
     root = tk.Tk()
     root.title("Retirement Simulator")
     root.geometry("360x840")
@@ -660,12 +619,6 @@ if __name__ == "__main__":
     ttk.Button(run_frame, text="Run Simulations", command=run_sim).pack()
     ttk.Button(run_frame, text="Optimize % In Stocks", command=optimize_percent).pack()
     ttk.Button(run_frame, text="Load Defaults", command=load_defaults).pack()
-    plot_pct_var = tk.IntVar(value=0)
-    ttk.Checkbutton(
-        run_frame,
-        text="Percent in stock plot",
-        variable=plot_pct_var,
-    ).pack()
 
     results_frame = ttk.LabelFrame(root, text="Results")
     results_frame.pack(fill="both", expand=True, padx=10, pady=5)
@@ -673,4 +626,3 @@ if __name__ == "__main__":
     ttk.Label(results_frame, textvariable=results_var, wraplength=320).pack(anchor="w")
 
     root.mainloop()
-

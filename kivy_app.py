@@ -50,8 +50,6 @@ DEFAULT_USER = {
     "mortgage_payment": 0,
     "mortgage_years_left": 0,
     "percent_in_stock_after_retirement": 0.7,
-    "stock_reduction_alpha": 1.0,
-    "min_percent_in_stock": 0.2,
 }
 
 PERCENT_FIELDS = {
@@ -64,7 +62,6 @@ PERCENT_FIELDS = {
     "inflation_mean",
     "inflation_std_dev",
     "percent_in_stock_after_retirement",
-    "min_percent_in_stock",
 }
 
 DOLLAR_FIELDS = {
@@ -170,9 +167,6 @@ class RetirementApp(App):
         mortgage_years_left = int(ids.mortgage_years_left.text)
         mortgage_yearly_payment = mortgage_payment * 12
 
-        stock_reduction_alpha = float(ids.stock_reduction_alpha.text)
-        min_percent_in_stock = parse_percent(ids.min_percent_in_stock.text)
-
         years_of_retirement = 119 - retirement_age
         years_to_retirement = retirement_age - current_age
         base_retirement_need = average_yearly_need * (1 + inflation_mean) ** years_to_retirement
@@ -232,8 +226,6 @@ class RetirementApp(App):
             mortgage_years_left=mortgage_years_left,
             percent_in_stock_after_retirement=percent_in_stock_after_retirement,
             bond_ratio=bond_ratio,
-            stock_reduction_alpha=stock_reduction_alpha,
-            min_percent_in_stock=min_percent_in_stock,
             years_of_retirement=years_of_retirement,
             base_retirement_need=base_retirement_need,
             retirement_yearly_need=retirement_yearly_need,
@@ -253,7 +245,7 @@ class RetirementApp(App):
             self._error(str(exc))
             return
 
-        rate, success_paths, failure_paths, pct_paths = simulate(cfg, collect_paths=True)
+        rate, success_paths, failure_paths = simulate(cfg, collect_paths=True)
         rate *= 100
 
         start_success = [p[0] for p in success_paths]
@@ -296,7 +288,6 @@ class RetirementApp(App):
         self.result_text = "\n".join(results)
         self._last_success_paths = success_paths
         self._last_failure_paths = failure_paths
-        self._last_pct_paths = pct_paths
         btn = self.root.ids.get("plot_button")
         if btn is not None:
             btn.opacity = 1
@@ -312,12 +303,9 @@ class RetirementApp(App):
         ):
             self._error("Run simulations first")
             return
-        from monticarlo import plot_paths, plot_percent_in_stock
+        from monticarlo import plot_paths
 
         plot_paths(self._last_success_paths, self._last_failure_paths)
-        checkbox = self.root.ids.get("pct_checkbox")
-        if checkbox and checkbox.active:
-            plot_percent_in_stock(self._last_pct_paths)
 
     def optimize_percent(self) -> None:
         try:

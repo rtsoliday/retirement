@@ -146,23 +146,11 @@
                 id: mortgage_years_left
                 text: '0'
                 multiline: False
-            Label:
+            Label: 
                 text: '% in stock after retirement'
             TextInput:
                 id: percent_in_stock_after_retirement
                 text: '70%'
-                multiline: False
-            Label:
-                text: 'Stock reduction alpha'
-            TextInput:
-                id: stock_reduction_alpha
-                text: '1.0'
-                multiline: False
-            Label:
-                text: 'Min % in stock'
-            TextInput:
-                id: min_percent_in_stock
-                text: '20%'
                 multiline: False
 
         Label:
@@ -199,18 +187,6 @@
             height: self.texture_size[1]
             text_size: self.width, None
             valign: 'top'
-
-        BoxLayout:
-            size_hint_y: None
-            height: '30dp'
-            CheckBox:
-                id: pct_checkbox
-                active: False
-            Label:
-                text: 'Percent in stock plot'
-                halign: 'left'
-                valign: 'middle'
-                text_size: self.size
 
         Button:
             id: plot_button
