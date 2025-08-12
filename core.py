@@ -204,7 +204,22 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
                     success_paths.append(path)
                 break
 
-            port_ret = cfg.percent_in_stock_after_retirement * sr + cfg.bond_ratio * br
+            #port_ret = cfg.percent_in_stock_after_retirement * sr + cfg.bond_ratio * br
+            ratio = (r_bal + p_bal) / w
+            if ratio < 30:
+                stock_pct = 1.0
+            elif ratio < 35:
+                stock_pct = 0.9
+            elif ratio < 40:
+                stock_pct = 0.8
+            elif ratio < 45:
+                stock_pct = 0.7
+            elif ratio < 50:
+                stock_pct = 0.6
+            else:
+                stock_pct = 0.5
+
+            port_ret = stock_pct * sr + (1 - stock_pct) * br
 
             r_bal *= (1 + port_ret)
             p_bal *= (1 + port_ret)
