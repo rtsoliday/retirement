@@ -249,6 +249,8 @@ DEFAULT_USER = {
 }
 
 LABEL_OVERRIDES = {
+    "current_roth": "Current Balance Not Taxed at Withdrawal",
+    "current_401a_and_403b": "Current Balance Taxed at Withdrawal",
     "full_social_security_at_67": "Full Social Security at 67",
     "social_security_age_started": "Social Security Age Started",
 }
@@ -267,8 +269,8 @@ ENTRY_HELP = {
     "current_age": "Current age of the retiree.",
     "retirement_age": "Age at which retirement begins.",
     "average_yearly_need": "Estimated yearly spending in today's dollars.",
-    "current_roth": "Current balance in Roth accounts.",
-    "current_401a_and_403b": "Current balance in 401a/403b accounts.",
+    "current_roth": "Current balance in accounts not taxed at withdrawal.",
+    "current_401a_and_403b": "Current balance in accounts taxed at withdrawal.",
     "full_social_security_at_67": "Annual Social Security benefit if started at age 67.",
     "social_security_age_started": "Age when Social Security benefits start.",
     "mortgage_payment": "Yearly mortgage payment in retirement.",
@@ -460,7 +462,7 @@ def load_defaults():
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Retirement Simulator")
-    root.geometry("360x840")
+    root.geometry("460x840")
 
     gen_entries = {}
     user_entries = {}
