@@ -298,7 +298,6 @@ def save_config(cfg: SimulationConfig) -> None:
             "social_security_age_started": cfg.social_security_age_started,
             "mortgage_payment": cfg.mortgage_payment,
             "mortgage_years_left": cfg.mortgage_years_left,
-            "percent_in_stock_after_retirement": cfg.percent_in_stock_after_retirement,
         },
     }
     with open(CONFIG_FILE, "w") as f:

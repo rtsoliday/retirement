@@ -225,7 +225,6 @@ PERCENT_FIELDS = {
     "bond_std_dev",
     "inflation_mean",
     "inflation_std_dev",
-    "percent_in_stock_after_retirement",
 }
 
 DOLLAR_FIELDS = {
@@ -247,7 +246,6 @@ DEFAULT_USER = {
     "social_security_age_started": 62,
     "mortgage_payment": 0,
     "mortgage_years_left": 0,
-    "percent_in_stock_after_retirement": 0.7,
 }
 
 LABEL_OVERRIDES = {
@@ -275,10 +273,9 @@ ENTRY_HELP = {
     "social_security_age_started": "Age when Social Security benefits start.",
     "mortgage_payment": "Yearly mortgage payment in retirement.",
     "mortgage_years_left": "Number of years remaining on the mortgage currently.",
-    "percent_in_stock_after_retirement": "Fraction of portfolio in stocks during retirement.",
 }
 
-def _load_inputs(percent_override: float | None = None) -> SimulationConfig:
+def _load_inputs() -> SimulationConfig:
     """Parse GUI inputs and return a SimulationConfig."""
     import pandas as pd
     number_of_simulations = int(gen_entries["number_of_simulations"].get())
@@ -350,17 +347,8 @@ def _load_inputs(percent_override: float | None = None) -> SimulationConfig:
     death_row = df[df["Year"] == 2025].iloc[0]
     death_probs = death_row.drop("Year").astype(float).values
 
-    if percent_override is None:
-        percent_in_stock_after_retirement = parse_percent(
-            user_entries["percent_in_stock_after_retirement"].get()
-        )
-    else:
-        if not 0 <= percent_override <= 1:
-            raise ValueError(
-                "Percent in stock after retirement must be between 0 and 100"
-            )
-        percent_in_stock_after_retirement = percent_override
-    bond_ratio = 1 - percent_in_stock_after_retirement
+    percent_in_stock_after_retirement = 1.0
+    bond_ratio = 0.0
 
     cfg = SimulationConfig(
         number_of_simulations=number_of_simulations,
@@ -398,9 +386,7 @@ def _load_inputs(percent_override: float | None = None) -> SimulationConfig:
 def run_sim():
     """Run a single simulation using the current GUI inputs."""
     try:
-        cfg = _load_inputs(
-            parse_percent(user_entries["percent_in_stock_after_retirement"].get())
-        )
+        cfg = _load_inputs()
     except ValueError as exc:
         messagebox.showerror("Input error", str(exc))
         return
@@ -447,70 +433,6 @@ def run_sim():
     results_var.set("\n".join(results))
     save_config(cfg)
     plot_paths(success_paths, failure_paths)
-
-
-def optimize_percent():
-    """Search for the stock percentage that maximizes success rate."""
-    try:
-        cfg = _load_inputs(1.0)
-    except ValueError as exc:
-        messagebox.showerror("Input error", str(exc))
-        return
-
-    best_percent = 1.0
-    cfg.percent_in_stock_after_retirement = 1.0
-    cfg.bond_ratio = 0.0
-    best_rate = simulate(cfg) * 100
-    prev_rate = best_rate
-    percent = 0.9
-
-    while percent >= 0:
-        cfg.percent_in_stock_after_retirement = percent
-        cfg.bond_ratio = 1 - percent
-        rate = simulate(cfg) * 100
-        if rate < prev_rate:
-            break
-        if rate >= best_rate:
-            best_rate = rate
-            best_percent = percent
-        prev_rate = rate
-        percent -= 0.10
-
-    percent = best_percent - 0.05
-    prev_rate = best_rate
-    while percent >= 0:
-        cfg.percent_in_stock_after_retirement = percent
-        cfg.bond_ratio = 1 - percent
-        rate = simulate(cfg) * 100
-        if rate < prev_rate:
-            break
-        if rate >= best_rate:
-            best_rate = rate
-            best_percent = percent
-        prev_rate = rate
-        percent -= 0.05
-
-    user_entries["percent_in_stock_after_retirement"].delete(0, tk.END)
-    user_entries["percent_in_stock_after_retirement"].insert(0, f"{best_percent*100:.2f}%")
-
-    if cfg.retirement_age < cfg.social_security_age_started:
-        years_until_ss = cfg.social_security_age_started - cfg.retirement_age
-        need_at_ss = cfg.base_retirement_need * (1 + cfg.inflation_mean) ** years_until_ss
-        if cfg.mortgage_years_in_retirement > years_until_ss:
-            need_at_ss += cfg.mortgage_yearly_payment
-        results = [
-            f"Best percent in stock: {best_percent*100:.1f}%",
-            f"Success rate: {best_rate:.1f}%",
-            f"Gross needed in year 1: ${gross_from_net(cfg.retirement_yearly_need, cfg):,.0f}",
-            f"Gross needed in year {years_until_ss} (with SS): ${gross_from_net_with_ss(need_at_ss, cfg.social_security_yearly_amount, cfg):,.0f}",
-        ]
-    else:
-        results = [
-            f"Best percent in stock: {best_percent*100:.1f}%",
-            f"Success rate: {best_rate:.1f}%",
-            f"Gross needed in year 1 (with SS): ${gross_from_net_with_ss(cfg.retirement_yearly_need, cfg.social_security_yearly_amount, cfg):,.0f}",
-        ]
-    results_var.set("\n".join(results))
 
 
 def load_defaults():
@@ -617,7 +539,6 @@ if __name__ == "__main__":
     run_frame = ttk.Frame(root)
     run_frame.pack(fill="x", padx=10, pady=5)
     ttk.Button(run_frame, text="Run Simulations", command=run_sim).pack()
-    ttk.Button(run_frame, text="Optimize % In Stocks", command=optimize_percent).pack()
     ttk.Button(run_frame, text="Load Defaults", command=load_defaults).pack()
 
     results_frame = ttk.LabelFrame(root, text="Results")

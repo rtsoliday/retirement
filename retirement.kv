@@ -146,12 +146,6 @@
                 id: mortgage_years_left
                 text: '0'
                 multiline: False
-            Label: 
-                text: '% in stock after retirement'
-            TextInput:
-                id: percent_in_stock_after_retirement
-                text: '70%'
-                multiline: False
 
         Label:
             text: 'Pre-computations'
@@ -169,9 +163,6 @@
             Button:
                 text: 'Run Simulations'
                 on_release: app.run_simulation()
-            Button:
-                text: 'Optimize % In Stocks'
-                on_release: app.optimize_percent()
             Button:
                 text: 'Load Defaults'
                 on_release: app.load_defaults()

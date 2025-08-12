@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-from typing import Optional
 
 from kivy.app import App
 from kivy.factory import Factory
@@ -49,7 +48,6 @@ DEFAULT_USER = {
     "social_security_age_started": 62,
     "mortgage_payment": 0,
     "mortgage_years_left": 0,
-    "percent_in_stock_after_retirement": 0.7,
 }
 
 PERCENT_FIELDS = {
@@ -61,7 +59,6 @@ PERCENT_FIELDS = {
     "bond_std_dev",
     "inflation_mean",
     "inflation_std_dev",
-    "percent_in_stock_after_retirement",
 }
 
 DOLLAR_FIELDS = {
@@ -136,7 +133,7 @@ class RetirementApp(App):
     def _error(self, msg: str) -> None:
         Popup(title="Error", content=Label(text=msg), size_hint=(0.75, 0.5)).open()
 
-    def _load_inputs(self, percent_override: Optional[float] = None) -> SimulationConfig:
+    def _load_inputs(self) -> SimulationConfig:
         """Gather UI inputs and build a SimulationConfig."""
 
         ids = self.root.ids
@@ -193,15 +190,8 @@ class RetirementApp(App):
         if death_probs is None:
             raise ValueError("Death probabilities not found")
 
-        if percent_override is None:
-            percent_in_stock_after_retirement = parse_percent(
-                ids.percent_in_stock_after_retirement.text
-            )
-        else:
-            if not 0 <= percent_override <= 1:
-                raise ValueError("Percent in stock must be between 0 and 100")
-            percent_in_stock_after_retirement = percent_override
-        bond_ratio = 1 - percent_in_stock_after_retirement
+        percent_in_stock_after_retirement = 1.0
+        bond_ratio = 0.0
 
         cfg = SimulationConfig(
             number_of_simulations=number_of_simulations,
@@ -306,66 +296,6 @@ class RetirementApp(App):
         from monticarlo import plot_paths
 
         plot_paths(self._last_success_paths, self._last_failure_paths)
-
-    def optimize_percent(self) -> None:
-        try:
-            cfg = self._load_inputs(1.0)
-        except Exception as exc:  # pragma: no cover - UI only
-            self._error(str(exc))
-            return
-
-        best_percent = 1.0
-        cfg.percent_in_stock_after_retirement = 1.0
-        cfg.bond_ratio = 0.0
-        best_rate = simulate(cfg) * 100
-        prev_rate = best_rate
-        percent = 0.9
-        while percent >= 0:
-            cfg.percent_in_stock_after_retirement = percent
-            cfg.bond_ratio = 1 - percent
-            rate = simulate(cfg) * 100
-            if rate < prev_rate:
-                break
-            if rate >= best_rate:
-                best_rate = rate
-                best_percent = percent
-            prev_rate = rate
-            percent -= 0.10
-
-        percent = best_percent - 0.05
-        prev_rate = best_rate
-        while percent >= 0:
-            cfg.percent_in_stock_after_retirement = percent
-            cfg.bond_ratio = 1 - percent
-            rate = simulate(cfg) * 100
-            if rate < prev_rate:
-                break
-            if rate >= best_rate:
-                best_rate = rate
-                best_percent = percent
-            prev_rate = rate
-            percent -= 0.05
-
-        self.root.ids.percent_in_stock_after_retirement.text = f"{best_percent*100:.2f}%"
-
-        if cfg.retirement_age < cfg.social_security_age_started:
-            years_until_ss = cfg.social_security_age_started - cfg.retirement_age
-            need_at_ss = cfg.base_retirement_need * (1 + cfg.inflation_mean) ** years_until_ss
-            if cfg.mortgage_years_in_retirement > years_until_ss:
-                need_at_ss += cfg.mortgage_yearly_payment
-            results = [
-                f"Best percent in stock: {best_percent*100:.1f}%",
-                f"Success rate: {best_rate:.1f}%",
-                f"Gross needed in year 1: ${gross_from_net(cfg.retirement_yearly_need, cfg):,.0f}",
-                f"Gross needed in year {years_until_ss} (with SS): ${gross_from_net_with_ss(need_at_ss, cfg.social_security_yearly_amount, cfg):,.0f}",
-            ]
-        else:
-            results = [
-                f"Best percent in stock: {best_percent*100:.1f}%",
-                f"Success rate: {best_rate:.1f}%",
-                f"Gross needed in year 1 (with SS): ${gross_from_net_with_ss(cfg.retirement_yearly_need, cfg.social_security_yearly_amount, cfg):,.0f}",
-            ]
-        self.result_text = "\n".join(results)
 
 
 if __name__ == "__main__":  # pragma: no cover - manual run only
