@@ -13,9 +13,23 @@ import numpy as np
 np.random.seed()
 
 
-# IRS 2024 single-filer brackets and marginal rates
-brackets = [0, 11_600, 47_150, 100_525, 191_950, 243_725, 609_350]
-rates = [0.10, 0.12, 0.22, 0.24, 0.32, 0.35, 0.37]
+# IRS 2024 tax brackets and marginal rates by filing status
+# Values sourced from IRS tables for the 2024 tax year.  Each status maps to
+# the bracket thresholds that apply to taxable income for that filer type.
+TAX_BRACKETS = {
+    "single": [0, 11_600, 47_150, 100_525, 191_950, 243_725, 609_350],
+    "married": [0, 23_200, 94_300, 201_050, 383_900, 487_450, 731_200],
+    "head_of_household": [0, 16_550, 63_100, 100_500, 191_950, 243_700, 609_350],
+}
+
+TAX_RATES = {
+    status: [0.10, 0.12, 0.22, 0.24, 0.32, 0.35, 0.37]
+    for status in TAX_BRACKETS
+}
+
+# Provide module-level single-filer defaults for backwards compatibility
+brackets = TAX_BRACKETS["single"]
+rates = TAX_RATES["single"]
 
 
 CONFIG_FILE = "config.json"
@@ -86,9 +100,17 @@ class SimulationConfig:
     retirement_yearly_need: float
     mortgage_years_in_retirement: int
     mortgage_yearly_payment: float
-    tax_brackets: list[float] = field(default_factory=lambda: brackets.copy())
-    tax_rates: list[float] = field(default_factory=lambda: rates.copy())
+    filing_status: str = "single"
+    tax_brackets: list[float] = field(default_factory=list)
+    tax_rates: list[float] = field(default_factory=list)
     death_probs: np.ndarray = field(default_factory=lambda: np.array([]))
+
+    def __post_init__(self) -> None:
+        if not self.tax_brackets or not self.tax_rates:
+            if self.filing_status not in TAX_BRACKETS:
+                raise ValueError(f"Unknown filing status: {self.filing_status}")
+            self.tax_brackets = TAX_BRACKETS[self.filing_status].copy()
+            self.tax_rates = TAX_RATES[self.filing_status].copy()
 
 
 def tax_liability(income: float, cfg: SimulationConfig) -> float:
@@ -289,6 +311,7 @@ def save_config(cfg: SimulationConfig) -> None:
         },
         "user": {
             "gender": cfg.gender,
+            "filing_status": cfg.filing_status,
             "current_age": cfg.current_age,
             "retirement_age": cfg.retirement_age,
             "average_yearly_need": cfg.average_yearly_need,

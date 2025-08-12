@@ -237,6 +237,7 @@ DOLLAR_FIELDS = {
 
 DEFAULT_USER = {
     "gender": "male",
+    "filing_status": "single",
     "current_age": 50,
     "retirement_age": 58,
     "average_yearly_need": 75_000,
@@ -275,6 +276,7 @@ ENTRY_HELP = {
     "social_security_age_started": "Age when Social Security benefits start.",
     "mortgage_payment": "Yearly mortgage payment in retirement.",
     "mortgage_years_left": "Number of years remaining on the mortgage currently.",
+    "filing_status": "Tax filing status used for income tax brackets.",
 }
 
 def _load_inputs() -> SimulationConfig:
@@ -297,6 +299,7 @@ def _load_inputs() -> SimulationConfig:
     inflation_std_dev = parse_percent(gen_entries["inflation_std_dev"].get())
 
     gender = user_entries["gender"].get().strip().lower()
+    filing_status = user_entries["filing_status"].get().strip().lower()
     current_age = int(user_entries["current_age"].get())
     retirement_age = int(user_entries["retirement_age"].get())
     if current_age < 0 or retirement_age < 0:
@@ -381,6 +384,7 @@ def _load_inputs() -> SimulationConfig:
         mortgage_years_in_retirement=mortgage_years_in_retirement,
         mortgage_yearly_payment=mortgage_yearly_payment,
         death_probs=death_probs,
+        filing_status=filing_status,
     )
     return cfg
 
@@ -446,7 +450,7 @@ def load_defaults():
         else:
             ent.insert(0, str(default))
     for key, default in DEFAULT_USER.items():
-        if key == "gender":
+        if key in {"gender", "filing_status"}:
             user_entries[key].set(default)
         else:
             ent = user_entries[key]
@@ -517,6 +521,17 @@ if __name__ == "__main__":
             ttk.Radiobutton(rb_frame, text="F", variable=gender_var, value="female").pack(side="left")
             user_entries[key] = gender_var
             ToolTip(rb_frame, ENTRY_HELP.get(key, ""))
+        elif key == "filing_status":
+            status_var = tk.StringVar(value=val)
+            combo = ttk.Combobox(
+                row,
+                textvariable=status_var,
+                values=["single", "married", "head_of_household"],
+                state="readonly",
+            )
+            combo.pack(side="left", fill="x", expand=True)
+            user_entries[key] = status_var
+            ToolTip(combo, ENTRY_HELP.get(key, ""))
         else:
             ent = ttk.Entry(row)
             if key in PERCENT_FIELDS:

@@ -86,13 +86,19 @@
             row_default_height: '30dp'
             row_force_default: True
 
-            Label: 
+            Label:
                 text: 'Gender'
             Spinner:
                 id: gender
                 text: 'male'
                 values: ['male', 'female']
-            Label: 
+            Label:
+                text: 'Filing status'
+            Spinner:
+                id: filing_status
+                text: 'single'
+                values: ['single', 'married', 'head_of_household']
+            Label:
                 text: 'Current age'
             TextInput:
                 id: current_age

@@ -39,6 +39,7 @@ DEFAULT_GENERAL = {
 
 DEFAULT_USER = {
     "gender": "male",
+    "filing_status": "single",
     "current_age": 50,
     "retirement_age": 58,
     "average_yearly_need": 75_000,
@@ -93,7 +94,7 @@ class RetirementApp(App):
             else:
                 ids[key].text = str(default)
         for key, default in DEFAULT_USER.items():
-            if key == "gender":
+            if key in {"gender", "filing_status"}:
                 ids[key].text = default
             elif key in PERCENT_FIELDS:
                 ids[key].text = f"{default * 100:.2f}%"
@@ -118,7 +119,7 @@ class RetirementApp(App):
         for key, val in user_cfg.items():
             if key not in ids:
                 continue
-            if key == "gender":
+            if key in {"gender", "filing_status"}:
                 ids[key].text = val
             elif key in PERCENT_FIELDS:
                 ids[key].text = f"{val * 100:.2f}%"
@@ -148,6 +149,7 @@ class RetirementApp(App):
         inflation_std_dev = parse_percent(ids.inflation_std_dev.text)
 
         gender = ids.gender.text.strip().lower()
+        filing_status = ids.filing_status.text.strip().lower()
         current_age = int(ids.current_age.text)
         retirement_age = int(ids.retirement_age.text)
         if retirement_age <= current_age:
@@ -222,6 +224,7 @@ class RetirementApp(App):
             mortgage_years_in_retirement=mortgage_years_in_retirement,
             mortgage_yearly_payment=mortgage_yearly_payment,
             death_probs=death_probs,
+            filing_status=filing_status,
         )
         return cfg
 
