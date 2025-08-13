@@ -47,6 +47,7 @@ DEFAULT_USER = {
     "current_401a_and_403b": 800_000,
     "full_social_security_at_67": 30_000,
     "social_security_age_started": 62,
+    "health_care_payment": 650,
     "mortgage_payment": 0,
     "mortgage_years_left": 0,
 }
@@ -67,6 +68,7 @@ DOLLAR_FIELDS = {
     "current_roth",
     "current_401a_and_403b",
     "full_social_security_at_67",
+    "health_care_payment",
     "mortgage_payment",
 }
 
@@ -162,17 +164,24 @@ class RetirementApp(App):
         social_security_yearly_amount = social_security_payout(
             full_social_security_at_67, social_security_age_started
         )
+        health_care_payment = parse_dollars(ids.health_care_payment.text)
         mortgage_payment = parse_dollars(ids.mortgage_payment.text)
         mortgage_years_left = int(ids.mortgage_years_left.text)
+        health_care_yearly_payment = health_care_payment * 12 * (
+            1 + inflation_mean
+        ) ** (retirement_age - current_age)
         mortgage_yearly_payment = mortgage_payment * 12
 
         years_of_retirement = 119 - retirement_age
         years_to_retirement = retirement_age - current_age
         base_retirement_need = average_yearly_need * (1 + inflation_mean) ** years_to_retirement
         mortgage_years_in_retirement = max(0, mortgage_years_left - years_to_retirement)
-        retirement_yearly_need = base_retirement_need + (
-            mortgage_yearly_payment if mortgage_years_in_retirement > 0 else 0
-        )
+        health_care_years_in_retirement = max(0, 65 - retirement_age)
+        retirement_yearly_need = base_retirement_need
+        if mortgage_years_in_retirement > 0:
+            retirement_yearly_need += mortgage_yearly_payment
+        if health_care_years_in_retirement > 0:
+            retirement_yearly_need += health_care_yearly_payment
 
         self.precomp_text = f"Year 1 net need: ${retirement_yearly_need:,.0f}"
 
@@ -216,6 +225,7 @@ class RetirementApp(App):
             social_security_yearly_amount=social_security_yearly_amount,
             mortgage_payment=mortgage_payment,
             mortgage_years_left=mortgage_years_left,
+            health_care_payment=health_care_payment,
             percent_in_stock_after_retirement=percent_in_stock_after_retirement,
             bond_ratio=bond_ratio,
             years_of_retirement=years_of_retirement,
@@ -223,6 +233,8 @@ class RetirementApp(App):
             retirement_yearly_need=retirement_yearly_need,
             mortgage_years_in_retirement=mortgage_years_in_retirement,
             mortgage_yearly_payment=mortgage_yearly_payment,
+            health_care_years_in_retirement=health_care_years_in_retirement,
+            health_care_yearly_payment=health_care_yearly_payment,
             death_probs=death_probs,
             filing_status=filing_status,
         )
@@ -259,6 +271,8 @@ class RetirementApp(App):
             need_at_ss = cfg.base_retirement_need * (1 + cfg.inflation_mean) ** years_until_ss
             if cfg.mortgage_years_in_retirement > years_until_ss:
                 need_at_ss += cfg.mortgage_yearly_payment
+            if cfg.health_care_years_in_retirement > years_until_ss:
+                need_at_ss += cfg.health_care_yearly_payment * (1 + cfg.inflation_mean) ** years_until_ss
             results = [
                 f"Success rate: {rate:.1f}%",
                 f"Gross needed in year 1: ${gross_from_net(cfg.retirement_yearly_need, cfg):,.0f}",

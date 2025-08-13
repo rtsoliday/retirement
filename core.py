@@ -100,6 +100,9 @@ class SimulationConfig:
     retirement_yearly_need: float
     mortgage_years_in_retirement: int
     mortgage_yearly_payment: float
+    health_care_payment: float
+    health_care_years_in_retirement: int
+    health_care_yearly_payment: float
     filing_status: str = "single"
     tax_brackets: list[float] = field(default_factory=list)
     tax_rates: list[float] = field(default_factory=list)
@@ -201,7 +204,15 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
 
         base_need = cfg.base_retirement_need
         mortgage_remaining = cfg.mortgage_years_in_retirement
-        w = base_need + (cfg.mortgage_yearly_payment if mortgage_remaining > 0 else 0)
+        health_care_remaining = cfg.health_care_years_in_retirement
+        health_care_cost = (
+            cfg.health_care_yearly_payment if health_care_remaining > 0 else 0
+        )
+        w = base_need
+        if mortgage_remaining > 0:
+            w += cfg.mortgage_yearly_payment
+        if health_care_remaining > 0:
+            w += health_care_cost
         death_year = sample_death_year(
             cfg.retirement_age, cfg.years_of_retirement, cfg.death_probs
         )
@@ -264,9 +275,14 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
             base_need *= (1 + i)
             if mortgage_remaining > 0:
                 mortgage_remaining -= 1
-            w = base_need + (
-                cfg.mortgage_yearly_payment if mortgage_remaining > 0 else 0
-            )
+            if health_care_remaining > 0:
+                health_care_cost *= (1 + cfg.inflation_mean)
+                health_care_remaining -= 1
+            w = base_need
+            if mortgage_remaining > 0:
+                w += cfg.mortgage_yearly_payment
+            if health_care_remaining > 0:
+                w += health_care_cost
 
             if collect_paths:
                 path.append(r_bal + p_bal)
@@ -321,6 +337,7 @@ def save_config(cfg: SimulationConfig) -> None:
             "social_security_age_started": cfg.social_security_age_started,
             "mortgage_payment": cfg.mortgage_payment,
             "mortgage_years_left": cfg.mortgage_years_left,
+            "health_care_payment": cfg.health_care_payment,
         },
     }
     with open(CONFIG_FILE, "w") as f:
