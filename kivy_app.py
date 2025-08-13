@@ -7,6 +7,7 @@ from kivy.factory import Factory
 from kivy.properties import StringProperty
 from kivy.uix.popup import Popup
 from kivy.uix.label import Label
+from kivy.uix.scrollview import ScrollView
 from kivy.metrics import dp
 
 import numpy as np
@@ -240,6 +241,98 @@ class RetirementApp(App):
         )
         return cfg
 
+    def _build_explanation(self, cfg: SimulationConfig) -> str:
+        """Return a detailed explanation of inputs and calculations."""
+        years_to_retirement = cfg.retirement_age - cfg.current_age
+        file = (
+            "DeathProbsE_M_Alt2_TR2025.csv"
+            if cfg.gender.startswith("m")
+            else "DeathProbsE_F_Alt2_TR2025.csv"
+        )
+        explanation = [
+            "Input values:",
+            f"  Number of simulations: {cfg.number_of_simulations}",
+            (
+                "  Pre-retirement mean return: "
+                f"{cfg.pre_retirement_mean_return * 100:.2f}% ("
+                f"σ {cfg.pre_retirement_std_dev * 100:.2f}%)"
+            ),
+            (
+                "  Stock return: "
+                f"{cfg.stock_mean_return * 100:.2f}% ("
+                f"σ {cfg.stock_std_dev * 100:.2f}%)"
+            ),
+            (
+                "  Bond return: "
+                f"{cfg.bond_mean_return * 100:.2f}% ("
+                f"σ {cfg.bond_std_dev * 100:.2f}%)"
+            ),
+            (
+                "  Inflation: "
+                f"{cfg.inflation_mean * 100:.2f}% ("
+                f"σ {cfg.inflation_std_dev * 100:.2f}%)"
+            ),
+            (
+                "  Gender: "
+                f"{cfg.gender}, Filing status: {cfg.filing_status}"
+            ),
+            (
+                "  Current age: "
+                f"{cfg.current_age}, Retirement age: {cfg.retirement_age}"
+            ),
+            f"  Average yearly need: ${cfg.average_yearly_need:,.0f}",
+            f"  Roth balance: ${cfg.current_roth:,.0f}",
+            f"  401a/403b balance: ${cfg.current_401a_and_403b:,.0f}",
+            f"  Social Security at 67: ${cfg.full_social_security_at_67:,.0f}",
+            (
+                "  Social Security starting age: "
+                f"{cfg.social_security_age_started} "
+                f"(annual benefit ${cfg.social_security_yearly_amount:,.0f})"
+            ),
+            (
+                "  Monthly health care payment: "
+                f"${cfg.health_care_payment:,.0f}"
+            ),
+            (
+                "  Mortgage payment: "
+                f"${cfg.mortgage_payment:,.0f} with {cfg.mortgage_years_left} years left"
+            ),
+            "",
+            "Derived values:",
+            f"  Years until retirement: {years_to_retirement}",
+            f"  Years simulated in retirement: {cfg.years_of_retirement}",
+            (
+                "  Base retirement need after inflation: "
+                f"${cfg.base_retirement_need:,.0f}"
+            ),
+            f"  Mortgage years in retirement: {cfg.mortgage_years_in_retirement}",
+            f"  Health care years in retirement: {cfg.health_care_years_in_retirement}",
+            f"  Mortgage yearly payment: ${cfg.mortgage_yearly_payment:,.0f}",
+            (
+                "  Health care yearly payment at retirement: "
+                f"${cfg.health_care_yearly_payment:,.0f}"
+            ),
+            f"  Year 1 net retirement need: ${cfg.retirement_yearly_need:,.0f}",
+            "",
+            "Process:",
+            f"  Loads mortality probabilities from {file}.",
+            (
+                "  For each simulation, yearly returns and inflation are "
+                "sampled from normal distributions using the provided means "
+                "and standard deviations."
+            ),
+            (
+                "  Balances grow, spending is withdrawn, taxes applied, and "
+                "Social Security added when eligible."
+            ),
+            (
+                "  The simulation runs until age 119 or funds deplete; the "
+                "success rate is the percentage of runs where money lasts "
+                "through all retirement years."
+            ),
+        ]
+        return "\n".join(explanation)
+
     # ------------------------------------------------------------------
     # Button handlers
     # ------------------------------------------------------------------
@@ -249,7 +342,6 @@ class RetirementApp(App):
         except Exception as exc:  # pragma: no cover - UI only
             self._error(str(exc))
             return
-
         rate, success_paths, failure_paths = simulate(cfg, collect_paths=True)
         rate *= 100
 
@@ -301,6 +393,25 @@ class RetirementApp(App):
             btn.disabled = False
             btn.height = dp(40)
         save_config(cfg)
+
+    def explain_calculations(self) -> None:
+        try:
+            cfg = self._load_inputs()
+        except Exception as exc:  # pragma: no cover - UI only
+            self._error(str(exc))
+            return
+        explanation = self._build_explanation(cfg)
+        content = ScrollView(size_hint=(1, 1))
+        lbl = Label(
+            text=explanation,
+            size_hint_y=None,
+            text_size=(dp(400), None),
+            halign="left",
+            valign="top",
+        )
+        lbl.bind(texture_size=lambda inst, val: setattr(inst, "height", val[1]))
+        content.add_widget(lbl)
+        Popup(title="Simulation Details", content=content, size_hint=(0.9, 0.9)).open()
 
     def show_plot(self) -> None:
         """Display a plot of the latest simulation paths."""

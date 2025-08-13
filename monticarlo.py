@@ -402,6 +402,99 @@ def _load_inputs() -> SimulationConfig:
     return cfg
 
 
+def _build_explanation(cfg: SimulationConfig) -> str:
+    """Return a detailed explanation of inputs and calculations."""
+    years_to_retirement = cfg.retirement_age - cfg.current_age
+    file = (
+        "DeathProbsE_M_Alt2_TR2025.csv"
+        if cfg.gender.startswith("m")
+        else "DeathProbsE_F_Alt2_TR2025.csv"
+    )
+    explanation = [
+        "Input values:",
+        f"  Number of simulations: {cfg.number_of_simulations}",
+        (
+            "  Pre-retirement mean return: "
+            f"{cfg.pre_retirement_mean_return * 100:.2f}% ("
+            f"σ {cfg.pre_retirement_std_dev * 100:.2f}%)"
+        ),
+        (
+            "  Stock return: "
+            f"{cfg.stock_mean_return * 100:.2f}% ("
+            f"σ {cfg.stock_std_dev * 100:.2f}%)"
+        ),
+        (
+            "  Bond return: "
+            f"{cfg.bond_mean_return * 100:.2f}% ("
+            f"σ {cfg.bond_std_dev * 100:.2f}%)"
+        ),
+        (
+            "  Inflation: "
+            f"{cfg.inflation_mean * 100:.2f}% ("
+            f"σ {cfg.inflation_std_dev * 100:.2f}%)"
+        ),
+        (
+            "  Gender: "
+            f"{cfg.gender}, Filing status: {cfg.filing_status}"
+        ),
+        (
+            "  Current age: "
+            f"{cfg.current_age}, Retirement age: {cfg.retirement_age}"
+        ),
+        f"  Average yearly need: ${cfg.average_yearly_need:,.0f}",
+        f"  Roth balance: ${cfg.current_roth:,.0f}",
+        f"  401a/403b balance: ${cfg.current_401a_and_403b:,.0f}",
+        f"  Social Security at 67: ${cfg.full_social_security_at_67:,.0f}",
+        (
+            "  Social Security starting age: "
+            f"{cfg.social_security_age_started} "
+            f"(annual benefit ${cfg.social_security_yearly_amount:,.0f})"
+        ),
+        (
+            "  Monthly health care payment: "
+            f"${cfg.health_care_payment:,.0f}"
+        ),
+        (
+            "  Mortgage payment: "
+            f"${cfg.mortgage_payment:,.0f} with {cfg.mortgage_years_left} years left"
+        ),
+        "",
+        "Derived values:",
+        f"  Years until retirement: {years_to_retirement}",
+        f"  Years simulated in retirement: {cfg.years_of_retirement}",
+        (
+            "  Base retirement need after inflation: "
+            f"${cfg.base_retirement_need:,.0f}"
+        ),
+        f"  Mortgage years in retirement: {cfg.mortgage_years_in_retirement}",
+        f"  Health care years in retirement: {cfg.health_care_years_in_retirement}",
+        f"  Mortgage yearly payment: ${cfg.mortgage_yearly_payment:,.0f}",
+        (
+            "  Health care yearly payment at retirement: "
+            f"${cfg.health_care_yearly_payment:,.0f}"
+        ),
+        f"  Year 1 net retirement need: ${cfg.retirement_yearly_need:,.0f}",
+        "",
+        "Process:",
+        f"  Loads mortality probabilities from {file}.",
+        (
+            "  For each simulation, yearly returns and inflation are "
+            "sampled from normal distributions using the provided means "
+            "and standard deviations."
+        ),
+        (
+            "  Balances grow, spending is withdrawn, taxes applied, and "
+            "Social Security added when eligible."
+        ),
+        (
+            "  The simulation runs until age 119 or funds deplete; the "
+            "success rate is the percentage of runs where money lasts "
+            "through all retirement years."
+        ),
+    ]
+    return "\n".join(explanation)
+
+
 def run_sim():
     """Run a single simulation using the current GUI inputs."""
     try:
@@ -454,6 +547,19 @@ def run_sim():
     results_var.set("\n".join(results))
     save_config(cfg)
     plot_paths(success_paths, failure_paths)
+
+
+def explain_calculations():
+    """Show a detailed explanation of the current configuration."""
+    prev_results = results_var.get()
+    try:
+        cfg = _load_inputs()
+    except ValueError as exc:
+        results_var.set(prev_results)
+        messagebox.showerror("Input error", str(exc))
+        return
+    results_var.set(prev_results)
+    messagebox.showinfo("Simulation Details", _build_explanation(cfg))
 
 
 def load_defaults():
@@ -571,6 +677,7 @@ if __name__ == "__main__":
     run_frame = ttk.Frame(root)
     run_frame.pack(fill="x", padx=10, pady=5)
     ttk.Button(run_frame, text="Run Simulations", command=run_sim).pack()
+    ttk.Button(run_frame, text="Explain Calculations", command=explain_calculations).pack()
     ttk.Button(run_frame, text="Load Defaults", command=load_defaults).pack()
 
     results_frame = ttk.LabelFrame(root, text="Results")
