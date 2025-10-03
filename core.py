@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -107,6 +108,14 @@ class SimulationConfig:
     tax_brackets: list[float] = field(default_factory=list)
     tax_rates: list[float] = field(default_factory=list)
     death_probs: np.ndarray = field(default_factory=lambda: np.array([]))
+    enable_roth_conversion: bool = False
+    roth_conversion_rate_cap: Optional[float] = None
+    _roth_conversion_upper_limit: Optional[float] = field(
+        init=False, repr=False, default=None
+    )
+    _roth_conversion_rate_index: Optional[int] = field(
+        init=False, repr=False, default=None
+    )
 
     def __post_init__(self) -> None:
         if not self.tax_brackets or not self.tax_rates:
@@ -114,6 +123,28 @@ class SimulationConfig:
                 raise ValueError(f"Unknown filing status: {self.filing_status}")
             self.tax_brackets = TAX_BRACKETS[self.filing_status].copy()
             self.tax_rates = TAX_RATES[self.filing_status].copy()
+        self._roth_conversion_rate_index = None
+        self._roth_conversion_upper_limit = None
+        if self.enable_roth_conversion:
+            if self.roth_conversion_rate_cap is None:
+                raise ValueError(
+                    "roth_conversion_rate_cap must be provided when Roth conversions are enabled"
+                )
+            idx = None
+            for i, rate in enumerate(self.tax_rates):
+                if abs(rate - self.roth_conversion_rate_cap) < 1e-9:
+                    idx = i
+                    break
+            if idx is None:
+                raise ValueError(
+                    "roth_conversion_rate_cap must match one of the configured tax rates"
+                )
+            self._roth_conversion_rate_index = idx
+            if idx + 1 < len(self.tax_brackets):
+                self._roth_conversion_upper_limit = self.tax_brackets[idx + 1]
+            else:
+                # Top bracket has no formal cap; treat as unlimited
+                self._roth_conversion_upper_limit = None
 
 
 def tax_liability(income: float, cfg: SimulationConfig) -> float:
@@ -164,6 +195,56 @@ def gross_from_net_with_ss(
         else:
             hi = mid
     return hi
+
+
+def _roth_conversion_headroom(
+    taxable_income: float, pretax_balance: float, cfg: SimulationConfig
+) -> float:
+    """Return the additional taxable income that can be generated via conversions."""
+
+    if not cfg.enable_roth_conversion or pretax_balance <= 0:
+        return 0.0
+    limit = cfg._roth_conversion_upper_limit
+    if limit is None:
+        # No explicit upper bound – convert the entire pretax balance
+        return pretax_balance
+    return max(0.0, min(limit - taxable_income, pretax_balance))
+
+
+def perform_roth_conversion(
+    pretax_balance: float, roth_balance: float, taxable_income: float, cfg: SimulationConfig
+) -> Tuple[float, float, float]:
+    """
+    Apply a Roth conversion by filling up the configured tax bracket.
+
+    Returns the updated pretax balance, Roth balance, and taxable income after
+    any conversion. Taxes due on the conversion are withdrawn from Roth funds
+    first, then pretax funds if necessary to keep balances non-negative.
+    """
+
+    headroom = _roth_conversion_headroom(taxable_income, pretax_balance, cfg)
+    if headroom <= 0:
+        return pretax_balance, roth_balance, taxable_income
+
+    taxes_before = tax_liability(taxable_income, cfg)
+    taxes_after = tax_liability(taxable_income + headroom, cfg)
+    additional_tax = max(0.0, taxes_after - taxes_before)
+
+    pretax_balance -= headroom
+    roth_balance += headroom
+    taxable_income += headroom
+
+    if additional_tax > 0:
+        if roth_balance >= additional_tax:
+            roth_balance -= additional_tax
+            additional_tax = 0.0
+        else:
+            additional_tax -= roth_balance
+            roth_balance = 0.0
+        if additional_tax > 0:
+            pretax_balance = max(0.0, pretax_balance - additional_tax)
+
+    return pretax_balance, roth_balance, taxable_income
 
 
 def social_security_payout(full_ss_at_67: float, start_age: int) -> float:
@@ -259,10 +340,18 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
 
             if cfg.retirement_age + year_idx < cfg.social_security_age_started:
                 gross_w = gross_from_net(w, cfg)
+                taxable_income = gross_w
             else:
                 gross_w = gross_from_net_with_ss(
                     w, cfg.social_security_yearly_amount, cfg
                 )
+                taxable_income = gross_w + cfg.social_security_yearly_amount
+
+            if cfg.enable_roth_conversion:
+                p_bal, r_bal, taxable_income = perform_roth_conversion(
+                    p_bal, r_bal, taxable_income, cfg
+                )
+                # Spending needs already satisfied; additional taxes are paid from balances.
 
             if p_bal >= gross_w:
                 p_bal -= gross_w
@@ -338,6 +427,8 @@ def save_config(cfg: SimulationConfig) -> None:
             "mortgage_payment": cfg.mortgage_payment,
             "mortgage_years_left": cfg.mortgage_years_left,
             "health_care_payment": cfg.health_care_payment,
+            "enable_roth_conversion": cfg.enable_roth_conversion,
+            "roth_conversion_rate_cap": cfg.roth_conversion_rate_cap,
         },
     }
     with open(CONFIG_FILE, "w") as f:

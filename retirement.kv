@@ -158,6 +158,17 @@
                 id: health_care_payment
                 text: '$650'
                 multiline: False
+            Label:
+                text: 'Enable Roth conversions'
+            CheckBox:
+                id: enable_roth_conversion
+                active: False
+            Label:
+                text: 'Fill bracket up to'
+            Spinner:
+                id: roth_conversion_rate_cap
+                text: '22%'
+                values: ['10%', '12%', '22%', '24%', '32%', '35%', '37%']
 
         Label:
             text: 'Pre-computations'

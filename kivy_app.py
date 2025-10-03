@@ -51,6 +51,8 @@ DEFAULT_USER = {
     "health_care_payment": 650,
     "mortgage_payment": 0,
     "mortgage_years_left": 0,
+    "enable_roth_conversion": False,
+    "roth_conversion_rate_cap": 0.22,
 }
 
 PERCENT_FIELDS = {
@@ -72,6 +74,8 @@ DOLLAR_FIELDS = {
     "health_care_payment",
     "mortgage_payment",
 }
+
+BOOL_FIELDS = {"enable_roth_conversion"}
 
 
 class RetirementApp(App):
@@ -99,6 +103,10 @@ class RetirementApp(App):
         for key, default in DEFAULT_USER.items():
             if key in {"gender", "filing_status"}:
                 ids[key].text = default
+            elif key in BOOL_FIELDS:
+                ids[key].active = bool(default)
+            elif key == "roth_conversion_rate_cap":
+                ids[key].text = f"{default * 100:.0f}%"
             elif key in PERCENT_FIELDS:
                 ids[key].text = f"{default * 100:.2f}%"
             elif key in DOLLAR_FIELDS:
@@ -124,6 +132,12 @@ class RetirementApp(App):
                 continue
             if key in {"gender", "filing_status"}:
                 ids[key].text = val
+            elif key in BOOL_FIELDS:
+                ids[key].active = bool(val)
+            elif key == "roth_conversion_rate_cap":
+                if val is None:
+                    continue
+                ids[key].text = f"{val * 100:.0f}%"
             elif key in PERCENT_FIELDS:
                 ids[key].text = f"{val * 100:.2f}%"
             elif key in DOLLAR_FIELDS:
@@ -205,6 +219,10 @@ class RetirementApp(App):
         percent_in_stock_after_retirement = 1.0
         bond_ratio = 0.0
 
+        enable_roth_conversion = bool(ids.enable_roth_conversion.active)
+        rate_text = ids.roth_conversion_rate_cap.text.strip()
+        roth_conversion_rate_cap = parse_percent(rate_text) if rate_text else None
+
         cfg = SimulationConfig(
             number_of_simulations=number_of_simulations,
             pre_retirement_mean_return=pre_retirement_mean_return,
@@ -238,6 +256,8 @@ class RetirementApp(App):
             health_care_yearly_payment=health_care_yearly_payment,
             death_probs=death_probs,
             filing_status=filing_status,
+            enable_roth_conversion=enable_roth_conversion,
+            roth_conversion_rate_cap=roth_conversion_rate_cap,
         )
         return cfg
 
@@ -313,6 +333,14 @@ class RetirementApp(App):
                 f"${cfg.health_care_yearly_payment:,.0f}"
             ),
             f"  Year 1 net retirement need: ${cfg.retirement_yearly_need:,.0f}",
+            (
+                "  Roth conversion strategy: "
+                + (
+                    f"Fill up to the {cfg.roth_conversion_rate_cap * 100:.0f}% bracket"
+                    if cfg.enable_roth_conversion and cfg.roth_conversion_rate_cap is not None
+                    else "No conversions"
+                )
+            ),
             "",
             "Process:",
             f"  Loads mortality probabilities from {file}.",

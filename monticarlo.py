@@ -249,6 +249,8 @@ DEFAULT_USER = {
     "health_care_payment": 650,
     "mortgage_payment": 0,
     "mortgage_years_left": 0,
+    "enable_roth_conversion": False,
+    "roth_conversion_rate_cap": 0.22,
 }
 
 LABEL_OVERRIDES = {
@@ -256,6 +258,8 @@ LABEL_OVERRIDES = {
     "current_401a_and_403b": "Current Balance Taxed at Withdrawal",
     "full_social_security_at_67": "Full Social Security at 67",
     "social_security_age_started": "Social Security Age Started",
+    "enable_roth_conversion": "Enable Roth Conversions",
+    "roth_conversion_rate_cap": "Fill Bracket Up To",
 }
 
 ENTRY_HELP = {
@@ -280,7 +284,11 @@ ENTRY_HELP = {
     "mortgage_payment": "Yearly mortgage payment in retirement.",
     "mortgage_years_left": "Number of years remaining on the mortgage currently.",
     "filing_status": "Tax filing status used for income tax brackets.",
+    "enable_roth_conversion": "Check to convert pre-tax balances to Roth after retirement until a chosen tax bracket is filled.",
+    "roth_conversion_rate_cap": "Highest marginal tax bracket to fill with Roth conversions each year.",
 }
+
+ROTH_RATE_CHOICES = [f"{rate * 100:.0f}%" for rate in rates]
 
 def _load_inputs() -> SimulationConfig:
     """Parse GUI inputs and return a SimulationConfig."""
@@ -365,6 +373,12 @@ def _load_inputs() -> SimulationConfig:
     percent_in_stock_after_retirement = 1.0
     bond_ratio = 0.0
 
+    enable_roth_conversion = bool(user_entries["enable_roth_conversion"].get())
+    rate_text = user_entries["roth_conversion_rate_cap"].get().strip()
+    roth_conversion_rate_cap = (
+        parse_percent(rate_text) if rate_text else None
+    )
+
     cfg = SimulationConfig(
         number_of_simulations=number_of_simulations,
         pre_retirement_mean_return=pre_retirement_mean_return,
@@ -398,6 +412,8 @@ def _load_inputs() -> SimulationConfig:
         health_care_yearly_payment=health_care_yearly_payment,
         death_probs=death_probs,
         filing_status=filing_status,
+        enable_roth_conversion=enable_roth_conversion,
+        roth_conversion_rate_cap=roth_conversion_rate_cap,
     )
     return cfg
 
@@ -474,6 +490,14 @@ def _build_explanation(cfg: SimulationConfig) -> str:
             f"${cfg.health_care_yearly_payment:,.0f}"
         ),
         f"  Year 1 net retirement need: ${cfg.retirement_yearly_need:,.0f}",
+        (
+            "  Roth conversion strategy: "
+            + (
+                f"Fill up to the {cfg.roth_conversion_rate_cap * 100:.0f}% bracket"
+                if cfg.enable_roth_conversion and cfg.roth_conversion_rate_cap is not None
+                else "No conversions"
+            )
+        ),
         "",
         "Process:",
         f"  Loads mortality probabilities from {file}.",
@@ -573,6 +597,10 @@ def load_defaults():
     for key, default in DEFAULT_USER.items():
         if key in {"gender", "filing_status"}:
             user_entries[key].set(default)
+        elif key == "enable_roth_conversion":
+            user_entries[key].set(bool(default))
+        elif key == "roth_conversion_rate_cap":
+            user_entries[key].set(f"{default * 100:.0f}%")
         else:
             ent = user_entries[key]
             ent.delete(0, tk.END)
@@ -652,6 +680,23 @@ if __name__ == "__main__":
             )
             combo.pack(side="left", fill="x", expand=True)
             user_entries[key] = status_var
+            ToolTip(combo, ENTRY_HELP.get(key, ""))
+        elif key == "enable_roth_conversion":
+            conv_var = tk.BooleanVar(value=bool(val))
+            chk = ttk.Checkbutton(row, variable=conv_var)
+            chk.pack(side="left")
+            user_entries[key] = conv_var
+            ToolTip(chk, ENTRY_HELP.get(key, ""))
+        elif key == "roth_conversion_rate_cap":
+            rate_var = tk.StringVar(value=f"{val * 100:.0f}%")
+            combo = ttk.Combobox(
+                row,
+                textvariable=rate_var,
+                values=ROTH_RATE_CHOICES,
+                state="readonly",
+            )
+            combo.pack(side="left", fill="x", expand=True)
+            user_entries[key] = rate_var
             ToolTip(combo, ENTRY_HELP.get(key, ""))
         else:
             ent = ttk.Entry(row)
