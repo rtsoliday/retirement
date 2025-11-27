@@ -620,15 +620,434 @@ def generate_correlated_returns(
     return stock_returns, bond_returns, inflation_rates
 
 
+@njit(cache=True)
+def _generate_batch_correlated_returns(
+    n_sims: int,
+    n_years: int,
+    stock_mean: float,
+    stock_std: float,
+    bond_mean: float,
+    bond_std: float,
+    inflation_mean: float,
+    inflation_std: float,
+    inflation_bond_corr: float,
+    stock_bond_corr: float,
+    uncorrelated: np.ndarray,  # Pre-generated random numbers (n_sims, 3, n_years)
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Generate correlated returns for all simulations at once.
+    Returns arrays of shape (n_sims, n_years).
+    """
+    stock_inflation_corr = 0.05
+    
+    corr_matrix = np.array([
+        [1.0, stock_bond_corr, stock_inflation_corr],
+        [stock_bond_corr, 1.0, inflation_bond_corr],
+        [stock_inflation_corr, inflation_bond_corr, 1.0],
+    ])
+    
+    # Cholesky decomposition
+    L = np.zeros((3, 3))
+    for i in range(3):
+        for j in range(i + 1):
+            s = 0.0
+            for k in range(j):
+                s += L[i, k] * L[j, k]
+            if i == j:
+                val = corr_matrix[i, i] - s
+                if val > 0:
+                    L[i, j] = np.sqrt(val)
+                else:
+                    L[i, j] = 0.001
+            else:
+                if L[j, j] > 1e-10:
+                    L[i, j] = (corr_matrix[i, j] - s) / L[j, j]
+                else:
+                    L[i, j] = 0.0
+    
+    # Output arrays
+    all_stock = np.empty((n_sims, n_years))
+    all_bond = np.empty((n_sims, n_years))
+    all_inflation = np.empty((n_sims, n_years))
+    
+    for sim in range(n_sims):
+        # Apply correlation structure
+        correlated = np.zeros((3, n_years))
+        for i in range(3):
+            for j in range(n_years):
+                for k in range(3):
+                    correlated[i, j] += L[i, k] * uncorrelated[sim, k, j]
+        
+        # Scale to desired means and standard deviations
+        for j in range(n_years):
+            all_stock[sim, j] = stock_mean + stock_std * correlated[0, j]
+            all_bond[sim, j] = bond_mean + bond_std * correlated[1, j]
+            infl = inflation_mean + inflation_std * correlated[2, j]
+            if infl < -0.05:
+                infl = -0.05
+            all_inflation[sim, j] = infl
+    
+    return all_stock, all_bond, all_inflation
+
+
+@njit(cache=True, parallel=True)
+def _simulate_parallel(
+    n_sims: int,
+    years_of_retirement: int,
+    retirement_age: int,
+    social_security_age_started: int,
+    social_security_yearly_amount: float,
+    current_roth: float,
+    current_401a_and_403b: float,
+    base_retirement_need: float,
+    mortgage_years_in_retirement: int,
+    mortgage_yearly_payment: float,
+    health_care_years_in_retirement: int,
+    health_care_yearly_payment: float,
+    healthcare_inflation_mean: float,
+    healthcare_inflation_std: float,
+    include_medicare_premiums: bool,
+    include_ltc_risk: bool,
+    ltc_annual_cost: float,
+    filing_status_is_married: bool,
+    enable_roth_conversion: bool,
+    roth_conversion_upper_limit: float,
+    bracket_arr: np.ndarray,
+    rate_arr: np.ndarray,
+    cumulative_tax: np.ndarray,
+    death_probs: np.ndarray,
+    # Pre-generated random numbers
+    growth_factors: np.ndarray,  # (n_sims,)
+    all_stock_returns: np.ndarray,  # (n_sims, years_of_retirement)
+    all_bond_returns: np.ndarray,  # (n_sims, years_of_retirement)
+    all_inflation: np.ndarray,  # (n_sims, years_of_retirement)
+    all_healthcare_inflation: np.ndarray,  # (n_sims, years_of_retirement)
+    all_death_randoms: np.ndarray,  # (n_sims, years_of_retirement)
+    all_ltc_randoms: np.ndarray,  # (n_sims, years_of_retirement)
+    all_ltc_duration_randoms: np.ndarray,  # (n_sims, years_of_retirement)
+) -> np.ndarray:
+    """
+    Parallelized simulation kernel. Returns array of success (1) or failure (0) for each sim.
+    """
+    results = np.zeros(n_sims, dtype=np.int32)
+    
+    # IRMAA thresholds and surcharges (monthly values) - simplified for JIT
+    # Single filer thresholds
+    irmaa_thresholds_single = np.array([103000.0, 129000.0, 161000.0, 193000.0, 500000.0, np.inf])
+    irmaa_surcharges_single = np.array([0.0, 82.8, 208.0, 333.3, 458.5, 500.3])  # Part B + Part D monthly
+    # Married thresholds
+    irmaa_thresholds_married = np.array([206000.0, 258000.0, 322000.0, 386000.0, 750000.0, np.inf])
+    irmaa_surcharges_married = np.array([0.0, 82.8, 208.0, 333.3, 458.5, 500.3])
+    
+    medicare_base_annual = (174.70 + 55.50) * 12  # Part B + Part D base
+    
+    for sim in prange(n_sims):
+        r_bal = current_roth * growth_factors[sim]
+        p_bal = current_401a_and_403b * growth_factors[sim]
+        
+        base_need = base_retirement_need
+        mortgage_remaining = mortgage_years_in_retirement
+        health_care_remaining = health_care_years_in_retirement
+        health_care_cost = health_care_yearly_payment if health_care_remaining > 0 else 0.0
+        
+        healthcare_inflation_factor = 1.0
+        
+        # LTC tracking
+        ltc_active = False
+        ltc_years_remaining = 0.0
+        had_ltc_event = False
+        
+        w = base_need
+        if mortgage_remaining > 0:
+            w += mortgage_yearly_payment
+        if health_care_remaining > 0:
+            w += health_care_cost
+        
+        # Sample death year inline
+        death_year = years_of_retirement
+        for j in range(years_of_retirement):
+            age = retirement_age + j
+            if age < len(death_probs):
+                if all_death_randoms[sim, j] < death_probs[age]:
+                    death_year = j
+                    break
+        
+        succeeded = True
+        for year_idx in range(1, years_of_retirement + 1):
+            if year_idx > death_year:
+                break
+            
+            current_age = retirement_age + year_idx - 1
+            
+            # Healthcare inflation
+            healthcare_infl = all_healthcare_inflation[sim, year_idx - 1]
+            healthcare_inflation_factor *= (1.0 + healthcare_infl)
+            
+            # Portfolio return based on ratio
+            sr = all_stock_returns[sim, year_idx - 1]
+            br = all_bond_returns[sim, year_idx - 1]
+            infl = all_inflation[sim, year_idx - 1]
+            
+            ratio = (r_bal + p_bal) / w if w > 0 else 100.0
+            if ratio < 30:
+                stock_pct = 1.0
+            elif ratio < 35:
+                stock_pct = 0.9
+            elif ratio < 40:
+                stock_pct = 0.8
+            elif ratio < 45:
+                stock_pct = 0.7
+            elif ratio < 50:
+                stock_pct = 0.6
+            else:
+                stock_pct = 0.5
+            
+            port_ret = stock_pct * sr + (1.0 - stock_pct) * br
+            r_bal *= (1.0 + port_ret)
+            p_bal *= (1.0 + port_ret)
+            
+            # Calculate gross withdrawal needed
+            if retirement_age + year_idx < social_security_age_started:
+                gross_w = _gross_from_net_jit(w, bracket_arr, rate_arr, cumulative_tax)
+                taxable_income = gross_w
+            else:
+                gross_w = _gross_from_net_with_ss_jit(
+                    w, social_security_yearly_amount, bracket_arr, rate_arr, cumulative_tax
+                )
+                taxable_income = gross_w + social_security_yearly_amount
+            
+            # Roth conversion
+            if enable_roth_conversion and p_bal > 0:
+                if roth_conversion_upper_limit > 0:
+                    headroom = max(0.0, min(roth_conversion_upper_limit - taxable_income, p_bal))
+                else:
+                    headroom = p_bal
+                if headroom > 0:
+                    taxes_before = _tax_liability_jit(taxable_income, bracket_arr, rate_arr, cumulative_tax)
+                    taxes_after = _tax_liability_jit(taxable_income + headroom, bracket_arr, rate_arr, cumulative_tax)
+                    additional_tax = max(0.0, taxes_after - taxes_before)
+                    p_bal -= headroom
+                    r_bal += headroom
+                    taxable_income += headroom
+                    if additional_tax > 0:
+                        if r_bal >= additional_tax:
+                            r_bal -= additional_tax
+                        else:
+                            additional_tax -= r_bal
+                            r_bal = 0.0
+                            p_bal = max(0.0, p_bal - additional_tax)
+            
+            # Withdraw from accounts
+            if p_bal >= gross_w:
+                p_bal -= gross_w
+            else:
+                rem_gross = gross_w - p_bal
+                p_bal = 0.0
+                rem_net = rem_gross - _tax_liability_jit(rem_gross, bracket_arr, rate_arr, cumulative_tax)
+                r_bal -= rem_net
+            
+            # Update base need with inflation
+            base_need *= (1.0 + infl)
+            if mortgage_remaining > 0:
+                mortgage_remaining -= 1
+            
+            if health_care_remaining > 0:
+                health_care_cost *= (1.0 + healthcare_infl)
+                health_care_remaining -= 1
+            
+            # Medicare costs (age 65+)
+            medicare_cost = 0.0
+            if include_medicare_premiums and current_age >= 65:
+                base_premium = medicare_base_annual * healthcare_inflation_factor
+                # IRMAA surcharge
+                surcharge = 0.0
+                if filing_status_is_married:
+                    for ti in range(len(irmaa_thresholds_married)):
+                        if taxable_income <= irmaa_thresholds_married[ti] * healthcare_inflation_factor:
+                            surcharge = irmaa_surcharges_married[ti] * 12 * healthcare_inflation_factor
+                            break
+                else:
+                    for ti in range(len(irmaa_thresholds_single)):
+                        if taxable_income <= irmaa_thresholds_single[ti] * healthcare_inflation_factor:
+                            surcharge = irmaa_surcharges_single[ti] * 12 * healthcare_inflation_factor
+                            break
+                medicare_cost = base_premium + surcharge
+            
+            # LTC costs
+            ltc_cost = 0.0
+            entering_ltc_this_year = False
+            if include_ltc_risk:
+                if ltc_active and ltc_years_remaining > 0:
+                    ltc_cost = ltc_annual_cost * healthcare_inflation_factor
+                    ltc_years_remaining -= 1.0
+                    if ltc_years_remaining <= 0:
+                        ltc_active = False
+                elif not had_ltc_event:
+                    # Sample LTC event
+                    if current_age < 65:
+                        annual_prob = 0.001
+                    elif current_age >= 90:
+                        annual_prob = 0.10
+                    else:
+                        # Interpolate
+                        annual_prob = 0.05
+                        if 65 <= current_age < 70:
+                            annual_prob = (0.05 - 0.02) / 5
+                        elif 70 <= current_age < 75:
+                            annual_prob = (0.10 - 0.05) / 5
+                        elif 75 <= current_age < 80:
+                            annual_prob = (0.20 - 0.10) / 5
+                        elif 80 <= current_age < 85:
+                            annual_prob = (0.35 - 0.20) / 5
+                        elif 85 <= current_age < 90:
+                            annual_prob = (0.50 - 0.35) / 5
+                    
+                    if all_ltc_randoms[sim, year_idx - 1] < annual_prob:
+                        had_ltc_event = True
+                        ltc_active = True
+                        ltc_years_remaining = max(0.5, 2.5 + 1.5 * all_ltc_duration_randoms[sim, year_idx - 1])
+                        ltc_cost = ltc_annual_cost * healthcare_inflation_factor
+                        entering_ltc_this_year = True
+            
+            if entering_ltc_this_year and mortgage_remaining > 0:
+                mortgage_remaining = 0
+            
+            # Calculate next year's spending need
+            if ltc_active:
+                w = ltc_cost + medicare_cost
+            else:
+                w = base_need
+                if mortgage_remaining > 0:
+                    w += mortgage_yearly_payment
+                if health_care_remaining > 0:
+                    w += health_care_cost
+                w += medicare_cost
+            
+            if r_bal < 0 or p_bal < 0:
+                succeeded = False
+                break
+        
+        if succeeded:
+            results[sim] = 1
+    
+    return results
+
+
 def simulate(cfg: SimulationConfig, collect_paths: bool = False):
     """Run the Monte Carlo simulation."""
+    
+    n_sims = cfg.number_of_simulations
+    years_to_retirement = cfg.retirement_age - cfg.current_age
+    years_of_retirement = cfg.years_of_retirement
+    
+    # Pre-generate all random numbers
+    # Pre-retirement returns
+    if years_to_retirement > 0:
+        pre_ret_randoms = np.random.normal(
+            cfg.pre_retirement_mean_return, 
+            cfg.pre_retirement_std_dev, 
+            (n_sims, years_to_retirement)
+        )
+        growth_factors = np.prod(1 + pre_ret_randoms, axis=1)
+    else:
+        growth_factors = np.ones(n_sims)
+    
+    # Correlated returns random numbers
+    uncorrelated = np.random.standard_normal((n_sims, 3, years_of_retirement))
+    
+    all_stock, all_bond, all_inflation = _generate_batch_correlated_returns(
+        n_sims=n_sims,
+        n_years=years_of_retirement,
+        stock_mean=cfg.stock_mean_return,
+        stock_std=cfg.stock_std_dev,
+        bond_mean=cfg.bond_mean_return,
+        bond_std=cfg.bond_std_dev,
+        inflation_mean=cfg.inflation_mean,
+        inflation_std=cfg.inflation_std_dev,
+        inflation_bond_corr=cfg.inflation_bond_correlation,
+        stock_bond_corr=cfg.stock_bond_correlation,
+        uncorrelated=uncorrelated,
+    )
+    
+    # Healthcare inflation
+    all_healthcare_inflation = np.random.normal(
+        cfg.healthcare_inflation_mean, 
+        cfg.healthcare_inflation_std, 
+        (n_sims, years_of_retirement)
+    )
+    
+    # Death probability randoms
+    all_death_randoms = np.random.random((n_sims, years_of_retirement))
+    
+    # LTC randoms
+    all_ltc_randoms = np.random.random((n_sims, years_of_retirement))
+    all_ltc_duration_randoms = np.random.standard_normal((n_sims, years_of_retirement))
+    
+    # Ensure tax arrays are initialized
+    bracket_arr, rate_arr, cumulative_tax = _ensure_tax_arrays(cfg)
+    
+    # Get Roth conversion limit
+    roth_conversion_upper_limit = 0.0
+    if cfg.enable_roth_conversion and cfg._roth_conversion_upper_limit is not None:
+        roth_conversion_upper_limit = cfg._roth_conversion_upper_limit
+    elif cfg.enable_roth_conversion:
+        roth_conversion_upper_limit = -1.0  # Signal for unlimited
+    
+    # Run parallel simulation
+    results = _simulate_parallel(
+        n_sims=n_sims,
+        years_of_retirement=years_of_retirement,
+        retirement_age=cfg.retirement_age,
+        social_security_age_started=cfg.social_security_age_started,
+        social_security_yearly_amount=cfg.social_security_yearly_amount,
+        current_roth=cfg.current_roth,
+        current_401a_and_403b=cfg.current_401a_and_403b,
+        base_retirement_need=cfg.base_retirement_need,
+        mortgage_years_in_retirement=cfg.mortgage_years_in_retirement,
+        mortgage_yearly_payment=cfg.mortgage_yearly_payment,
+        health_care_years_in_retirement=cfg.health_care_years_in_retirement,
+        health_care_yearly_payment=cfg.health_care_yearly_payment,
+        healthcare_inflation_mean=cfg.healthcare_inflation_mean,
+        healthcare_inflation_std=cfg.healthcare_inflation_std,
+        include_medicare_premiums=cfg.include_medicare_premiums,
+        include_ltc_risk=cfg.include_ltc_risk,
+        ltc_annual_cost=cfg.ltc_annual_cost,
+        filing_status_is_married=(cfg.filing_status == "married"),
+        enable_roth_conversion=cfg.enable_roth_conversion,
+        roth_conversion_upper_limit=roth_conversion_upper_limit,
+        bracket_arr=bracket_arr,
+        rate_arr=rate_arr,
+        cumulative_tax=cumulative_tax,
+        death_probs=cfg.death_probs,
+        growth_factors=growth_factors,
+        all_stock_returns=all_stock,
+        all_bond_returns=all_bond,
+        all_inflation=all_inflation,
+        all_healthcare_inflation=all_healthcare_inflation,
+        all_death_randoms=all_death_randoms,
+        all_ltc_randoms=all_ltc_randoms,
+        all_ltc_duration_randoms=all_ltc_duration_randoms,
+    )
+    
+    success_count = np.sum(results)
+    
+    # If paths are requested, run a subset sequentially to collect them
+    if collect_paths:
+        success_paths, failure_paths = _collect_paths_sequential(cfg, min(n_sims, 2000))
+        return success_count / n_sims, success_paths, failure_paths
+    
+    return success_count / n_sims
 
-    success = 0
-    success_paths = [] if collect_paths else None
-    failure_paths = [] if collect_paths else None
 
-    for _ in range(cfg.number_of_simulations):
-        years_to_retirement = cfg.retirement_age - cfg.current_age
+def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
+    """Collect simulation paths for visualization (runs sequentially)."""
+    success_paths = []
+    failure_paths = []
+    
+    years_to_retirement = cfg.retirement_age - cfg.current_age
+    bracket_arr, rate_arr, cumulative_tax = _ensure_tax_arrays(cfg)
+    
+    for _ in range(n_sims):
         pre_ret_returns = np.random.normal(
             cfg.pre_retirement_mean_return, cfg.pre_retirement_std_dev, years_to_retirement
         )
@@ -644,10 +1063,7 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
             cfg.health_care_yearly_payment if health_care_remaining > 0 else 0
         )
         
-        # Healthcare inflation tracking (separate from general inflation)
         healthcare_inflation_factor = 1.0
-        
-        # Long-term care tracking
         ltc_active = False
         ltc_years_remaining = 0.0
         had_ltc_event = False
@@ -661,7 +1077,6 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
             cfg.retirement_age, cfg.years_of_retirement, cfg.death_probs
         )
         
-        # Generate correlated stock, bond, and inflation returns
         stock_returns, bond_returns, infls = generate_correlated_returns(
             n_years=cfg.years_of_retirement,
             stock_mean=cfg.stock_mean_return,
@@ -674,27 +1089,23 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
             stock_bond_corr=cfg.stock_bond_correlation,
         )
 
-        path = [r_bal + p_bal] if collect_paths else None
+        path = [r_bal + p_bal]
 
         for year_idx, (sr, br, i) in enumerate(
             zip(stock_returns, bond_returns, infls), start=1
         ):
             if year_idx > death_year:
-                success += 1
-                if collect_paths:
-                    success_paths.append(path)
+                success_paths.append(path)
                 break
 
             current_age = cfg.retirement_age + year_idx - 1
             
-            # Sample healthcare-specific inflation for this year
             healthcare_infl = np.random.normal(
                 cfg.healthcare_inflation_mean, cfg.healthcare_inflation_std
             )
             healthcare_inflation_factor *= (1 + healthcare_infl)
             
-            #port_ret = cfg.percent_in_stock_after_retirement * sr + cfg.bond_ratio * br
-            ratio = (r_bal + p_bal) / w
+            ratio = (r_bal + p_bal) / w if w > 0 else 100.0
             if ratio < 30:
                 stock_pct = 1.0
             elif ratio < 35:
@@ -714,11 +1125,11 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
             p_bal *= (1 + port_ret)
 
             if cfg.retirement_age + year_idx < cfg.social_security_age_started:
-                gross_w = gross_from_net(w, cfg)
+                gross_w = _gross_from_net_jit(w, bracket_arr, rate_arr, cumulative_tax)
                 taxable_income = gross_w
             else:
-                gross_w = gross_from_net_with_ss(
-                    w, cfg.social_security_yearly_amount, cfg
+                gross_w = _gross_from_net_with_ss_jit(
+                    w, cfg.social_security_yearly_amount, bracket_arr, rate_arr, cumulative_tax
                 )
                 taxable_income = gross_w + cfg.social_security_yearly_amount
 
@@ -726,31 +1137,25 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
                 p_bal, r_bal, taxable_income = perform_roth_conversion(
                     p_bal, r_bal, taxable_income, cfg
                 )
-                # Spending needs already satisfied; additional taxes are paid from balances.
 
             if p_bal >= gross_w:
                 p_bal -= gross_w
             else:
                 rem_gross = gross_w - p_bal
                 p_bal = 0
-                rem_net = rem_gross - tax_liability(rem_gross, cfg)
+                rem_net = rem_gross - _tax_liability_jit(rem_gross, bracket_arr, rate_arr, cumulative_tax)
                 r_bal -= rem_net
 
             base_need *= (1 + i)
             if mortgage_remaining > 0:
                 mortgage_remaining -= 1
             
-            # Pre-Medicare healthcare costs (before age 65)
             if health_care_remaining > 0:
-                # Use healthcare-specific inflation rate
                 health_care_cost *= (1 + healthcare_infl)
                 health_care_remaining -= 1
             
-            # Calculate Medicare costs (age 65+)
             medicare_cost = 0.0
             if cfg.include_medicare_premiums and current_age >= 65:
-                # Use previous year's taxable income for IRMAA calculation
-                # (in reality it's 2 years prior, but we approximate)
                 medicare_cost = calculate_medicare_premium(
                     current_age, 
                     taxable_income, 
@@ -758,7 +1163,6 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
                     healthcare_inflation_factor
                 )
             
-            # Long-term care costs
             ltc_cost = 0.0
             entering_ltc_this_year = False
             if cfg.include_ltc_risk:
@@ -776,43 +1180,28 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
                         ltc_cost = cfg.ltc_annual_cost * healthcare_inflation_factor
                         entering_ltc_this_year = True
             
-            # When entering LTC, sell the house and add proceeds to Roth
-            # (simplified: assume house sale covers moving costs, no net gain)
-            # but mortgage payments stop immediately
             if entering_ltc_this_year and mortgage_remaining > 0:
                 mortgage_remaining = 0
             
-            # Calculate yearly spending need
             if ltc_active:
-                # In nursing home: LTC cost REPLACES base living expenses
-                # (room, board, care all included in nursing home)
-                # Still pay Medicare premiums
                 w = ltc_cost + medicare_cost
             else:
-                # Normal living: base need + mortgage + health insurance + Medicare
                 w = base_need
                 if mortgage_remaining > 0:
                     w += cfg.mortgage_yearly_payment
                 if health_care_remaining > 0:
                     w += health_care_cost
-                # Add Medicare premiums after age 65
                 w += medicare_cost
 
-            if collect_paths:
-                path.append(r_bal + p_bal)
+            path.append(r_bal + p_bal)
 
             if r_bal < 0 or p_bal < 0:
-                if collect_paths:
-                    failure_paths.append(path)
+                failure_paths.append(path)
                 break
         else:
-            success += 1
-            if collect_paths:
-                success_paths.append(path)
+            success_paths.append(path)
 
-    if collect_paths:
-        return success / cfg.number_of_simulations, success_paths, failure_paths
-    return success / cfg.number_of_simulations
+    return success_paths, failure_paths
 
 
 def load_config() -> dict:
