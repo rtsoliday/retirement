@@ -175,6 +175,15 @@ class SimulationConfig:
     _roth_conversion_rate_index: Optional[int] = field(
         init=False, repr=False, default=None
     )
+    _bracket_arr: Optional[np.ndarray] = field(
+        init=False, repr=False, default=None
+    )
+    _rate_arr: Optional[np.ndarray] = field(
+        init=False, repr=False, default=None
+    )
+    _cumulative_tax: Optional[np.ndarray] = field(
+        init=False, repr=False, default=None
+    )
 
     def __post_init__(self) -> None:
         if not self.tax_brackets or not self.tax_rates:
@@ -208,29 +217,63 @@ class SimulationConfig:
 
 def tax_liability(income: float, cfg: SimulationConfig) -> float:
     """Compute tax owed for a given income using marginal brackets."""
-
-    tax = 0.0
-    for i in range(len(cfg.tax_rates)):
-        lower = cfg.tax_brackets[i]
-        upper = cfg.tax_brackets[i + 1] if i + 1 < len(cfg.tax_brackets) else income
-        if income > lower:
-            tax += (min(income, upper) - lower) * cfg.tax_rates[i]
-        else:
-            break
-    return tax
+    # Use cached numpy arrays for faster computation
+    if not hasattr(cfg, '_bracket_arr') or cfg._bracket_arr is None:
+        cfg._bracket_arr = np.array(cfg.tax_brackets, dtype=np.float64)
+        cfg._rate_arr = np.array(cfg.tax_rates, dtype=np.float64)
+        # Precompute cumulative tax at each bracket boundary
+        cfg._cumulative_tax = np.zeros(len(cfg.tax_brackets), dtype=np.float64)
+        for i in range(1, len(cfg.tax_brackets)):
+            cfg._cumulative_tax[i] = cfg._cumulative_tax[i-1] + \
+                (cfg.tax_brackets[i] - cfg.tax_brackets[i-1]) * cfg.tax_rates[i-1]
+    
+    if income <= 0:
+        return 0.0
+    
+    # Find which bracket the income falls into
+    bracket_idx = np.searchsorted(cfg._bracket_arr, income, side='right') - 1
+    bracket_idx = max(0, min(bracket_idx, len(cfg._rate_arr) - 1))
+    
+    # Tax = cumulative tax up to this bracket + tax on income within this bracket
+    return cfg._cumulative_tax[bracket_idx] + \
+           (income - cfg._bracket_arr[bracket_idx]) * cfg._rate_arr[bracket_idx]
 
 
 def gross_from_net(net_amt: float, cfg: SimulationConfig) -> float:
-    """Find G such that G - tax_liability(G) = net_amt."""
-
-    lo, hi = net_amt, net_amt * 1.5 + 20_000
-    for _ in range(40):
-        mid = (lo + hi) / 2
-        if mid - tax_liability(mid, cfg) < net_amt:
-            lo = mid
+    """Find G such that G - tax_liability(G) = net_amt using Newton-Raphson."""
+    if net_amt <= 0:
+        return 0.0
+    
+    # Initial guess: net_amt plus estimated tax (assume ~20% effective rate)
+    gross = net_amt * 1.25
+    
+    # Newton-Raphson: solve f(G) = G - tax(G) - net = 0
+    # f'(G) = 1 - marginal_rate
+    for _ in range(8):  # Usually converges in 3-5 iterations
+        tax = tax_liability(gross, cfg)
+        net_result = gross - tax
+        error = net_result - net_amt
+        
+        if abs(error) < 0.01:  # Converged within 1 cent
+            return gross
+        
+        # Get marginal rate at current gross
+        if not hasattr(cfg, '_bracket_arr'):
+            tax_liability(gross, cfg)  # Initialize cached arrays
+        bracket_idx = np.searchsorted(cfg._bracket_arr, gross, side='right') - 1
+        bracket_idx = max(0, min(bracket_idx, len(cfg._rate_arr) - 1))
+        marginal_rate = cfg._rate_arr[bracket_idx]
+        
+        # Newton step: G_new = G - f(G)/f'(G)
+        derivative = 1.0 - marginal_rate
+        if derivative > 0.1:  # Avoid division issues
+            gross = gross - error / derivative
         else:
-            hi = mid
-    return hi
+            gross = gross - error / 0.5  # Fallback
+        
+        gross = max(net_amt, gross)  # Gross can't be less than net
+    
+    return gross
 
 
 def gross_from_net_with_ss(
@@ -240,20 +283,42 @@ def gross_from_net_with_ss(
     Find G such that
        (G + social_security_yearly_amount) - tax_liability(G + social_security_yearly_amount, cfg) == net_amt
     i.e. accounts + SS minus tax on total = net spending.
+    Uses Newton-Raphson for fast convergence.
     """
-
-    lo, hi = (
-        max(0, net_amt - social_security_yearly_amount),
-        (net_amt + social_security_yearly_amount) * 1.5,
-    )
-    for _ in range(40):
-        mid = (lo + hi) / 2
-        total = mid + social_security_yearly_amount
-        if total - tax_liability(total, cfg) < net_amt:
-            lo = mid
+    ss = social_security_yearly_amount
+    
+    if net_amt <= 0:
+        return 0.0
+    
+    # Initial guess
+    gross = max(0, net_amt - ss) * 1.25 + ss * 0.25
+    
+    # Newton-Raphson: solve f(G) = (G + ss) - tax(G + ss) - net = 0
+    for _ in range(8):
+        total = gross + ss
+        tax = tax_liability(total, cfg)
+        net_result = total - tax
+        error = net_result - net_amt
+        
+        if abs(error) < 0.01:
+            return gross
+        
+        # Get marginal rate at current total income
+        if not hasattr(cfg, '_bracket_arr'):
+            tax_liability(total, cfg)
+        bracket_idx = np.searchsorted(cfg._bracket_arr, total, side='right') - 1
+        bracket_idx = max(0, min(bracket_idx, len(cfg._rate_arr) - 1))
+        marginal_rate = cfg._rate_arr[bracket_idx]
+        
+        derivative = 1.0 - marginal_rate
+        if derivative > 0.1:
+            gross = gross - error / derivative
         else:
-            hi = mid
-    return hi
+            gross = gross - error / 0.5
+        
+        gross = max(0, gross)
+    
+    return gross
 
 
 def _roth_conversion_headroom(
