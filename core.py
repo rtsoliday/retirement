@@ -832,7 +832,7 @@ def _simulate_parallel(
                 if all_death_randoms[sim, j] < death_probs[age]:
                     death_year = j
                     break
-        death_month = death_year * 12
+        death_month = (death_year + 1) * 12
         
         # Track yearly values for tax calculations (tax is done yearly)
         year_gross_withdrawal = 0.0
@@ -879,7 +879,8 @@ def _simulate_parallel(
             p_bal *= (1.0 + port_ret)
             
             # Check if receiving Social Security this month
-            receiving_ss = (retirement_age * 12 + month_idx) >= (social_security_age_started * 12)
+            # Person's age in months at month_idx is: retirement_age * 12 + (month_idx - 1)
+            receiving_ss = (retirement_age * 12 + month_idx - 1) >= (social_security_age_started * 12)
             
             # Monthly withdrawal (pre-tax from 401a/403b)
             # We need to estimate tax monthly. For simplicity, use last year's effective rate
@@ -1181,7 +1182,7 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
         death_year = sample_death_year(
             cfg.retirement_age, years_of_retirement, cfg.death_probs
         )
-        death_month = death_year * 12
+        death_month = (death_year + 1) * 12
         
         # Generate monthly returns
         stock_returns, bond_returns, infls = generate_correlated_returns(
@@ -1246,7 +1247,8 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
             p_bal *= (1.0 + port_ret)
 
             # Check Social Security eligibility
-            receiving_ss = (cfg.retirement_age * 12 + month_idx) >= (cfg.social_security_age_started * 12)
+            # Person's age in months at month_idx is: retirement_age * 12 + (month_idx - 1)
+            receiving_ss = (cfg.retirement_age * 12 + month_idx - 1) >= (cfg.social_security_age_started * 12)
             
             # Monthly withdrawal calculation
             monthly_net_need = w
