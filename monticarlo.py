@@ -305,7 +305,7 @@ ENTRY_HELP = {
     "full_social_security_at_67": "Annual Social Security benefit if started at age 67.",
     "social_security_age_started": "Age when Social Security benefits start.",
     "health_care_payment": "Monthly health insurance premium before Medicare (age 65).",
-    "mortgage_payment": "Yearly mortgage payment in retirement.",
+    "mortgage_payment": "Monthly mortgage payment in retirement.",
     "mortgage_years_left": "Number of years remaining on the mortgage currently.",
     "healthcare_inflation_mean": "Expected healthcare inflation rate (historically ~5.5%, higher than general inflation).",
     "healthcare_inflation_std": "Volatility of healthcare inflation.",
@@ -559,7 +559,7 @@ def _build_explanation(cfg: SimulationConfig) -> str:
         f"  Include long-term care risk: {'Yes' if cfg.include_ltc_risk else 'No'}",
         f"  Long-term care annual cost: ${cfg.ltc_annual_cost:,.0f}" if cfg.include_ltc_risk else "",
         (
-            "  Mortgage payment: "
+            "  Monthly mortgage payment: "
             f"${cfg.mortgage_payment:,.0f} with {cfg.mortgage_years_left} years left"
         ),
         "",

@@ -169,8 +169,10 @@ class RetirementApp(App):
         filing_status = ids.filing_status.text.strip().lower()
         current_age = int(ids.current_age.text)
         retirement_age = int(ids.retirement_age.text)
-        if retirement_age <= current_age:
-            raise ValueError("Retirement age must be greater than current age")
+        if retirement_age < current_age:
+            raise ValueError("Retirement age must be greater than or equal to current age")
+        if retirement_age >= 119:
+            raise ValueError("Retirement age must be less than 119")
         average_yearly_need = parse_dollars(ids.average_yearly_need.text)
         current_roth = parse_dollars(ids.current_roth.text)
         current_401a_and_403b = parse_dollars(ids.current_401a_and_403b.text)
@@ -314,7 +316,7 @@ class RetirementApp(App):
                 f"${cfg.health_care_payment:,.0f}"
             ),
             (
-                "  Mortgage payment: "
+                "  Monthly mortgage payment: "
                 f"${cfg.mortgage_payment:,.0f} with {cfg.mortgage_years_left} years left"
             ),
             "",

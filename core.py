@@ -879,10 +879,6 @@ def _simulate_parallel(
             p_bal *= (1.0 + port_ret)
             
             # Check if receiving Social Security this month
-            receiving_ss = (current_age >= social_security_age_started) or \
-                          (current_age == social_security_age_started - 1 and month_in_year == 11 and 
-                           retirement_age + (month_idx // 12) >= social_security_age_started)
-            # Simplified: just check if we've reached SS age
             receiving_ss = (retirement_age * 12 + month_idx) >= (social_security_age_started * 12)
             
             # Monthly withdrawal (pre-tax from 401a/403b)
