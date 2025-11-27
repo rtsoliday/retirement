@@ -173,6 +173,10 @@ class SimulationConfig:
     death_probs: np.ndarray = field(default_factory=lambda: np.array([]))
     enable_roth_conversion: bool = False
     roth_conversion_rate_cap: Optional[float] = None
+    # Dynamic withdrawal strategy options
+    enable_dynamic_withdrawal: bool = False
+    dynamic_withdrawal_trigger: float = -0.01  # Default -1% trigger
+    replenish_savings_after_drawdown: bool = True  # Whether to refill savings after market recovery
     # Monthly equivalents (derived from yearly values)
     months_of_retirement: int = field(default=0, init=False)
     months_to_retirement: int = field(default=0, init=False)
@@ -775,6 +779,10 @@ def _simulate_parallel(
     filing_status_is_married: bool,
     enable_roth_conversion: bool,
     roth_conversion_upper_limit: float,
+    enable_dynamic_withdrawal: bool,
+    dynamic_withdrawal_trigger: float,
+    initial_cash_reserve: float,
+    replenish_savings: bool,
     bracket_arr: np.ndarray,
     rate_arr: np.ndarray,
     cumulative_tax: np.ndarray,
@@ -821,6 +829,14 @@ def _simulate_parallel(
         ltc_active = False
         ltc_months_remaining = 0.0
         had_ltc_event = False
+        
+        # Dynamic withdrawal strategy tracking
+        # Running tally of returns percentage since first drawdown (RTRP)
+        running_return_tally = 0.0
+        # Flag to track if we're in a drawdown sequence
+        in_drawdown_sequence = False
+        # For dynamic withdrawal, s_bal (savings) serves as the cash reserve (C)
+        # initial_cash_reserve tracks the target value to refill to
         
         # Initial monthly withdrawal need
         w = base_need
@@ -892,39 +908,224 @@ def _simulate_parallel(
             # or compute based on annualized withdrawal
             monthly_net_need = w
             
-            # Estimate gross monthly withdrawal
-            # Annualize the need, compute tax, then divide by 12
-            annualized_need = monthly_net_need * 12
-            if receiving_ss:
-                ss_annual = social_security_monthly_amount * 12
-                gross_annual = _gross_from_net_with_ss_jit(
-                    annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
-                )
-                gross_monthly = gross_annual / 12
-                year_ss_received += social_security_monthly_amount
-            else:
-                gross_annual = _gross_from_net_jit(annualized_need, bracket_arr, rate_arr, cumulative_tax)
-                gross_monthly = gross_annual / 12
-            
-            year_gross_withdrawal += gross_monthly
-            
-            # Apply monthly interest to savings
+            # Apply monthly interest to savings/cash reserve
             s_bal *= (1.0 + savings_monthly_rate)
             
-            # Withdraw from accounts: pre-tax first, then Roth, then savings (last resort)
-            if p_bal >= gross_monthly:
-                p_bal -= gross_monthly
-            else:
-                rem_gross = gross_monthly - p_bal
-                p_bal = 0.0
-                # Remaining comes from Roth (tax-free)
-                if r_bal >= rem_gross:
-                    r_bal -= rem_gross
+            # Dynamic withdrawal strategy implementation
+            if enable_dynamic_withdrawal:
+                # Combined portfolio return percentage for this month
+                rp = port_ret
+                
+                if rp < dynamic_withdrawal_trigger and s_bal > 0:
+                    # Drawdown month - use savings (cash reserve) first
+                    in_drawdown_sequence = True
+                    running_return_tally += rp
+                    
+                    # Calculate how much we can cover with SS + savings
+                    ss_this_month = social_security_monthly_amount if receiving_ss else 0.0
+                    remaining_need = monthly_net_need - ss_this_month
+                    
+                    if remaining_need <= 0:
+                        # SS covers everything
+                        year_ss_received += ss_this_month
+                        # No gross withdrawal needed
+                    elif s_bal >= remaining_need:
+                        # Savings covers the rest
+                        s_bal -= remaining_need
+                        year_ss_received += ss_this_month
+                        # No taxable withdrawal from retirement accounts
+                    else:
+                        # Savings not enough, need to sell some stocks/bonds
+                        remaining_after_savings = remaining_need - s_bal
+                        s_bal = 0.0
+                        year_ss_received += ss_this_month
+                        
+                        # Calculate gross needed for the remaining amount
+                        annualized_remaining = remaining_after_savings * 12
+                        gross_annual = _gross_from_net_jit(annualized_remaining, bracket_arr, rate_arr, cumulative_tax)
+                        gross_monthly = gross_annual / 12
+                        year_gross_withdrawal += gross_monthly
+                        
+                        # Withdraw from accounts
+                        if p_bal >= gross_monthly:
+                            p_bal -= gross_monthly
+                        else:
+                            rem_gross = gross_monthly - p_bal
+                            p_bal = 0.0
+                            if r_bal >= rem_gross:
+                                r_bal -= rem_gross
+                            else:
+                                r_bal = 0.0
+                                
+                elif rp < dynamic_withdrawal_trigger and s_bal <= 0:
+                    # Out of reserve funds month - pay expenses normally
+                    in_drawdown_sequence = True
+                    running_return_tally += rp
+                    
+                    # Normal withdrawal logic
+                    annualized_need = monthly_net_need * 12
+                    if receiving_ss:
+                        ss_annual = social_security_monthly_amount * 12
+                        gross_annual = _gross_from_net_with_ss_jit(
+                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                        )
+                        gross_monthly = gross_annual / 12
+                        year_ss_received += social_security_monthly_amount
+                    else:
+                        gross_annual = _gross_from_net_jit(annualized_need, bracket_arr, rate_arr, cumulative_tax)
+                        gross_monthly = gross_annual / 12
+                    
+                    year_gross_withdrawal += gross_monthly
+                    
+                    if p_bal >= gross_monthly:
+                        p_bal -= gross_monthly
+                    else:
+                        rem_gross = gross_monthly - p_bal
+                        p_bal = 0.0
+                        if r_bal >= rem_gross:
+                            r_bal -= rem_gross
+                        else:
+                            rem_gross -= r_bal
+                            r_bal = 0.0
+                            s_bal -= rem_gross
+                            
+                elif in_drawdown_sequence and running_return_tally < 0:
+                    # Market recovering but not back to initial drawdown level
+                    running_return_tally += rp
+                    
+                    # Normal withdrawal logic
+                    annualized_need = monthly_net_need * 12
+                    if receiving_ss:
+                        ss_annual = social_security_monthly_amount * 12
+                        gross_annual = _gross_from_net_with_ss_jit(
+                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                        )
+                        gross_monthly = gross_annual / 12
+                        year_ss_received += social_security_monthly_amount
+                    else:
+                        gross_annual = _gross_from_net_jit(annualized_need, bracket_arr, rate_arr, cumulative_tax)
+                        gross_monthly = gross_annual / 12
+                    
+                    year_gross_withdrawal += gross_monthly
+                    
+                    if p_bal >= gross_monthly:
+                        p_bal -= gross_monthly
+                    else:
+                        rem_gross = gross_monthly - p_bal
+                        p_bal = 0.0
+                        if r_bal >= rem_gross:
+                            r_bal -= rem_gross
+                        else:
+                            rem_gross -= r_bal
+                            r_bal = 0.0
+                            s_bal -= rem_gross
+                            
+                elif in_drawdown_sequence and s_bal < initial_cash_reserve and replenish_savings:
+                    # Market recovered and refilling savings (cash reserve)
+                    # Pay expenses normally AND refill savings
+                    annualized_need = monthly_net_need * 12
+                    if receiving_ss:
+                        ss_annual = social_security_monthly_amount * 12
+                        gross_annual = _gross_from_net_with_ss_jit(
+                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                        )
+                        gross_monthly = gross_annual / 12
+                        year_ss_received += social_security_monthly_amount
+                    else:
+                        gross_annual = _gross_from_net_jit(annualized_need, bracket_arr, rate_arr, cumulative_tax)
+                        gross_monthly = gross_annual / 12
+                    
+                    year_gross_withdrawal += gross_monthly
+                    
+                    # Calculate amount to refill savings (same ratio as normal expenses)
+                    refill_amount = min(initial_cash_reserve - s_bal, monthly_net_need * 0.5)
+                    total_gross_needed = gross_monthly + refill_amount
+                    
+                    if p_bal >= total_gross_needed:
+                        p_bal -= total_gross_needed
+                        s_bal += refill_amount
+                    else:
+                        rem_gross = total_gross_needed - p_bal
+                        p_bal = 0.0
+                        if r_bal >= rem_gross:
+                            r_bal -= rem_gross
+                            s_bal += refill_amount
+                        else:
+                            # Not enough in retirement accounts to fully refill
+                            # Just refill what we can
+                            available = r_bal
+                            r_bal = 0.0
+                            if available + gross_monthly <= total_gross_needed:
+                                actual_refill = max(0.0, available - (rem_gross - refill_amount))
+                                s_bal += actual_refill
+                    
+                    # Check if fully refilled
+                    if s_bal >= initial_cash_reserve:
+                        s_bal = initial_cash_reserve
+                        running_return_tally = 0.0
+                        in_drawdown_sequence = False
                 else:
-                    rem_gross -= r_bal
-                    r_bal = 0.0
-                    # Last resort: savings account
-                    s_bal -= rem_gross
+                    # Not in drawdown or savings already fully funded (or no replenishment) - normal withdrawal
+                    running_return_tally = 0.0
+                    in_drawdown_sequence = False
+                    
+                    annualized_need = monthly_net_need * 12
+                    if receiving_ss:
+                        ss_annual = social_security_monthly_amount * 12
+                        gross_annual = _gross_from_net_with_ss_jit(
+                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                        )
+                        gross_monthly = gross_annual / 12
+                        year_ss_received += social_security_monthly_amount
+                    else:
+                        gross_annual = _gross_from_net_jit(annualized_need, bracket_arr, rate_arr, cumulative_tax)
+                        gross_monthly = gross_annual / 12
+                    
+                    year_gross_withdrawal += gross_monthly
+                    
+                    if p_bal >= gross_monthly:
+                        p_bal -= gross_monthly
+                    else:
+                        rem_gross = gross_monthly - p_bal
+                        p_bal = 0.0
+                        if r_bal >= rem_gross:
+                            r_bal -= rem_gross
+                        else:
+                            rem_gross -= r_bal
+                            r_bal = 0.0
+                            s_bal -= rem_gross
+            else:
+                # Original withdrawal logic (dynamic withdrawal disabled)
+                # Estimate gross monthly withdrawal
+                # Annualize the need, compute tax, then divide by 12
+                annualized_need = monthly_net_need * 12
+                if receiving_ss:
+                    ss_annual = social_security_monthly_amount * 12
+                    gross_annual = _gross_from_net_with_ss_jit(
+                        annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                    )
+                    gross_monthly = gross_annual / 12
+                    year_ss_received += social_security_monthly_amount
+                else:
+                    gross_annual = _gross_from_net_jit(annualized_need, bracket_arr, rate_arr, cumulative_tax)
+                    gross_monthly = gross_annual / 12
+                
+                year_gross_withdrawal += gross_monthly
+                
+                # Withdraw from accounts: pre-tax first, then Roth, then savings (last resort)
+                if p_bal >= gross_monthly:
+                    p_bal -= gross_monthly
+                else:
+                    rem_gross = gross_monthly - p_bal
+                    p_bal = 0.0
+                    # Remaining comes from Roth (tax-free)
+                    if r_bal >= rem_gross:
+                        r_bal -= rem_gross
+                    else:
+                        rem_gross -= r_bal
+                        r_bal = 0.0
+                        # Last resort: savings account
+                        s_bal -= rem_gross
             
             # Update base need with monthly inflation
             base_need *= (1.0 + infl)
@@ -1127,6 +1328,10 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
         filing_status_is_married=(cfg.filing_status == "married"),
         enable_roth_conversion=cfg.enable_roth_conversion,
         roth_conversion_upper_limit=roth_conversion_upper_limit,
+        enable_dynamic_withdrawal=cfg.enable_dynamic_withdrawal,
+        dynamic_withdrawal_trigger=cfg.dynamic_withdrawal_trigger,
+        initial_cash_reserve=cfg.current_savings if cfg.enable_dynamic_withdrawal else 0.0,
+        replenish_savings=cfg.replenish_savings_after_drawdown,
         bracket_arr=bracket_arr,
         rate_arr=rate_arr,
         cumulative_tax=cumulative_tax,
@@ -1190,6 +1395,13 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
         ltc_active = False
         ltc_months_remaining = 0.0
         had_ltc_event = False
+        
+        # Dynamic withdrawal strategy tracking
+        # initial_cash_reserve tracks the target value to refill to
+        # s_bal serves as the cash reserve (C)
+        initial_cash_reserve = cfg.current_savings if cfg.enable_dynamic_withdrawal else 0.0
+        running_return_tally = 0.0
+        in_drawdown_sequence = False
         
         w = base_need
         if mortgage_remaining > 0:
@@ -1270,36 +1482,203 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
             
             # Monthly withdrawal calculation
             monthly_net_need = w
-            annualized_need = monthly_net_need * 12
-            if receiving_ss:
-                ss_annual = cfg.social_security_monthly_amount * 12
-                gross_annual = _gross_from_net_with_ss_jit(
-                    annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
-                )
-                gross_monthly = gross_annual / 12
-                year_ss_received += cfg.social_security_monthly_amount
-            else:
-                gross_annual = _gross_from_net_jit(annualized_need, bracket_arr, rate_arr, cumulative_tax)
-                gross_monthly = gross_annual / 12
-            
-            year_gross_withdrawal += gross_monthly
 
             # Apply monthly interest to savings
             s_bal *= (1.0 + savings_monthly_rate)
             
-            # Withdraw from accounts: pre-tax first, then Roth, then savings (last resort)
-            if p_bal >= gross_monthly:
-                p_bal -= gross_monthly
-            else:
-                rem_gross = gross_monthly - p_bal
-                p_bal = 0.0
-                if r_bal >= rem_gross:
-                    r_bal -= rem_gross
+            # Dynamic withdrawal strategy implementation
+            if cfg.enable_dynamic_withdrawal:
+                rp = port_ret
+                
+                if rp < cfg.dynamic_withdrawal_trigger and s_bal > 0:
+                    # Drawdown month - use savings (cash reserve) first
+                    in_drawdown_sequence = True
+                    running_return_tally += rp
+                    
+                    ss_this_month = cfg.social_security_monthly_amount if receiving_ss else 0.0
+                    remaining_need = monthly_net_need - ss_this_month
+                    
+                    if remaining_need <= 0:
+                        year_ss_received += ss_this_month
+                    elif s_bal >= remaining_need:
+                        s_bal -= remaining_need
+                        year_ss_received += ss_this_month
+                    else:
+                        remaining_after_savings = remaining_need - s_bal
+                        s_bal = 0.0
+                        year_ss_received += ss_this_month
+                        
+                        annualized_remaining = remaining_after_savings * 12
+                        gross_annual = _gross_from_net_jit(annualized_remaining, bracket_arr, rate_arr, cumulative_tax)
+                        gross_monthly = gross_annual / 12
+                        year_gross_withdrawal += gross_monthly
+                        
+                        if p_bal >= gross_monthly:
+                            p_bal -= gross_monthly
+                        else:
+                            rem_gross = gross_monthly - p_bal
+                            p_bal = 0.0
+                            if r_bal >= rem_gross:
+                                r_bal -= rem_gross
+                            else:
+                                r_bal = 0.0
+                                
+                elif rp < cfg.dynamic_withdrawal_trigger and s_bal <= 0:
+                    in_drawdown_sequence = True
+                    running_return_tally += rp
+                    
+                    annualized_need = monthly_net_need * 12
+                    if receiving_ss:
+                        ss_annual = cfg.social_security_monthly_amount * 12
+                        gross_annual = _gross_from_net_with_ss_jit(
+                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                        )
+                        gross_monthly = gross_annual / 12
+                        year_ss_received += cfg.social_security_monthly_amount
+                    else:
+                        gross_annual = _gross_from_net_jit(annualized_need, bracket_arr, rate_arr, cumulative_tax)
+                        gross_monthly = gross_annual / 12
+                    
+                    year_gross_withdrawal += gross_monthly
+                    
+                    if p_bal >= gross_monthly:
+                        p_bal -= gross_monthly
+                    else:
+                        rem_gross = gross_monthly - p_bal
+                        p_bal = 0.0
+                        if r_bal >= rem_gross:
+                            r_bal -= rem_gross
+                        else:
+                            rem_gross -= r_bal
+                            r_bal = 0.0
+                            s_bal -= rem_gross
+                            
+                elif in_drawdown_sequence and running_return_tally < 0:
+                    running_return_tally += rp
+                    
+                    annualized_need = monthly_net_need * 12
+                    if receiving_ss:
+                        ss_annual = cfg.social_security_monthly_amount * 12
+                        gross_annual = _gross_from_net_with_ss_jit(
+                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                        )
+                        gross_monthly = gross_annual / 12
+                        year_ss_received += cfg.social_security_monthly_amount
+                    else:
+                        gross_annual = _gross_from_net_jit(annualized_need, bracket_arr, rate_arr, cumulative_tax)
+                        gross_monthly = gross_annual / 12
+                    
+                    year_gross_withdrawal += gross_monthly
+                    
+                    if p_bal >= gross_monthly:
+                        p_bal -= gross_monthly
+                    else:
+                        rem_gross = gross_monthly - p_bal
+                        p_bal = 0.0
+                        if r_bal >= rem_gross:
+                            r_bal -= rem_gross
+                        else:
+                            rem_gross -= r_bal
+                            r_bal = 0.0
+                            s_bal -= rem_gross
+                            
+                elif in_drawdown_sequence and s_bal < initial_cash_reserve and cfg.replenish_savings_after_drawdown:
+                    # Market recovered and refilling savings (cash reserve)
+                    annualized_need = monthly_net_need * 12
+                    if receiving_ss:
+                        ss_annual = cfg.social_security_monthly_amount * 12
+                        gross_annual = _gross_from_net_with_ss_jit(
+                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                        )
+                        gross_monthly = gross_annual / 12
+                        year_ss_received += cfg.social_security_monthly_amount
+                    else:
+                        gross_annual = _gross_from_net_jit(annualized_need, bracket_arr, rate_arr, cumulative_tax)
+                        gross_monthly = gross_annual / 12
+                    
+                    year_gross_withdrawal += gross_monthly
+                    
+                    refill_amount = min(initial_cash_reserve - s_bal, monthly_net_need * 0.5)
+                    total_gross_needed = gross_monthly + refill_amount
+                    
+                    if p_bal >= total_gross_needed:
+                        p_bal -= total_gross_needed
+                        s_bal += refill_amount
+                    else:
+                        rem_gross = total_gross_needed - p_bal
+                        p_bal = 0.0
+                        if r_bal >= rem_gross:
+                            r_bal -= rem_gross
+                            s_bal += refill_amount
+                        else:
+                            # Not enough in retirement accounts to fully refill
+                            available = r_bal
+                            r_bal = 0.0
+                            if available + gross_monthly <= total_gross_needed:
+                                actual_refill = max(0.0, available - (rem_gross - refill_amount))
+                                s_bal += actual_refill
+                    
+                    if s_bal >= initial_cash_reserve:
+                        s_bal = initial_cash_reserve
+                        running_return_tally = 0.0
+                        in_drawdown_sequence = False
                 else:
-                    rem_gross -= r_bal
-                    r_bal = 0.0
-                    # Last resort: savings account
-                    s_bal -= rem_gross
+                    # Not in drawdown or savings already fully funded (or no replenishment)
+                    running_return_tally = 0.0
+                    in_drawdown_sequence = False
+                    
+                    annualized_need = monthly_net_need * 12
+                    if receiving_ss:
+                        ss_annual = cfg.social_security_monthly_amount * 12
+                        gross_annual = _gross_from_net_with_ss_jit(
+                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                        )
+                        gross_monthly = gross_annual / 12
+                        year_ss_received += cfg.social_security_monthly_amount
+                    else:
+                        gross_annual = _gross_from_net_jit(annualized_need, bracket_arr, rate_arr, cumulative_tax)
+                        gross_monthly = gross_annual / 12
+                    
+                    year_gross_withdrawal += gross_monthly
+                    
+                    if p_bal >= gross_monthly:
+                        p_bal -= gross_monthly
+                    else:
+                        rem_gross = gross_monthly - p_bal
+                        p_bal = 0.0
+                        if r_bal >= rem_gross:
+                            r_bal -= rem_gross
+                        else:
+                            rem_gross -= r_bal
+                            r_bal = 0.0
+                            s_bal -= rem_gross
+            else:
+                # Original withdrawal logic
+                annualized_need = monthly_net_need * 12
+                if receiving_ss:
+                    ss_annual = cfg.social_security_monthly_amount * 12
+                    gross_annual = _gross_from_net_with_ss_jit(
+                        annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                    )
+                    gross_monthly = gross_annual / 12
+                    year_ss_received += cfg.social_security_monthly_amount
+                else:
+                    gross_annual = _gross_from_net_jit(annualized_need, bracket_arr, rate_arr, cumulative_tax)
+                    gross_monthly = gross_annual / 12
+                
+                year_gross_withdrawal += gross_monthly
+                
+                if p_bal >= gross_monthly:
+                    p_bal -= gross_monthly
+                else:
+                    rem_gross = gross_monthly - p_bal
+                    p_bal = 0.0
+                    if r_bal >= rem_gross:
+                        r_bal -= rem_gross
+                    else:
+                        rem_gross -= r_bal
+                        r_bal = 0.0
+                        s_bal -= rem_gross
 
             # Update base need with monthly inflation
             base_need *= (1.0 + infl)
@@ -1431,6 +1810,8 @@ def save_config(cfg: SimulationConfig) -> None:
             "ltc_annual_cost": cfg.ltc_annual_cost,
             "enable_roth_conversion": cfg.enable_roth_conversion,
             "roth_conversion_rate_cap": cfg.roth_conversion_rate_cap,
+            "enable_dynamic_withdrawal": cfg.enable_dynamic_withdrawal,
+            "dynamic_withdrawal_trigger": cfg.dynamic_withdrawal_trigger,
         },
     }
     with open(CONFIG_FILE, "w") as f:

@@ -270,6 +270,8 @@ DEFAULT_USER = {
     "ltc_annual_cost": 100_000,
     "enable_roth_conversion": False,
     "roth_conversion_rate_cap": 0.22,
+    "enable_dynamic_withdrawal": False,
+    "dynamic_withdrawal_trigger": -0.01,
 }
 
 LABEL_OVERRIDES = {
@@ -288,6 +290,8 @@ LABEL_OVERRIDES = {
     "stock_bond_correlation": "Stock-Bond Correlation",
     "enable_roth_conversion": "Enable Roth Conversions",
     "roth_conversion_rate_cap": "Fill Bracket Up To",
+    "enable_dynamic_withdrawal": "Enable Dynamic Withdrawal",
+    "dynamic_withdrawal_trigger": "Drawdown Trigger",
 }
 
 ENTRY_HELP = {
@@ -323,6 +327,8 @@ ENTRY_HELP = {
     "filing_status": "Tax filing status used for income tax brackets and IRMAA.",
     "enable_roth_conversion": "Check to convert pre-tax balances to Roth after retirement until a chosen tax bracket is filled.",
     "roth_conversion_rate_cap": "Highest marginal tax bracket to fill with Roth conversions each year.",
+    "enable_dynamic_withdrawal": "Use savings as cash reserve during market downturns to avoid selling stocks/bonds at low prices.",
+    "dynamic_withdrawal_trigger": "Monthly return threshold that triggers using cash reserve instead of selling investments.",
 }
 
 # Fields that store correlation values (-1 to +1)
@@ -454,6 +460,13 @@ def _load_inputs() -> SimulationConfig:
         parse_percent(rate_text) if rate_text else None
     )
 
+    enable_dynamic_withdrawal = bool(user_entries["enable_dynamic_withdrawal"].get())
+    trigger_text = user_entries["dynamic_withdrawal_trigger"].get().strip()
+    if trigger_text:
+        dynamic_withdrawal_trigger = float(trigger_text.strip().rstrip("%")) / 100
+    else:
+        dynamic_withdrawal_trigger = -0.01
+
     cfg = SimulationConfig(
         number_of_simulations=number_of_simulations,
         pre_retirement_mean_return=pre_retirement_mean_return,
@@ -498,6 +511,8 @@ def _load_inputs() -> SimulationConfig:
         filing_status=filing_status,
         enable_roth_conversion=enable_roth_conversion,
         roth_conversion_rate_cap=roth_conversion_rate_cap,
+        enable_dynamic_withdrawal=enable_dynamic_withdrawal,
+        dynamic_withdrawal_trigger=dynamic_withdrawal_trigger,
     )
     return cfg
 
@@ -719,9 +734,11 @@ def load_defaults():
     for key, default in DEFAULT_USER.items():
         if key in {"gender", "filing_status"}:
             user_entries[key].set(default)
-        elif key in {"enable_roth_conversion", "include_medicare_premiums", "include_ltc_risk"}:
+        elif key in {"enable_roth_conversion", "include_medicare_premiums", "include_ltc_risk", "enable_dynamic_withdrawal"}:
             user_entries[key].set(bool(default))
         elif key == "roth_conversion_rate_cap":
+            user_entries[key].set(f"{default * 100:.0f}%")
+        elif key == "dynamic_withdrawal_trigger":
             user_entries[key].set(f"{default * 100:.0f}%")
         else:
             ent = user_entries[key]
@@ -824,6 +841,9 @@ if __name__ == "__main__":
             user_entries[key] = ltc_var
             ToolTip(chk, ENTRY_HELP.get(key, ""))
         elif key == "roth_conversion_rate_cap":
+            # Handle None value from config - use default if val is None
+            if val is None:
+                val = default
             rate_var = tk.StringVar(value=f"{val * 100:.0f}%")
             combo = ttk.Combobox(
                 row,
@@ -833,6 +853,26 @@ if __name__ == "__main__":
             )
             combo.pack(side="left", fill="x", expand=True)
             user_entries[key] = rate_var
+            ToolTip(combo, ENTRY_HELP.get(key, ""))
+        elif key == "enable_dynamic_withdrawal":
+            dyn_var = tk.BooleanVar(value=bool(val))
+            chk = ttk.Checkbutton(row, variable=dyn_var)
+            chk.pack(side="left")
+            user_entries[key] = dyn_var
+            ToolTip(chk, ENTRY_HELP.get(key, ""))
+        elif key == "dynamic_withdrawal_trigger":
+            # Handle None value from config - use default if val is None
+            if val is None:
+                val = default
+            trigger_var = tk.StringVar(value=f"{val * 100:.0f}%")
+            combo = ttk.Combobox(
+                row,
+                textvariable=trigger_var,
+                values=["-1%", "-2%", "-3%", "-4%", "-5%"],
+                state="readonly",
+            )
+            combo.pack(side="left", fill="x", expand=True)
+            user_entries[key] = trigger_var
             ToolTip(combo, ENTRY_HELP.get(key, ""))
         else:
             ent = ttk.Entry(row)

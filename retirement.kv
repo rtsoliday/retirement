@@ -181,6 +181,17 @@
                 id: roth_conversion_rate_cap
                 text: '22%'
                 values: ['10%', '12%', '22%', '24%', '32%', '35%', '37%']
+            Label:
+                text: 'Enable dynamic withdrawal'
+            CheckBox:
+                id: enable_dynamic_withdrawal
+                active: False
+            Label:
+                text: 'Drawdown trigger'
+            Spinner:
+                id: dynamic_withdrawal_trigger
+                text: '-1%'
+                values: ['-1%', '-2%', '-3%', '-4%', '-5%']
 
         Label:
             text: 'Pre-computations'

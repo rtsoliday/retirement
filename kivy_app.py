@@ -58,6 +58,8 @@ DEFAULT_USER = {
     "mortgage_years_left": 0,
     "enable_roth_conversion": False,
     "roth_conversion_rate_cap": 0.22,
+    "enable_dynamic_withdrawal": False,
+    "dynamic_withdrawal_trigger": -0.01,
 }
 
 PERCENT_FIELDS = {
@@ -82,7 +84,7 @@ DOLLAR_FIELDS = {
     "mortgage_payment",
 }
 
-BOOL_FIELDS = {"enable_roth_conversion"}
+BOOL_FIELDS = {"enable_roth_conversion", "enable_dynamic_withdrawal"}
 
 
 class RetirementApp(App):
@@ -114,6 +116,8 @@ class RetirementApp(App):
                 ids[key].active = bool(default)
             elif key == "roth_conversion_rate_cap":
                 ids[key].text = f"{default * 100:.0f}%"
+            elif key == "dynamic_withdrawal_trigger":
+                ids[key].text = f"{default * 100:.0f}%"
             elif key in PERCENT_FIELDS:
                 ids[key].text = f"{default * 100:.2f}%"
             elif key in DOLLAR_FIELDS:
@@ -142,6 +146,10 @@ class RetirementApp(App):
             elif key in BOOL_FIELDS:
                 ids[key].active = bool(val)
             elif key == "roth_conversion_rate_cap":
+                if val is None:
+                    continue
+                ids[key].text = f"{val * 100:.0f}%"
+            elif key == "dynamic_withdrawal_trigger":
                 if val is None:
                     continue
                 ids[key].text = f"{val * 100:.0f}%"
@@ -239,6 +247,15 @@ class RetirementApp(App):
         rate_text = ids.roth_conversion_rate_cap.text.strip()
         roth_conversion_rate_cap = parse_percent(rate_text) if rate_text else None
 
+        enable_dynamic_withdrawal = bool(ids.enable_dynamic_withdrawal.active)
+        trigger_text = ids.dynamic_withdrawal_trigger.text.strip()
+        # Parse trigger as a negative percentage (e.g., "-1%" becomes -0.01)
+        if trigger_text:
+            trigger_val = float(trigger_text.strip().rstrip("%")) / 100
+            dynamic_withdrawal_trigger = trigger_val
+        else:
+            dynamic_withdrawal_trigger = -0.01
+
         cfg = SimulationConfig(
             number_of_simulations=number_of_simulations,
             pre_retirement_mean_return=pre_retirement_mean_return,
@@ -278,6 +295,8 @@ class RetirementApp(App):
             filing_status=filing_status,
             enable_roth_conversion=enable_roth_conversion,
             roth_conversion_rate_cap=roth_conversion_rate_cap,
+            enable_dynamic_withdrawal=enable_dynamic_withdrawal,
+            dynamic_withdrawal_trigger=dynamic_withdrawal_trigger,
         )
         return cfg
 
@@ -359,6 +378,14 @@ class RetirementApp(App):
                     f"Fill up to the {cfg.roth_conversion_rate_cap * 100:.0f}% bracket"
                     if cfg.enable_roth_conversion and cfg.roth_conversion_rate_cap is not None
                     else "No conversions"
+                )
+            ),
+            (
+                "  Dynamic withdrawal strategy: "
+                + (
+                    f"Enabled (trigger: {cfg.dynamic_withdrawal_trigger * 100:.0f}%)"
+                    if cfg.enable_dynamic_withdrawal
+                    else "Disabled"
                 )
             ),
             "",
