@@ -49,6 +49,8 @@ DEFAULT_USER = {
     "average_yearly_need": 75_000,
     "current_roth": 100_000,
     "current_401a_and_403b": 800_000,
+    "current_savings": 50_000,
+    "savings_interest_rate": 0.04,
     "full_social_security_at_67": 30_000,
     "social_security_age_started": 62,
     "health_care_payment": 650,
@@ -67,12 +69,14 @@ PERCENT_FIELDS = {
     "bond_std_dev",
     "inflation_mean",
     "inflation_std_dev",
+    "savings_interest_rate",
 }
 
 DOLLAR_FIELDS = {
     "average_yearly_need",
     "current_roth",
     "current_401a_and_403b",
+    "current_savings",
     "full_social_security_at_67",
     "health_care_payment",
     "mortgage_payment",
@@ -179,8 +183,14 @@ class RetirementApp(App):
         average_yearly_need = parse_dollars(ids.average_yearly_need.text)
         current_roth = parse_dollars(ids.current_roth.text)
         current_401a_and_403b = parse_dollars(ids.current_401a_and_403b.text)
+        current_savings = parse_dollars(ids.current_savings.text)
+        savings_interest_rate = parse_percent(ids.savings_interest_rate.text)
         full_social_security_at_67 = parse_dollars(ids.full_social_security_at_67.text)
         social_security_age_started = int(ids.social_security_age_started.text)
+        if social_security_age_started < 62:
+            raise ValueError("Social Security cannot be claimed before age 62")
+        if social_security_age_started > 70:
+            raise ValueError("Social Security claiming is capped at age 70")
         social_security_yearly_amount = social_security_payout(
             full_social_security_at_67, social_security_age_started
         )
@@ -245,6 +255,8 @@ class RetirementApp(App):
             average_yearly_need=average_yearly_need,
             current_roth=current_roth,
             current_401a_and_403b=current_401a_and_403b,
+            current_savings=current_savings,
+            savings_interest_rate=savings_interest_rate,
             full_social_security_at_67=full_social_security_at_67,
             social_security_age_started=social_security_age_started,
             social_security_yearly_amount=social_security_yearly_amount,
@@ -406,7 +418,7 @@ class RetirementApp(App):
             results = [
                 f"Success rate: {rate:.1f}%",
                 f"Gross needed in year 1: ${gross_from_net(cfg.retirement_yearly_need, cfg):,.0f}",
-                f"Gross needed in year {years_until_ss} (with SS): ${gross_from_net_with_ss(need_at_ss, cfg.social_security_yearly_amount, cfg):,.0f}",
+                f"Gross needed in year {years_until_ss + 1} (with SS): ${gross_from_net_with_ss(need_at_ss, cfg.social_security_yearly_amount, cfg):,.0f}",
             ]
         else:
             results = [

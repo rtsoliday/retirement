@@ -234,12 +234,14 @@ PERCENT_FIELDS = {
     "inflation_std_dev",
     "healthcare_inflation_mean",
     "healthcare_inflation_std",
+    "savings_interest_rate",
 }
 
 DOLLAR_FIELDS = {
     "average_yearly_need",
     "current_roth",
     "current_401a_and_403b",
+    "current_savings",
     "full_social_security_at_67",
     "health_care_payment",
     "mortgage_payment",
@@ -254,6 +256,8 @@ DEFAULT_USER = {
     "average_yearly_need": 75_000,
     "current_roth": 100_000,
     "current_401a_and_403b": 800_000,
+    "current_savings": 50_000,
+    "savings_interest_rate": 0.04,
     "full_social_security_at_67": 30_000,
     "social_security_age_started": 62,
     "health_care_payment": 650,
@@ -271,6 +275,8 @@ DEFAULT_USER = {
 LABEL_OVERRIDES = {
     "current_roth": "Current Balance Not Taxed at Withdrawal",
     "current_401a_and_403b": "Current Balance Taxed at Withdrawal",
+    "current_savings": "Savings Account (Last Resort)",
+    "savings_interest_rate": "Savings Interest Rate",
     "full_social_security_at_67": "Full Social Security at 67",
     "social_security_age_started": "Social Security Age Started",
     "healthcare_inflation_mean": "Healthcare Inflation Mean",
@@ -302,6 +308,8 @@ ENTRY_HELP = {
     "average_yearly_need": "Estimated yearly spending in today's dollars.",
     "current_roth": "Current balance in accounts not taxed at withdrawal.",
     "current_401a_and_403b": "Current balance in accounts taxed at withdrawal.",
+    "current_savings": "Savings account balance (used only after all other funds are depleted). Earns interest.",
+    "savings_interest_rate": "Annual interest rate on savings account (e.g., 4% for high-yield savings).",
     "full_social_security_at_67": "Annual Social Security benefit if started at age 67.",
     "social_security_age_started": "Age when Social Security benefits start.",
     "health_care_payment": "Monthly health insurance premium before Medicare (age 65).",
@@ -376,14 +384,18 @@ def _load_inputs() -> SimulationConfig:
     average_yearly_need = parse_dollars(user_entries["average_yearly_need"].get())
     current_roth = parse_dollars(user_entries["current_roth"].get())
     current_401a_and_403b = parse_dollars(user_entries["current_401a_and_403b"].get())
+    current_savings = parse_dollars(user_entries["current_savings"].get())
+    savings_interest_rate = parse_percent(user_entries["savings_interest_rate"].get())
     full_social_security_at_67 = parse_dollars(
         user_entries["full_social_security_at_67"].get()
     )
     social_security_age_started = int(
         user_entries["social_security_age_started"].get()
     )
-    if social_security_age_started < 0:
-        raise ValueError("Social Security age must be non-negative")
+    if social_security_age_started < 62:
+        raise ValueError("Social Security cannot be claimed before age 62")
+    if social_security_age_started > 70:
+        raise ValueError("Social Security claiming is capped at age 70")
     social_security_yearly_amount = social_security_payout(
         full_social_security_at_67, social_security_age_started
     )
@@ -458,6 +470,8 @@ def _load_inputs() -> SimulationConfig:
         average_yearly_need=average_yearly_need,
         current_roth=current_roth,
         current_401a_and_403b=current_401a_and_403b,
+        current_savings=current_savings,
+        savings_interest_rate=savings_interest_rate,
         full_social_security_at_67=full_social_security_at_67,
         social_security_age_started=social_security_age_started,
         social_security_yearly_amount=social_security_yearly_amount,
@@ -659,7 +673,7 @@ def run_sim():
         results = [
             f"Success rate: {rate:.1f}%",
             f"Gross needed in year 1: ${gross_from_net(cfg.retirement_yearly_need, cfg):,.0f}",
-            f"Gross needed in year {years_until_ss} (with SS): ${gross_from_net_with_ss(need_at_ss, cfg.social_security_yearly_amount, cfg):,.0f}",
+            f"Gross needed in year {years_until_ss + 1} (with SS): ${gross_from_net_with_ss(need_at_ss, cfg.social_security_yearly_amount, cfg):,.0f}",
         ]
     else:
         results = [

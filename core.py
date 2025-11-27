@@ -143,6 +143,8 @@ class SimulationConfig:
     average_yearly_need: float
     current_roth: float
     current_401a_and_403b: float
+    current_savings: float
+    savings_interest_rate: float
     full_social_security_at_67: float
     social_security_age_started: int
     social_security_yearly_amount: float
@@ -758,6 +760,8 @@ def _simulate_parallel(
     social_security_monthly_amount: float,
     current_roth: float,
     current_401a_and_403b: float,
+    current_savings: float,
+    savings_monthly_rate: float,
     base_monthly_need: float,
     mortgage_months_in_retirement: int,
     mortgage_monthly_payment: float,
@@ -804,6 +808,7 @@ def _simulate_parallel(
     for sim in prange(n_sims):
         r_bal = current_roth * growth_factors[sim]
         p_bal = current_401a_and_403b * growth_factors[sim]
+        s_bal = current_savings  # Savings account (last resort)
         
         base_need = base_monthly_need
         mortgage_remaining = mortgage_months_in_retirement
@@ -903,14 +908,23 @@ def _simulate_parallel(
             
             year_gross_withdrawal += gross_monthly
             
-            # Withdraw from accounts
+            # Apply monthly interest to savings
+            s_bal *= (1.0 + savings_monthly_rate)
+            
+            # Withdraw from accounts: pre-tax first, then Roth, then savings (last resort)
             if p_bal >= gross_monthly:
                 p_bal -= gross_monthly
             else:
                 rem_gross = gross_monthly - p_bal
                 p_bal = 0.0
                 # Remaining comes from Roth (tax-free)
-                r_bal -= rem_gross
+                if r_bal >= rem_gross:
+                    r_bal -= rem_gross
+                else:
+                    rem_gross -= r_bal
+                    r_bal = 0.0
+                    # Last resort: savings account
+                    s_bal -= rem_gross
             
             # Update base need with monthly inflation
             base_need *= (1.0 + infl)
@@ -1018,7 +1032,7 @@ def _simulate_parallel(
                 year_gross_withdrawal = 0.0
                 year_ss_received = 0.0
             
-            if r_bal < 0 or p_bal < 0:
+            if r_bal < 0 or p_bal < 0 or s_bal < 0:
                 succeeded = False
                 break
         
@@ -1098,6 +1112,8 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
         social_security_monthly_amount=cfg.social_security_monthly_amount,
         current_roth=cfg.current_roth,
         current_401a_and_403b=cfg.current_401a_and_403b,
+        current_savings=cfg.current_savings,
+        savings_monthly_rate=cfg.savings_interest_rate / 12,
         base_monthly_need=cfg.base_monthly_need,
         mortgage_months_in_retirement=cfg.mortgage_months_in_retirement,
         mortgage_monthly_payment=cfg.mortgage_monthly_payment,
@@ -1162,6 +1178,8 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
 
         r_bal = cfg.current_roth * growth_factor
         p_bal = cfg.current_401a_and_403b * growth_factor
+        s_bal = cfg.current_savings  # Savings account (last resort)
+        savings_monthly_rate = cfg.savings_interest_rate / 12
 
         base_need = cfg.base_monthly_need
         mortgage_remaining = cfg.mortgage_months_in_retirement
@@ -1198,7 +1216,7 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
         )
 
         # Path stores yearly snapshots (at end of each year)
-        path = [r_bal + p_bal]
+        path = [r_bal + p_bal + s_bal]
         
         # Track yearly values for tax calculations
         year_gross_withdrawal = 0.0
@@ -1266,13 +1284,22 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
             
             year_gross_withdrawal += gross_monthly
 
-            # Withdraw from accounts
+            # Apply monthly interest to savings
+            s_bal *= (1.0 + savings_monthly_rate)
+            
+            # Withdraw from accounts: pre-tax first, then Roth, then savings (last resort)
             if p_bal >= gross_monthly:
                 p_bal -= gross_monthly
             else:
                 rem_gross = gross_monthly - p_bal
                 p_bal = 0.0
-                r_bal -= rem_gross
+                if r_bal >= rem_gross:
+                    r_bal -= rem_gross
+                else:
+                    rem_gross -= r_bal
+                    r_bal = 0.0
+                    # Last resort: savings account
+                    s_bal -= rem_gross
 
             # Update base need with monthly inflation
             base_need *= (1.0 + infl)
@@ -1339,13 +1366,13 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
                 year_gross_withdrawal = 0.0
                 year_ss_received = 0.0
                 
-                # Record yearly snapshot for path
-                path.append(r_bal + p_bal)
+                # Record yearly snapshot for path (include savings in total)
+                path.append(r_bal + p_bal + s_bal)
 
-            if r_bal < 0 or p_bal < 0:
+            if r_bal < 0 or p_bal < 0 or s_bal < 0:
                 # Record final snapshot and mark as failure
                 if month_in_year != 11:  # If we haven't already added end-of-year
-                    path.append(r_bal + p_bal)
+                    path.append(r_bal + p_bal + s_bal)
                 failure_paths.append(path)
                 failed = True
                 break
@@ -1390,6 +1417,8 @@ def save_config(cfg: SimulationConfig) -> None:
             "average_yearly_need": cfg.average_yearly_need,
             "current_roth": cfg.current_roth,
             "current_401a_and_403b": cfg.current_401a_and_403b,
+            "current_savings": cfg.current_savings,
+            "savings_interest_rate": cfg.savings_interest_rate,
             "full_social_security_at_67": cfg.full_social_security_at_67,
             "social_security_age_started": cfg.social_security_age_started,
             "mortgage_payment": cfg.mortgage_payment,

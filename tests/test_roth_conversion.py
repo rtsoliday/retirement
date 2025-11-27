@@ -21,6 +21,8 @@ def _make_config(enable: bool = True, rate: float = 0.12) -> SimulationConfig:
         average_yearly_need=0.0,
         current_roth=0.0,
         current_401a_and_403b=0.0,
+        current_savings=0.0,
+        savings_interest_rate=0.04,
         full_social_security_at_67=0.0,
         social_security_age_started=70,
         social_security_yearly_amount=0.0,
