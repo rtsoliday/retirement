@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 import numpy as np
+from numba import njit, prange
+from numba.typed import List as NumbaList
 
 
 # Monte Carlo setup
@@ -112,9 +114,9 @@ def parse_dollars(val: str) -> float:
     return amt
 
 
-def sample_death_year(retirement_age: int, years_of_retirement: int, death_probs) -> int:
+@njit(cache=True)
+def sample_death_year(retirement_age: int, years_of_retirement: int, death_probs: np.ndarray) -> int:
     """Return the year index (0-indexed) in which death occurs."""
-
     for j in range(years_of_retirement):
         age = retirement_age + j
         if age >= len(death_probs):
@@ -215,32 +217,64 @@ class SimulationConfig:
                 self._roth_conversion_upper_limit = None
 
 
-def tax_liability(income: float, cfg: SimulationConfig) -> float:
-    """Compute tax owed for a given income using marginal brackets."""
-    # Use cached numpy arrays for faster computation
-    if not hasattr(cfg, '_bracket_arr') or cfg._bracket_arr is None:
-        cfg._bracket_arr = np.array(cfg.tax_brackets, dtype=np.float64)
-        cfg._rate_arr = np.array(cfg.tax_rates, dtype=np.float64)
-        # Precompute cumulative tax at each bracket boundary
-        cfg._cumulative_tax = np.zeros(len(cfg.tax_brackets), dtype=np.float64)
-        for i in range(1, len(cfg.tax_brackets)):
-            cfg._cumulative_tax[i] = cfg._cumulative_tax[i-1] + \
-                (cfg.tax_brackets[i] - cfg.tax_brackets[i-1]) * cfg.tax_rates[i-1]
-    
+@njit(cache=True)
+def _tax_liability_jit(
+    income: float,
+    bracket_arr: np.ndarray,
+    rate_arr: np.ndarray,
+    cumulative_tax: np.ndarray
+) -> float:
+    """JIT-compiled tax calculation kernel."""
     if income <= 0:
         return 0.0
     
     # Find which bracket the income falls into
-    bracket_idx = np.searchsorted(cfg._bracket_arr, income, side='right') - 1
-    bracket_idx = max(0, min(bracket_idx, len(cfg._rate_arr) - 1))
+    bracket_idx = np.searchsorted(bracket_arr, income, side='right') - 1
+    if bracket_idx < 0:
+        bracket_idx = 0
+    if bracket_idx >= len(rate_arr):
+        bracket_idx = len(rate_arr) - 1
     
     # Tax = cumulative tax up to this bracket + tax on income within this bracket
-    return cfg._cumulative_tax[bracket_idx] + \
-           (income - cfg._bracket_arr[bracket_idx]) * cfg._rate_arr[bracket_idx]
+    return cumulative_tax[bracket_idx] + \
+           (income - bracket_arr[bracket_idx]) * rate_arr[bracket_idx]
 
 
-def gross_from_net(net_amt: float, cfg: SimulationConfig) -> float:
-    """Find G such that G - tax_liability(G) = net_amt using Newton-Raphson."""
+def _ensure_tax_arrays(cfg) -> tuple:
+    """Initialize cached tax arrays if not already done. Returns (bracket_arr, rate_arr, cumulative_tax)."""
+    # Check if using SimulationConfig or SimpleNamespace
+    bracket_arr = getattr(cfg, '_bracket_arr', None)
+    if bracket_arr is None:
+        bracket_arr = np.array(cfg.tax_brackets, dtype=np.float64)
+        rate_arr = np.array(cfg.tax_rates, dtype=np.float64)
+        # Precompute cumulative tax at each bracket boundary
+        cumulative_tax = np.zeros(len(cfg.tax_brackets), dtype=np.float64)
+        for i in range(1, len(cfg.tax_brackets)):
+            cumulative_tax[i] = cumulative_tax[i-1] + \
+                (cfg.tax_brackets[i] - cfg.tax_brackets[i-1]) * cfg.tax_rates[i-1]
+        # Cache if possible (SimulationConfig has these attributes)
+        if hasattr(cfg, '_bracket_arr'):
+            cfg._bracket_arr = bracket_arr
+            cfg._rate_arr = rate_arr
+            cfg._cumulative_tax = cumulative_tax
+        return bracket_arr, rate_arr, cumulative_tax
+    return cfg._bracket_arr, cfg._rate_arr, cfg._cumulative_tax
+
+
+def tax_liability(income: float, cfg) -> float:
+    """Compute tax owed for a given income using marginal brackets."""
+    bracket_arr, rate_arr, cumulative_tax = _ensure_tax_arrays(cfg)
+    return _tax_liability_jit(income, bracket_arr, rate_arr, cumulative_tax)
+
+
+@njit(cache=True)
+def _gross_from_net_jit(
+    net_amt: float,
+    bracket_arr: np.ndarray,
+    rate_arr: np.ndarray,
+    cumulative_tax: np.ndarray
+) -> float:
+    """JIT-compiled gross from net calculation using Newton-Raphson."""
     if net_amt <= 0:
         return 0.0
     
@@ -248,9 +282,8 @@ def gross_from_net(net_amt: float, cfg: SimulationConfig) -> float:
     gross = net_amt * 1.25
     
     # Newton-Raphson: solve f(G) = G - tax(G) - net = 0
-    # f'(G) = 1 - marginal_rate
     for _ in range(8):  # Usually converges in 3-5 iterations
-        tax = tax_liability(gross, cfg)
+        tax = _tax_liability_jit(gross, bracket_arr, rate_arr, cumulative_tax)
         net_result = gross - tax
         error = net_result - net_amt
         
@@ -258,11 +291,12 @@ def gross_from_net(net_amt: float, cfg: SimulationConfig) -> float:
             return gross
         
         # Get marginal rate at current gross
-        if not hasattr(cfg, '_bracket_arr'):
-            tax_liability(gross, cfg)  # Initialize cached arrays
-        bracket_idx = np.searchsorted(cfg._bracket_arr, gross, side='right') - 1
-        bracket_idx = max(0, min(bracket_idx, len(cfg._rate_arr) - 1))
-        marginal_rate = cfg._rate_arr[bracket_idx]
+        bracket_idx = np.searchsorted(bracket_arr, gross, side='right') - 1
+        if bracket_idx < 0:
+            bracket_idx = 0
+        if bracket_idx >= len(rate_arr):
+            bracket_idx = len(rate_arr) - 1
+        marginal_rate = rate_arr[bracket_idx]
         
         # Newton step: G_new = G - f(G)/f'(G)
         derivative = 1.0 - marginal_rate
@@ -271,19 +305,29 @@ def gross_from_net(net_amt: float, cfg: SimulationConfig) -> float:
         else:
             gross = gross - error / 0.5  # Fallback
         
-        gross = max(net_amt, gross)  # Gross can't be less than net
+        if gross < net_amt:
+            gross = net_amt  # Gross can't be less than net
     
     return gross
 
 
-def gross_from_net_with_ss(
-    net_amt: float, social_security_yearly_amount: float, cfg: SimulationConfig
+def gross_from_net(net_amt: float, cfg) -> float:
+    """Find G such that G - tax_liability(G) = net_amt using Newton-Raphson."""
+    bracket_arr, rate_arr, cumulative_tax = _ensure_tax_arrays(cfg)
+    return _gross_from_net_jit(net_amt, bracket_arr, rate_arr, cumulative_tax)
+
+
+@njit(cache=True)
+def _gross_from_net_with_ss_jit(
+    net_amt: float,
+    social_security_yearly_amount: float,
+    bracket_arr: np.ndarray,
+    rate_arr: np.ndarray,
+    cumulative_tax: np.ndarray
 ) -> float:
     """
-    Find G such that
-       (G + social_security_yearly_amount) - tax_liability(G + social_security_yearly_amount, cfg) == net_amt
-    i.e. accounts + SS minus tax on total = net spending.
-    Uses Newton-Raphson for fast convergence.
+    JIT-compiled version: Find G such that
+       (G + social_security_yearly_amount) - tax_liability(G + social_security_yearly_amount) == net_amt
     """
     ss = social_security_yearly_amount
     
@@ -291,12 +335,12 @@ def gross_from_net_with_ss(
         return 0.0
     
     # Initial guess
-    gross = max(0, net_amt - ss) * 1.25 + ss * 0.25
+    gross = max(0.0, net_amt - ss) * 1.25 + ss * 0.25
     
     # Newton-Raphson: solve f(G) = (G + ss) - tax(G + ss) - net = 0
     for _ in range(8):
         total = gross + ss
-        tax = tax_liability(total, cfg)
+        tax = _tax_liability_jit(total, bracket_arr, rate_arr, cumulative_tax)
         net_result = total - tax
         error = net_result - net_amt
         
@@ -304,11 +348,12 @@ def gross_from_net_with_ss(
             return gross
         
         # Get marginal rate at current total income
-        if not hasattr(cfg, '_bracket_arr'):
-            tax_liability(total, cfg)
-        bracket_idx = np.searchsorted(cfg._bracket_arr, total, side='right') - 1
-        bracket_idx = max(0, min(bracket_idx, len(cfg._rate_arr) - 1))
-        marginal_rate = cfg._rate_arr[bracket_idx]
+        bracket_idx = np.searchsorted(bracket_arr, total, side='right') - 1
+        if bracket_idx < 0:
+            bracket_idx = 0
+        if bracket_idx >= len(rate_arr):
+            bracket_idx = len(rate_arr) - 1
+        marginal_rate = rate_arr[bracket_idx]
         
         derivative = 1.0 - marginal_rate
         if derivative > 0.1:
@@ -316,10 +361,26 @@ def gross_from_net_with_ss(
         else:
             gross = gross - error / 0.5
         
-        gross = max(0, gross)
+        if gross < 0:
+            gross = 0.0
     
     return gross
 
+
+def gross_from_net_with_ss(
+    net_amt: float, social_security_yearly_amount: float, cfg
+) -> float:
+    """
+    Find G such that
+       (G + social_security_yearly_amount) - tax_liability(G + social_security_yearly_amount, cfg) == net_amt
+    i.e. accounts + SS minus tax on total = net spending.
+    Uses Newton-Raphson for fast convergence.
+    """
+    bracket_arr, rate_arr, cumulative_tax = _ensure_tax_arrays(cfg)
+    return _gross_from_net_with_ss_jit(
+        net_amt, social_security_yearly_amount,
+        bracket_arr, rate_arr, cumulative_tax
+    )
 
 def _roth_conversion_headroom(
     taxable_income: float, pretax_balance: float, cfg: SimulationConfig
@@ -424,6 +485,12 @@ def calculate_medicare_premium(
     return base_premium + irmaa
 
 
+# LTC probability lookup arrays for JIT (ages and probabilities)
+_LTC_AGES = np.array([65, 70, 75, 80, 85, 90], dtype=np.int64)
+_LTC_PROBS = np.array([0.02, 0.05, 0.10, 0.20, 0.35, 0.50], dtype=np.float64)
+
+
+@njit(cache=True)
 def sample_ltc_event(
     age: int, already_had_ltc: bool = False
 ) -> Tuple[bool, float]:
@@ -440,25 +507,23 @@ def sample_ltc_event(
     if already_had_ltc:
         return False, 0.0
     
-    # Interpolate probability based on age
-    ages = sorted(LTC_PROBABILITY_BY_AGE.keys())
-    if age < ages[0]:
+    # Interpolate probability based on age using pre-defined arrays
+    if age < _LTC_AGES[0]:
         annual_prob = 0.001  # Very low before 65
-    elif age >= ages[-1]:
+    elif age >= _LTC_AGES[-1]:
         annual_prob = 0.10  # Higher annual rate for very old
     else:
         # Find surrounding ages and interpolate
-        for i, a in enumerate(ages[:-1]):
-            if ages[i] <= age < ages[i + 1]:
+        annual_prob = 0.05  # default
+        for i in range(len(_LTC_AGES) - 1):
+            if _LTC_AGES[i] <= age < _LTC_AGES[i + 1]:
                 # Convert cumulative to annual probability
-                prob_low = LTC_PROBABILITY_BY_AGE[ages[i]]
-                prob_high = LTC_PROBABILITY_BY_AGE[ages[i + 1]]
-                years_span = ages[i + 1] - ages[i]
+                prob_low = _LTC_PROBS[i]
+                prob_high = _LTC_PROBS[i + 1]
+                years_span = _LTC_AGES[i + 1] - _LTC_AGES[i]
                 # Approximate annual probability
                 annual_prob = (prob_high - prob_low) / years_span
                 break
-        else:
-            annual_prob = 0.05
     
     if np.random.random() < annual_prob:
         duration = max(0.5, np.random.normal(LTC_DURATION_MEAN, LTC_DURATION_STD))
@@ -486,6 +551,7 @@ def social_security_payout(full_ss_at_67: float, start_age: int) -> float:
         return full_ss_at_67 * (1 + increase)
 
 
+@njit(cache=True)
 def generate_correlated_returns(
     n_years: int,
     stock_mean: float,
@@ -501,62 +567,55 @@ def generate_correlated_returns(
     Generate correlated stock returns, bond returns, and inflation.
     
     Uses Cholesky decomposition to create correlated normal samples.
-    Key correlations modeled:
-    - Inflation-Bond: Negative (rising inflation hurts bond prices)
-    - Stock-Bond: Low/variable (diversification benefit)
-    - Stock-Inflation: Assumed ~0 (stocks are real assets, roughly inflation-neutral long-term)
-    
-    Args:
-        n_years: Number of years to simulate
-        stock_mean/std: Stock return distribution parameters
-        bond_mean/std: Bond return distribution parameters  
-        inflation_mean/std: Inflation distribution parameters
-        inflation_bond_corr: Correlation between inflation and bond returns (typically -0.3 to -0.5)
-        stock_bond_corr: Correlation between stock and bond returns (typically -0.2 to +0.3)
-    
-    Returns:
-        Tuple of (stock_returns, bond_returns, inflation_rates) arrays
     """
     # Correlation matrix: [stocks, bonds, inflation]
-    # Stock-inflation correlation assumed to be near zero
-    stock_inflation_corr = 0.05  # Stocks are roughly inflation-neutral long-term
+    stock_inflation_corr = 0.05
     
     corr_matrix = np.array([
-        [1.0, stock_bond_corr, stock_inflation_corr],      # Stocks
-        [stock_bond_corr, 1.0, inflation_bond_corr],       # Bonds
-        [stock_inflation_corr, inflation_bond_corr, 1.0],  # Inflation
+        [1.0, stock_bond_corr, stock_inflation_corr],
+        [stock_bond_corr, 1.0, inflation_bond_corr],
+        [stock_inflation_corr, inflation_bond_corr, 1.0],
     ])
     
-    # Ensure correlation matrix is positive semi-definite
-    # (necessary for Cholesky decomposition)
-    eigenvalues = np.linalg.eigvalsh(corr_matrix)
-    if np.min(eigenvalues) < 0:
-        # Adjust matrix to be positive semi-definite
-        corr_matrix += np.eye(3) * (abs(np.min(eigenvalues)) + 0.01)
-        # Renormalize diagonal to 1
-        d = np.sqrt(np.diag(corr_matrix))
-        corr_matrix = corr_matrix / np.outer(d, d)
-    
-    # Cholesky decomposition
-    try:
-        L = np.linalg.cholesky(corr_matrix)
-    except np.linalg.LinAlgError:
-        # Fallback to uncorrelated if decomposition fails
-        L = np.eye(3)
+    # Simple Cholesky decomposition (correlation matrices are usually valid)
+    # Manual implementation for Numba compatibility
+    L = np.zeros((3, 3))
+    for i in range(3):
+        for j in range(i + 1):
+            s = 0.0
+            for k in range(j):
+                s += L[i, k] * L[j, k]
+            if i == j:
+                val = corr_matrix[i, i] - s
+                if val > 0:
+                    L[i, j] = np.sqrt(val)
+                else:
+                    L[i, j] = 0.001  # Small positive value if matrix not PSD
+            else:
+                if L[j, j] > 1e-10:
+                    L[i, j] = (corr_matrix[i, j] - s) / L[j, j]
+                else:
+                    L[i, j] = 0.0
     
     # Generate independent standard normal samples
     uncorrelated = np.random.standard_normal((3, n_years))
     
-    # Apply correlation structure
-    correlated = L @ uncorrelated
+    # Apply correlation structure: correlated = L @ uncorrelated
+    correlated = np.zeros((3, n_years))
+    for i in range(3):
+        for j in range(n_years):
+            for k in range(3):
+                correlated[i, j] += L[i, k] * uncorrelated[k, j]
     
     # Scale to desired means and standard deviations
     stock_returns = stock_mean + stock_std * correlated[0]
     bond_returns = bond_mean + bond_std * correlated[1]
     inflation_rates = inflation_mean + inflation_std * correlated[2]
     
-    # Ensure inflation doesn't go too negative (deflation is rare)
-    inflation_rates = np.maximum(inflation_rates, -0.05)
+    # Ensure inflation doesn't go too negative
+    for i in range(n_years):
+        if inflation_rates[i] < -0.05:
+            inflation_rates[i] = -0.05
     
     return stock_returns, bond_returns, inflation_rates
 
