@@ -15,6 +15,11 @@ from core import (
     save_config,
     brackets,
     rates,
+    MEDICARE_PART_B_BASE,
+    MEDICARE_PART_D_BASE,
+    LTC_ANNUAL_COST,
+    DEFAULT_INFLATION_BOND_CORRELATION,
+    DEFAULT_STOCK_BOND_CORRELATION,
 )
 
 
@@ -214,6 +219,8 @@ DEFAULT_GENERAL = {
     "bond_std_dev": 0.053,
     "inflation_mean": 0.033,
     "inflation_std_dev": 0.04,
+    "inflation_bond_correlation": DEFAULT_INFLATION_BOND_CORRELATION,
+    "stock_bond_correlation": DEFAULT_STOCK_BOND_CORRELATION,
 }
 
 PERCENT_FIELDS = {
@@ -225,6 +232,8 @@ PERCENT_FIELDS = {
     "bond_std_dev",
     "inflation_mean",
     "inflation_std_dev",
+    "healthcare_inflation_mean",
+    "healthcare_inflation_std",
 }
 
 DOLLAR_FIELDS = {
@@ -234,6 +243,7 @@ DOLLAR_FIELDS = {
     "full_social_security_at_67",
     "health_care_payment",
     "mortgage_payment",
+    "ltc_annual_cost",
 }
 
 DEFAULT_USER = {
@@ -249,6 +259,11 @@ DEFAULT_USER = {
     "health_care_payment": 650,
     "mortgage_payment": 0,
     "mortgage_years_left": 0,
+    "healthcare_inflation_mean": 0.055,
+    "healthcare_inflation_std": 0.02,
+    "include_medicare_premiums": True,
+    "include_ltc_risk": False,
+    "ltc_annual_cost": 100_000,
     "enable_roth_conversion": False,
     "roth_conversion_rate_cap": 0.22,
 }
@@ -258,6 +273,13 @@ LABEL_OVERRIDES = {
     "current_401a_and_403b": "Current Balance Taxed at Withdrawal",
     "full_social_security_at_67": "Full Social Security at 67",
     "social_security_age_started": "Social Security Age Started",
+    "healthcare_inflation_mean": "Healthcare Inflation Mean",
+    "healthcare_inflation_std": "Healthcare Inflation Std Dev",
+    "include_medicare_premiums": "Include Medicare Premiums (65+)",
+    "include_ltc_risk": "Include Long-Term Care Risk",
+    "ltc_annual_cost": "Long-Term Care Annual Cost",
+    "inflation_bond_correlation": "Inflation-Bond Correlation",
+    "stock_bond_correlation": "Stock-Bond Correlation",
     "enable_roth_conversion": "Enable Roth Conversions",
     "roth_conversion_rate_cap": "Fill Bracket Up To",
 }
@@ -272,6 +294,8 @@ ENTRY_HELP = {
     "bond_std_dev": "Volatility of bond returns (percentage).",
     "inflation_mean": "Expected average annual inflation rate (percentage).",
     "inflation_std_dev": "Volatility of annual inflation (percentage).",
+    "inflation_bond_correlation": "Correlation between inflation and bond returns (-1 to +1). Historically negative (~-0.4): when inflation rises, bond prices fall.",
+    "stock_bond_correlation": "Correlation between stock and bond returns (-1 to +1). Historically low (~0.1): provides diversification benefit.",
     "gender": "Select the retiree's gender for mortality assumptions.",
     "current_age": "Current age of the retiree.",
     "retirement_age": "Age at which retirement begins.",
@@ -280,15 +304,39 @@ ENTRY_HELP = {
     "current_401a_and_403b": "Current balance in accounts taxed at withdrawal.",
     "full_social_security_at_67": "Annual Social Security benefit if started at age 67.",
     "social_security_age_started": "Age when Social Security benefits start.",
-    "health_care_payment": "Monthly health insurance premium before Medicare.",
+    "health_care_payment": "Monthly health insurance premium before Medicare (age 65).",
     "mortgage_payment": "Yearly mortgage payment in retirement.",
     "mortgage_years_left": "Number of years remaining on the mortgage currently.",
-    "filing_status": "Tax filing status used for income tax brackets.",
+    "healthcare_inflation_mean": "Expected healthcare inflation rate (historically ~5.5%, higher than general inflation).",
+    "healthcare_inflation_std": "Volatility of healthcare inflation.",
+    "include_medicare_premiums": "Include Medicare Part B/D premiums with IRMAA surcharges after age 65.",
+    "include_ltc_risk": "Model probability of needing long-term care (nursing home) with associated costs.",
+    "ltc_annual_cost": "Annual cost if long-term care is needed (nursing home ~$100k/year).",
+    "filing_status": "Tax filing status used for income tax brackets and IRMAA.",
     "enable_roth_conversion": "Check to convert pre-tax balances to Roth after retirement until a chosen tax bracket is filled.",
     "roth_conversion_rate_cap": "Highest marginal tax bracket to fill with Roth conversions each year.",
 }
 
+# Fields that store correlation values (-1 to +1)
+CORRELATION_FIELDS = {
+    "inflation_bond_correlation",
+    "stock_bond_correlation",
+}
+
 ROTH_RATE_CHOICES = [f"{rate * 100:.0f}%" for rate in rates]
+
+
+def parse_correlation(val: str) -> float:
+    """Convert a correlation string like '-0.40' or '-40%' to a float."""
+    val = val.strip()
+    if val.endswith('%'):
+        corr = float(val.rstrip('%')) / 100
+    else:
+        corr = float(val)
+    if not -1 <= corr <= 1:
+        raise ValueError("Correlation must be between -1 and +1")
+    return corr
+
 
 def _load_inputs() -> SimulationConfig:
     """Parse GUI inputs and return a SimulationConfig."""
@@ -308,6 +356,12 @@ def _load_inputs() -> SimulationConfig:
     bond_std_dev = parse_percent(gen_entries["bond_std_dev"].get())
     inflation_mean = parse_percent(gen_entries["inflation_mean"].get())
     inflation_std_dev = parse_percent(gen_entries["inflation_std_dev"].get())
+    inflation_bond_correlation = parse_correlation(
+        gen_entries["inflation_bond_correlation"].get()
+    )
+    stock_bond_correlation = parse_correlation(
+        gen_entries["stock_bond_correlation"].get()
+    )
 
     gender = user_entries["gender"].get().strip().lower()
     filing_status = user_entries["filing_status"].get().strip().lower()
@@ -373,6 +427,17 @@ def _load_inputs() -> SimulationConfig:
     percent_in_stock_after_retirement = 1.0
     bond_ratio = 0.0
 
+    # Parse healthcare-specific settings
+    healthcare_inflation_mean = parse_percent(
+        user_entries["healthcare_inflation_mean"].get()
+    )
+    healthcare_inflation_std = parse_percent(
+        user_entries["healthcare_inflation_std"].get()
+    )
+    include_medicare_premiums = bool(user_entries["include_medicare_premiums"].get())
+    include_ltc_risk = bool(user_entries["include_ltc_risk"].get())
+    ltc_annual_cost = parse_dollars(user_entries["ltc_annual_cost"].get())
+
     enable_roth_conversion = bool(user_entries["enable_roth_conversion"].get())
     rate_text = user_entries["roth_conversion_rate_cap"].get().strip()
     roth_conversion_rate_cap = (
@@ -410,6 +475,13 @@ def _load_inputs() -> SimulationConfig:
         mortgage_yearly_payment=mortgage_yearly_payment,
         health_care_years_in_retirement=health_care_years_in_retirement,
         health_care_yearly_payment=health_care_yearly_payment,
+        healthcare_inflation_mean=healthcare_inflation_mean,
+        healthcare_inflation_std=healthcare_inflation_std,
+        include_medicare_premiums=include_medicare_premiums,
+        include_ltc_risk=include_ltc_risk,
+        ltc_annual_cost=ltc_annual_cost,
+        inflation_bond_correlation=inflation_bond_correlation,
+        stock_bond_correlation=stock_bond_correlation,
         death_probs=death_probs,
         filing_status=filing_status,
         enable_roth_conversion=enable_roth_conversion,
@@ -450,6 +522,14 @@ def _build_explanation(cfg: SimulationConfig) -> str:
             f"σ {cfg.inflation_std_dev * 100:.2f}%)"
         ),
         (
+            "  Inflation-Bond correlation: "
+            f"{cfg.inflation_bond_correlation:.2f}"
+        ),
+        (
+            "  Stock-Bond correlation: "
+            f"{cfg.stock_bond_correlation:.2f}"
+        ),
+        (
             "  Gender: "
             f"{cfg.gender}, Filing status: {cfg.filing_status}"
         ),
@@ -467,9 +547,17 @@ def _build_explanation(cfg: SimulationConfig) -> str:
             f"(annual benefit ${cfg.social_security_yearly_amount:,.0f})"
         ),
         (
-            "  Monthly health care payment: "
+            "  Monthly health care payment (pre-Medicare): "
             f"${cfg.health_care_payment:,.0f}"
         ),
+        (
+            "  Healthcare inflation: "
+            f"{cfg.healthcare_inflation_mean * 100:.2f}% ("
+            f"σ {cfg.healthcare_inflation_std * 100:.2f}%)"
+        ),
+        f"  Include Medicare premiums (65+): {'Yes' if cfg.include_medicare_premiums else 'No'}",
+        f"  Include long-term care risk: {'Yes' if cfg.include_ltc_risk else 'No'}",
+        f"  Long-term care annual cost: ${cfg.ltc_annual_cost:,.0f}" if cfg.include_ltc_risk else "",
         (
             "  Mortgage payment: "
             f"${cfg.mortgage_payment:,.0f} with {cfg.mortgage_years_left} years left"
@@ -483,10 +571,10 @@ def _build_explanation(cfg: SimulationConfig) -> str:
             f"${cfg.base_retirement_need:,.0f}"
         ),
         f"  Mortgage years in retirement: {cfg.mortgage_years_in_retirement}",
-        f"  Health care years in retirement: {cfg.health_care_years_in_retirement}",
+        f"  Health care years until Medicare (65): {cfg.health_care_years_in_retirement}",
         f"  Mortgage yearly payment: ${cfg.mortgage_yearly_payment:,.0f}",
         (
-            "  Health care yearly payment at retirement: "
+            "  Health care yearly payment at retirement (pre-Medicare): "
             f"${cfg.health_care_yearly_payment:,.0f}"
         ),
         f"  Year 1 net retirement need: ${cfg.retirement_yearly_need:,.0f}",
@@ -507,6 +595,22 @@ def _build_explanation(cfg: SimulationConfig) -> str:
             "and standard deviations."
         ),
         (
+            "  Healthcare costs use separate inflation rate "
+            f"({cfg.healthcare_inflation_mean * 100:.1f}% mean)."
+        ),
+        (
+            "  Pre-Medicare health costs apply until age 65; "
+            "Medicare Parts B/D premiums with IRMAA surcharges apply after."
+            if cfg.include_medicare_premiums
+            else "  Pre-Medicare health costs apply until age 65."
+        ),
+        (
+            "  Long-term care events are sampled probabilistically "
+            f"(avg cost ${cfg.ltc_annual_cost:,.0f}/year if needed)."
+            if cfg.include_ltc_risk
+            else ""
+        ),
+        (
             "  Balances grow, spending is withdrawn, taxes applied, and "
             "Social Security added when eligible."
         ),
@@ -516,6 +620,8 @@ def _build_explanation(cfg: SimulationConfig) -> str:
             "through all retirement years."
         ),
     ]
+    # Filter out empty strings from conditional items
+    explanation = [line for line in explanation if line != ""]
     return "\n".join(explanation)
 
 
@@ -592,12 +698,14 @@ def load_defaults():
         ent.delete(0, tk.END)
         if key in PERCENT_FIELDS:
             ent.insert(0, f"{default * 100:.2f}%")
+        elif key in CORRELATION_FIELDS:
+            ent.insert(0, f"{default:.2f}")
         else:
             ent.insert(0, str(default))
     for key, default in DEFAULT_USER.items():
         if key in {"gender", "filing_status"}:
             user_entries[key].set(default)
-        elif key == "enable_roth_conversion":
+        elif key in {"enable_roth_conversion", "include_medicare_premiums", "include_ltc_risk"}:
             user_entries[key].set(bool(default))
         elif key == "roth_conversion_rate_cap":
             user_entries[key].set(f"{default * 100:.0f}%")
@@ -615,7 +723,7 @@ def load_defaults():
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Retirement Simulator")
-    root.geometry("460x840")
+    root.geometry("460x980")
 
     gen_entries = {}
     user_entries = {}
@@ -644,6 +752,8 @@ if __name__ == "__main__":
         val = gen_cfg.get(key, default)
         if key in PERCENT_FIELDS:
             ent.insert(0, f"{val * 100:.2f}%")
+        elif key in CORRELATION_FIELDS:
+            ent.insert(0, f"{val:.2f}")
         else:
             ent.insert(0, str(val))
         ent.pack(side="left", fill="x", expand=True)
@@ -686,6 +796,18 @@ if __name__ == "__main__":
             chk = ttk.Checkbutton(row, variable=conv_var)
             chk.pack(side="left")
             user_entries[key] = conv_var
+            ToolTip(chk, ENTRY_HELP.get(key, ""))
+        elif key == "include_medicare_premiums":
+            medicare_var = tk.BooleanVar(value=bool(val))
+            chk = ttk.Checkbutton(row, variable=medicare_var)
+            chk.pack(side="left")
+            user_entries[key] = medicare_var
+            ToolTip(chk, ENTRY_HELP.get(key, ""))
+        elif key == "include_ltc_risk":
+            ltc_var = tk.BooleanVar(value=bool(val))
+            chk = ttk.Checkbutton(row, variable=ltc_var)
+            chk.pack(side="left")
+            user_entries[key] = ltc_var
             ToolTip(chk, ENTRY_HELP.get(key, ""))
         elif key == "roth_conversion_rate_cap":
             rate_var = tk.StringVar(value=f"{val * 100:.0f}%")
