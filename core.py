@@ -941,8 +941,15 @@ def _simulate_parallel(
                         year_ss_received += ss_this_month
                         
                         # Calculate gross needed for the remaining amount
+                        # Account for SS taxation when calculating tax on withdrawal
                         annualized_remaining = remaining_after_savings * 12
-                        gross_annual = _gross_from_net_jit(annualized_remaining, bracket_arr, rate_arr, cumulative_tax)
+                        if receiving_ss:
+                            ss_annual = social_security_monthly_amount * 12
+                            gross_annual = _gross_from_net_with_ss_jit(
+                                annualized_remaining, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                            )
+                        else:
+                            gross_annual = _gross_from_net_jit(annualized_remaining, bracket_arr, rate_arr, cumulative_tax)
                         gross_monthly = gross_annual / 12
                         year_gross_withdrawal += gross_monthly
                         
@@ -1508,8 +1515,15 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
                         s_bal = 0.0
                         year_ss_received += ss_this_month
                         
+                        # Account for SS taxation when calculating tax on withdrawal
                         annualized_remaining = remaining_after_savings * 12
-                        gross_annual = _gross_from_net_jit(annualized_remaining, bracket_arr, rate_arr, cumulative_tax)
+                        if receiving_ss:
+                            ss_annual = cfg.social_security_monthly_amount * 12
+                            gross_annual = _gross_from_net_with_ss_jit(
+                                annualized_remaining, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                            )
+                        else:
+                            gross_annual = _gross_from_net_jit(annualized_remaining, bracket_arr, rate_arr, cumulative_tax)
                         gross_monthly = gross_annual / 12
                         year_gross_withdrawal += gross_monthly
                         
