@@ -24,6 +24,9 @@ from core import (
     load_config,
 )
 
+DEFAULT_HEALTHCARE_INFLATION_MEAN = 0.055
+DEFAULT_HEALTHCARE_INFLATION_STD = 0.02
+
 
 # Default parameter values mirror those in the Tkinter app
 DEFAULT_GENERAL = {
@@ -184,13 +187,14 @@ class RetirementApp(App):
         health_care_payment = parse_dollars(ids.health_care_payment.text)
         mortgage_payment = parse_dollars(ids.mortgage_payment.text)
         mortgage_years_left = int(ids.mortgage_years_left.text)
+        years_to_retirement = retirement_age - current_age
+        healthcare_inflation_mean = DEFAULT_HEALTHCARE_INFLATION_MEAN
         health_care_yearly_payment = health_care_payment * 12 * (
-            1 + inflation_mean
-        ) ** (retirement_age - current_age)
+            1 + healthcare_inflation_mean
+        ) ** years_to_retirement
         mortgage_yearly_payment = mortgage_payment * 12
 
         years_of_retirement = 119 - retirement_age
-        years_to_retirement = retirement_age - current_age
         base_retirement_need = average_yearly_need * (1 + inflation_mean) ** years_to_retirement
         mortgage_years_in_retirement = max(0, mortgage_years_left - years_to_retirement)
         health_care_years_in_retirement = max(0, 65 - retirement_age)
@@ -256,6 +260,8 @@ class RetirementApp(App):
             mortgage_yearly_payment=mortgage_yearly_payment,
             health_care_years_in_retirement=health_care_years_in_retirement,
             health_care_yearly_payment=health_care_yearly_payment,
+            healthcare_inflation_mean=healthcare_inflation_mean,
+            healthcare_inflation_std=DEFAULT_HEALTHCARE_INFLATION_STD,
             death_probs=death_probs,
             filing_status=filing_status,
             enable_roth_conversion=enable_roth_conversion,
@@ -394,7 +400,9 @@ class RetirementApp(App):
             if cfg.mortgage_years_in_retirement > years_until_ss:
                 need_at_ss += cfg.mortgage_yearly_payment
             if cfg.health_care_years_in_retirement > years_until_ss:
-                need_at_ss += cfg.health_care_yearly_payment * (1 + cfg.inflation_mean) ** years_until_ss
+                need_at_ss += cfg.health_care_yearly_payment * (
+                    1 + cfg.healthcare_inflation_mean
+                ) ** years_until_ss
             results = [
                 f"Success rate: {rate:.1f}%",
                 f"Gross needed in year 1: ${gross_from_net(cfg.retirement_yearly_need, cfg):,.0f}",

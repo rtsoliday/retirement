@@ -392,14 +392,23 @@ def _load_inputs() -> SimulationConfig:
     mortgage_years_left = int(user_entries["mortgage_years_left"].get())
     if mortgage_years_left < 0:
         raise ValueError("Mortgage years left cannot be negative")
+    years_to_retirement = retirement_age - current_age
+    healthcare_inflation_mean = parse_percent(
+        user_entries["healthcare_inflation_mean"].get()
+    )
+    healthcare_inflation_std = parse_percent(
+        user_entries["healthcare_inflation_std"].get()
+    )
+    include_medicare_premiums = bool(user_entries["include_medicare_premiums"].get())
+    include_ltc_risk = bool(user_entries["include_ltc_risk"].get())
+    ltc_annual_cost = parse_dollars(user_entries["ltc_annual_cost"].get())
+
     health_care_yearly_payment = health_care_payment * 12 * (
-        1 + inflation_mean
-    ) ** (retirement_age - current_age)
+        1 + healthcare_inflation_mean
+    ) ** years_to_retirement
     mortgage_yearly_payment = mortgage_payment * 12
 
     years_of_retirement = 119 - retirement_age
-
-    years_to_retirement = retirement_age - current_age
     base_retirement_need = average_yearly_need * (1 + inflation_mean) ** years_to_retirement
     mortgage_years_in_retirement = max(0, mortgage_years_left - years_to_retirement)
     health_care_years_in_retirement = max(0, 65 - retirement_age)
@@ -426,17 +435,6 @@ def _load_inputs() -> SimulationConfig:
 
     percent_in_stock_after_retirement = 1.0
     bond_ratio = 0.0
-
-    # Parse healthcare-specific settings
-    healthcare_inflation_mean = parse_percent(
-        user_entries["healthcare_inflation_mean"].get()
-    )
-    healthcare_inflation_std = parse_percent(
-        user_entries["healthcare_inflation_std"].get()
-    )
-    include_medicare_premiums = bool(user_entries["include_medicare_premiums"].get())
-    include_ltc_risk = bool(user_entries["include_ltc_risk"].get())
-    ltc_annual_cost = parse_dollars(user_entries["ltc_annual_cost"].get())
 
     enable_roth_conversion = bool(user_entries["enable_roth_conversion"].get())
     rate_text = user_entries["roth_conversion_rate_cap"].get().strip()
@@ -655,7 +653,9 @@ def run_sim():
         if cfg.mortgage_years_in_retirement > years_until_ss:
             need_at_ss += cfg.mortgage_yearly_payment
         if cfg.health_care_years_in_retirement > years_until_ss:
-            need_at_ss += cfg.health_care_yearly_payment * (1 + cfg.inflation_mean) ** years_until_ss
+            need_at_ss += cfg.health_care_yearly_payment * (
+                1 + cfg.healthcare_inflation_mean
+            ) ** years_until_ss
         results = [
             f"Success rate: {rate:.1f}%",
             f"Gross needed in year 1: ${gross_from_net(cfg.retirement_yearly_need, cfg):,.0f}",
