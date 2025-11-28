@@ -1059,12 +1059,15 @@ def _simulate_parallel(
                             s_bal += refill_amount
                         else:
                             # Not enough in retirement accounts to fully refill
-                            # Just refill what we can
+                            # Just refill what we can after covering expenses
                             available = r_bal
                             r_bal = 0.0
-                            if available + gross_monthly <= total_gross_needed:
-                                actual_refill = max(0.0, available - (rem_gross - refill_amount))
-                                s_bal += actual_refill
+                            # Calculate how much is left for refill after covering the expense portion
+                            # rem_gross includes both expense shortfall and refill amount
+                            # expense_shortfall = rem_gross - refill_amount (what p_bal couldn't cover)
+                            # If available > expense_shortfall, the remainder can go to refill
+                            actual_refill = max(0.0, available - (rem_gross - refill_amount))
+                            s_bal += actual_refill
                     
                     # Check if fully refilled
                     if s_bal >= initial_cash_reserve:
@@ -1626,11 +1629,15 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
                             s_bal += refill_amount
                         else:
                             # Not enough in retirement accounts to fully refill
+                            # Just refill what we can after covering expenses
                             available = r_bal
                             r_bal = 0.0
-                            if available + gross_monthly <= total_gross_needed:
-                                actual_refill = max(0.0, available - (rem_gross - refill_amount))
-                                s_bal += actual_refill
+                            # Calculate how much is left for refill after covering the expense portion
+                            # rem_gross includes both expense shortfall and refill amount
+                            # expense_shortfall = rem_gross - refill_amount (what p_bal couldn't cover)
+                            # If available > expense_shortfall, the remainder can go to refill
+                            actual_refill = max(0.0, available - (rem_gross - refill_amount))
+                            s_bal += actual_refill
                     
                     if s_bal >= initial_cash_reserve:
                         s_bal = initial_cash_reserve
