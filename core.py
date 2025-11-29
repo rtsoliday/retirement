@@ -387,21 +387,24 @@ def _gross_from_net_with_ss_jit(
 ) -> float:
     """
     JIT-compiled version: Find G such that
-       (G + social_security_yearly_amount) - tax_liability(G + social_security_yearly_amount) == net_amt
+       (G + taxable_ss) - tax_liability(G + taxable_ss) == net_amt
+    where taxable_ss is 85% of social_security_yearly_amount (IRS max taxable portion).
     """
-    ss = social_security_yearly_amount
+    # IRS rules: max 85% of SS is taxable (worst case)
+    taxable_ss = social_security_yearly_amount * 0.85
     
     if net_amt <= 0:
         return 0.0
     
     # Initial guess
-    gross = max(0.0, net_amt - ss) * 1.25 + ss * 0.25
+    gross = max(0.0, net_amt - social_security_yearly_amount) * 1.25 + taxable_ss * 0.25
     
-    # Newton-Raphson: solve f(G) = (G + ss) - tax(G + ss) - net = 0
+    # Newton-Raphson: solve for G where G + full_SS - tax(G + taxable_SS) = net_amt
     for _ in range(8):
-        total = gross + ss
+        total = gross + taxable_ss
         tax = _tax_liability_jit(total, bracket_arr, rate_arr, cumulative_tax)
-        net_result = total - tax
+        # Net result = gross withdrawal + full SS benefit - tax on (gross + 85% of SS)
+        net_result = gross + social_security_yearly_amount - tax
         error = net_result - net_amt
         
         if abs(error) < 0.01:
@@ -432,9 +435,9 @@ def gross_from_net_with_ss(
 ) -> float:
     """
     Find G such that
-       (G + social_security_yearly_amount) - tax_liability(G + social_security_yearly_amount, cfg) == net_amt
-    i.e. accounts + SS minus tax on total = net spending.
-    Uses Newton-Raphson for fast convergence.
+       G + social_security_yearly_amount - tax_liability(G + 0.85*social_security_yearly_amount, cfg) == net_amt
+    i.e. accounts + SS minus tax on (accounts + 85% of SS) = net spending.
+    Uses Newton-Raphson for fast convergence. Per IRS rules, max 85% of SS is taxable.
     """
     bracket_arr, rate_arr, cumulative_tax = _ensure_tax_arrays(cfg)
     return _gross_from_net_with_ss_jit(
@@ -1214,7 +1217,8 @@ def _simulate_parallel(
             
             # At end of year, do Roth conversion and update yearly income tracking
             if month_in_year == 11:
-                taxable_income = year_gross_withdrawal + year_ss_received
+                # IRS rules: max 85% of SS is taxable
+                taxable_income = year_gross_withdrawal + year_ss_received * 0.85
                 
                 # Roth conversion at end of year
                 if enable_roth_conversion and p_bal > 0:
@@ -1760,7 +1764,8 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
             
             # End of year processing
             if month_in_year == 11:
-                taxable_income = year_gross_withdrawal + year_ss_received
+                # IRS rules: max 85% of SS is taxable
+                taxable_income = year_gross_withdrawal + year_ss_received * 0.85
                 
                 # Roth conversion at end of year
                 if cfg.enable_roth_conversion:
