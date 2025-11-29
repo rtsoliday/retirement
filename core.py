@@ -52,21 +52,22 @@ IRMAA_BRACKETS_MARRIED = [
 ]
 
 # Long-term care statistics
-# Probability of needing LTC at various ages (cumulative risk)
-# Source: Various actuarial studies
-LTC_PROBABILITY_BY_AGE = {
-    65: 0.02,   # 2% chance of needing LTC at 65
-    70: 0.05,   # 5% by age 70
-    75: 0.10,   # 10% by age 75
-    80: 0.20,   # 20% by age 80
-    85: 0.35,   # 35% by age 85
-    90: 0.50,   # 50% by age 90
+# Probability of needing LTC given death at various ages
+# These are cumulative probabilities - probability of ever needing LTC if you die at this age
+# Source: Various actuarial studies (roughly 50% of people who reach 65 will need LTC at some point)
+LTC_PROBABILITY_BY_DEATH_AGE = {
+    65: 0.15,   # 15% if dying at 65 (early death, less likely to need LTC)
+    70: 0.25,   # 25% if dying at 70
+    75: 0.35,   # 35% if dying at 75
+    80: 0.45,   # 45% if dying at 80
+    85: 0.55,   # 55% if dying at 85
+    90: 0.65,   # 65% if dying at 90+
 }
 
 # Average annual cost of long-term care (2024 dollars)
 LTC_ANNUAL_COST = 100_000  # Approximate for nursing home care
-LTC_DURATION_MEAN = 2.5    # Average years of LTC needed
-LTC_DURATION_STD = 1.5     # Standard deviation
+LTC_DURATION_MEAN = 2.5    # Average years in LTC before death
+LTC_DURATION_STD = 1.0     # Standard deviation (reduced - LTC ends at death)
 
 # Asset correlation defaults
 # Inflation-bond correlation: historically negative (-0.3 to -0.5)
@@ -544,51 +545,63 @@ def calculate_medicare_premium(
     return base_premium + irmaa
 
 
-# LTC probability lookup arrays for JIT (ages and probabilities)
-_LTC_AGES = np.array([65, 70, 75, 80, 85, 90], dtype=np.int64)
-_LTC_PROBS = np.array([0.02, 0.05, 0.10, 0.20, 0.35, 0.50], dtype=np.float64)
+# LTC probability lookup arrays for JIT (death ages and probabilities)
+_LTC_DEATH_AGES = np.array([65, 70, 75, 80, 85, 90], dtype=np.int64)
+_LTC_PROBS_BY_DEATH = np.array([0.15, 0.25, 0.35, 0.45, 0.55, 0.65], dtype=np.float64)
 
 
 @njit(cache=True)
-def sample_ltc_event(
-    age: int, already_had_ltc: bool = False
-) -> Tuple[bool, float]:
+def determine_ltc_need_and_start(
+    death_age: int, 
+    retirement_age: int,
+    ltc_random: float,
+    ltc_duration_random: float
+) -> Tuple[bool, int]:
     """
-    Determine if a long-term care event occurs this year.
+    Determine if LTC is needed and when it starts, based on death age.
+    LTC continues until death.
     
     Args:
-        age: Current age
-        already_had_ltc: Whether person already had an LTC event
+        death_age: Age at which person will die
+        retirement_age: Age at retirement
+        ltc_random: Random number [0,1) for LTC probability
+        ltc_duration_random: Random number for duration variation (standard normal)
     
     Returns:
-        Tuple of (ltc_needed_this_year, ltc_duration_years)
+        Tuple of (ltc_needed, ltc_start_month) where ltc_start_month is months
+        from retirement start. Returns (False, -1) if no LTC needed.
     """
-    if already_had_ltc:
-        return False, 0.0
-    
-    # Interpolate probability based on age using pre-defined arrays
-    if age < _LTC_AGES[0]:
-        annual_prob = 0.001  # Very low before 65
-    elif age >= _LTC_AGES[-1]:
-        annual_prob = 0.10  # Higher annual rate for very old
+    # Determine probability of needing LTC based on death age
+    if death_age < _LTC_DEATH_AGES[0]:
+        ltc_prob = 0.10  # Low probability for early death
+    elif death_age >= _LTC_DEATH_AGES[-1]:
+        ltc_prob = _LTC_PROBS_BY_DEATH[-1]  # Cap at 90+ probability
     else:
-        # Find surrounding ages and interpolate
-        annual_prob = 0.05  # default
-        for i in range(len(_LTC_AGES) - 1):
-            if _LTC_AGES[i] <= age < _LTC_AGES[i + 1]:
-                # Convert cumulative to annual probability
-                prob_low = _LTC_PROBS[i]
-                prob_high = _LTC_PROBS[i + 1]
-                years_span = _LTC_AGES[i + 1] - _LTC_AGES[i]
-                # Approximate annual probability
-                annual_prob = (prob_high - prob_low) / years_span
+        # Interpolate between age brackets
+        ltc_prob = _LTC_PROBS_BY_DEATH[0]  # default
+        for i in range(len(_LTC_DEATH_AGES) - 1):
+            if _LTC_DEATH_AGES[i] <= death_age < _LTC_DEATH_AGES[i + 1]:
+                prob_low = _LTC_PROBS_BY_DEATH[i]
+                prob_high = _LTC_PROBS_BY_DEATH[i + 1]
+                age_span = _LTC_DEATH_AGES[i + 1] - _LTC_DEATH_AGES[i]
+                age_offset = death_age - _LTC_DEATH_AGES[i]
+                ltc_prob = prob_low + (prob_high - prob_low) * age_offset / age_span
                 break
     
-    if np.random.random() < annual_prob:
-        duration = max(0.5, np.random.normal(LTC_DURATION_MEAN, LTC_DURATION_STD))
-        return True, duration
+    # Check if LTC is needed
+    if ltc_random >= ltc_prob:
+        return False, -1
     
-    return False, 0.0
+    # LTC is needed - determine start time
+    # Average 2.5 years before death, with standard deviation of 1.0 year
+    years_before_death = max(0.5, LTC_DURATION_MEAN + LTC_DURATION_STD * ltc_duration_random)
+    
+    # Calculate death month and LTC start month from retirement
+    years_in_retirement_at_death = death_age - retirement_age
+    death_month = years_in_retirement_at_death * 12
+    ltc_start_month = max(1, int(death_month - years_before_death * 12))
+    
+    return True, ltc_start_month
 
 
 def social_security_payout(full_ss_at_67: float, start_age: int) -> float:
@@ -825,10 +838,28 @@ def _simulate_parallel(
         
         healthcare_inflation_factor = 1.0
         
-        # LTC tracking (in months)
+        # Sample death year FIRST (still yearly resolution for mortality)
+        death_year = years_of_retirement
+        for j in range(years_of_retirement):
+            age = retirement_age + j
+            if age < len(death_probs):
+                if all_death_randoms[sim, j] < death_probs[age]:
+                    death_year = j
+                    break
+        death_month = (death_year + 1) * 12
+        
+        # LTC tracking - now determined by death year
         ltc_active = False
-        ltc_months_remaining = 0.0
-        had_ltc_event = False
+        ltc_start_month = -1  # Month when LTC starts (-1 means no LTC)
+        
+        # Determine LTC need based on death age (after we know when they die)
+        if include_ltc_risk:
+            death_age = retirement_age + death_year
+            needs_ltc, ltc_start_month = determine_ltc_need_and_start(
+                death_age, retirement_age, 
+                all_ltc_randoms[sim, 0],  # Use first random for probability
+                all_ltc_duration_randoms[sim, 0]  # Use first random for duration
+            )
         
         # Dynamic withdrawal strategy tracking
         # Running tally of returns percentage since first drawdown (RTRP)
@@ -844,16 +875,6 @@ def _simulate_parallel(
             w += mortgage_monthly_payment
         if health_care_remaining > 0:
             w += health_care_cost
-        
-        # Sample death year inline (still yearly resolution for mortality)
-        death_year = years_of_retirement
-        for j in range(years_of_retirement):
-            age = retirement_age + j
-            if age < len(death_probs):
-                if all_death_randoms[sim, j] < death_probs[age]:
-                    death_year = j
-                    break
-        death_month = (death_year + 1) * 12
         
         # Track yearly values for tax calculations (tax is done yearly)
         year_gross_withdrawal = 0.0
@@ -1164,41 +1185,18 @@ def _simulate_parallel(
                             break
                 medicare_cost = base_premium + surcharge
             
-            # LTC costs (monthly)
+            # LTC costs (monthly) - LTC starts at predetermined month and continues until death
             ltc_cost = 0.0
             entering_ltc_this_month = False
-            if include_ltc_risk:
-                if ltc_active and ltc_months_remaining > 0:
+            if include_ltc_risk and ltc_start_month > 0:
+                # Check if we're entering LTC this month
+                if not ltc_active and month_idx >= ltc_start_month:
+                    ltc_active = True
+                    entering_ltc_this_month = True
+                
+                # If in LTC, apply the cost (LTC continues until death)
+                if ltc_active:
                     ltc_cost = ltc_monthly_cost * healthcare_inflation_factor
-                    ltc_months_remaining -= 1.0
-                    if ltc_months_remaining <= 0:
-                        ltc_active = False
-                elif not had_ltc_event and month_in_year == 0:
-                    # Only check for LTC at start of each year
-                    if current_age < 65:
-                        annual_prob = 0.001
-                    elif current_age >= 90:
-                        annual_prob = 0.10
-                    else:
-                        annual_prob = 0.05
-                        if 65 <= current_age < 70:
-                            annual_prob = (0.05 - 0.02) / 5
-                        elif 70 <= current_age < 75:
-                            annual_prob = (0.10 - 0.05) / 5
-                        elif 75 <= current_age < 80:
-                            annual_prob = (0.20 - 0.10) / 5
-                        elif 80 <= current_age < 85:
-                            annual_prob = (0.35 - 0.20) / 5
-                        elif 85 <= current_age < 90:
-                            annual_prob = (0.50 - 0.35) / 5
-                    
-                    if all_ltc_randoms[sim, year_idx] < annual_prob:
-                        had_ltc_event = True
-                        ltc_active = True
-                        ltc_years = max(0.5, 2.5 + 1.5 * all_ltc_duration_randoms[sim, year_idx])
-                        ltc_months_remaining = ltc_years * 12
-                        ltc_cost = ltc_monthly_cost * healthcare_inflation_factor
-                        entering_ltc_this_month = True
             
             if entering_ltc_this_month and mortgage_remaining > 0:
                 mortgage_remaining = 0
@@ -1402,9 +1400,6 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
         health_care_cost = cfg.health_care_monthly_payment if health_care_remaining > 0 else 0.0
         
         healthcare_inflation_factor = 1.0
-        ltc_active = False
-        ltc_months_remaining = 0.0
-        had_ltc_event = False
         
         # Dynamic withdrawal strategy tracking
         # initial_cash_reserve tracks the target value to refill to
@@ -1423,6 +1418,22 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
             cfg.retirement_age, years_of_retirement, cfg.death_probs
         )
         death_month = (death_year + 1) * 12
+        
+        # LTC tracking - now determined by death year
+        ltc_active = False
+        ltc_start_month = -1  # Month when LTC starts (-1 means no LTC)
+        
+        # Determine LTC need based on death age (after we know when they die)
+        if cfg.include_ltc_risk:
+            death_age = cfg.retirement_age + death_year
+            # Use random numbers for LTC determination
+            ltc_random = np.random.random()
+            ltc_duration_random = np.random.standard_normal()
+            needs_ltc, ltc_start_month = determine_ltc_need_and_start(
+                death_age, cfg.retirement_age, 
+                ltc_random,
+                ltc_duration_random
+            )
         
         # Generate monthly returns
         stock_returns, bond_returns, infls = generate_correlated_returns(
@@ -1720,23 +1731,18 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
                     healthcare_inflation_factor
                 ) / 12  # Monthly portion
             
-            # LTC costs (monthly)
+            # LTC costs (monthly) - LTC starts at predetermined month and continues until death
             ltc_cost = 0.0
             entering_ltc_this_month = False
-            if cfg.include_ltc_risk:
-                if ltc_active and ltc_months_remaining > 0:
+            if cfg.include_ltc_risk and ltc_start_month > 0:
+                # Check if we're entering LTC this month
+                if not ltc_active and month_idx >= ltc_start_month:
+                    ltc_active = True
+                    entering_ltc_this_month = True
+                
+                # If in LTC, apply the cost (LTC continues until death)
+                if ltc_active:
                     ltc_cost = cfg.ltc_monthly_cost * healthcare_inflation_factor
-                    ltc_months_remaining -= 1.0
-                    if ltc_months_remaining <= 0:
-                        ltc_active = False
-                elif not had_ltc_event and month_in_year == 0:
-                    ltc_needed, ltc_duration = sample_ltc_event(current_age, had_ltc_event)
-                    if ltc_needed:
-                        had_ltc_event = True
-                        ltc_active = True
-                        ltc_months_remaining = ltc_duration * 12
-                        ltc_cost = cfg.ltc_monthly_cost * healthcare_inflation_factor
-                        entering_ltc_this_month = True
             
             if entering_ltc_this_month and mortgage_remaining > 0:
                 mortgage_remaining = 0
