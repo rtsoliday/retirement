@@ -221,6 +221,9 @@ DEFAULT_GENERAL = {
     "inflation_std_dev": 0.04,
     "inflation_bond_correlation": DEFAULT_INFLATION_BOND_CORRELATION,
     "stock_bond_correlation": DEFAULT_STOCK_BOND_CORRELATION,
+    "savings_interest_rate": 0.04,
+    "healthcare_inflation_mean": 0.055,
+    "healthcare_inflation_std": 0.02,
 }
 
 PERCENT_FIELDS = {
@@ -257,14 +260,11 @@ DEFAULT_USER = {
     "current_roth": 100_000,
     "current_401a_and_403b": 800_000,
     "current_savings": 50_000,
-    "savings_interest_rate": 0.04,
     "full_social_security_at_67": 30_000,
     "social_security_age_started": 62,
     "health_care_payment": 650,
     "mortgage_payment": 0,
     "mortgage_years_left": 0,
-    "healthcare_inflation_mean": 0.055,
-    "healthcare_inflation_std": 0.02,
     "include_medicare_premiums": True,
     "include_ltc_risk": False,
     "ltc_annual_cost": 100_000,
@@ -376,6 +376,13 @@ def _load_inputs() -> SimulationConfig:
     stock_bond_correlation = parse_correlation(
         gen_entries["stock_bond_correlation"].get()
     )
+    savings_interest_rate = parse_percent(gen_entries["savings_interest_rate"].get())
+    healthcare_inflation_mean = parse_percent(
+        gen_entries["healthcare_inflation_mean"].get()
+    )
+    healthcare_inflation_std = parse_percent(
+        gen_entries["healthcare_inflation_std"].get()
+    )
 
     gender = user_entries["gender"].get().strip().lower()
     filing_status = user_entries["filing_status"].get().strip().lower()
@@ -391,7 +398,6 @@ def _load_inputs() -> SimulationConfig:
     current_roth = parse_dollars(user_entries["current_roth"].get())
     current_401a_and_403b = parse_dollars(user_entries["current_401a_and_403b"].get())
     current_savings = parse_dollars(user_entries["current_savings"].get())
-    savings_interest_rate = parse_percent(user_entries["savings_interest_rate"].get())
     full_social_security_at_67 = parse_dollars(
         user_entries["full_social_security_at_67"].get()
     )
@@ -411,12 +417,6 @@ def _load_inputs() -> SimulationConfig:
     if mortgage_years_left < 0:
         raise ValueError("Mortgage years left cannot be negative")
     years_to_retirement = retirement_age - current_age
-    healthcare_inflation_mean = parse_percent(
-        user_entries["healthcare_inflation_mean"].get()
-    )
-    healthcare_inflation_std = parse_percent(
-        user_entries["healthcare_inflation_std"].get()
-    )
     include_medicare_premiums = bool(user_entries["include_medicare_premiums"].get())
     include_ltc_risk = bool(user_entries["include_ltc_risk"].get())
     ltc_annual_cost = parse_dollars(user_entries["ltc_annual_cost"].get())
