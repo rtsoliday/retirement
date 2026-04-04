@@ -772,7 +772,7 @@ if __name__ == "__main__":
     parameters_frame.pack(fill="x", padx=10, pady=5)
     
     general_frame = ttk.LabelFrame(parameters_frame, text="General Parameters")
-    general_frame.pack(fill="x", side="left", padx=10, pady=5)
+    general_frame.pack(fill="x", side="left", anchor=tk.N, padx=10, pady=5)
     for key, default in DEFAULT_GENERAL.items():
         row = ttk.Frame(general_frame)
         row.pack(fill="x", pady=2)
@@ -795,7 +795,7 @@ if __name__ == "__main__":
         ToolTip(ent, ENTRY_HELP.get(key, ""))
 
     user_frame = ttk.LabelFrame(parameters_frame, text="User-specific Parameters")
-    user_frame.pack(fill="x", side="left", padx=10, pady=5)
+    user_frame.pack(fill="x", side="left", anchor=tk.N, padx=10, pady=5)
     for key, default in DEFAULT_USER.items():
         row = ttk.Frame(user_frame)
         row.pack(fill="x", pady=2)
