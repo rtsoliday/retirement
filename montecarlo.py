@@ -754,7 +754,7 @@ def load_defaults():
 if __name__ == "__main__":
     root = tk.Tk()
     root.title("Retirement Simulator")
-    root.geometry("460x980")
+    root.geometry("1024x800")
 
     gen_entries = {}
     user_entries = {}
@@ -768,8 +768,11 @@ if __name__ == "__main__":
         for k in list(DEFAULT_GENERAL) + list(DEFAULT_USER)
     )
 
-    general_frame = ttk.LabelFrame(root, text="General Parameters")
-    general_frame.pack(fill="x", padx=10, pady=5)
+    parameters_frame = ttk.Frame(root)
+    parameters_frame.pack(fill="x", padx=10, pady=5)
+    
+    general_frame = ttk.LabelFrame(parameters_frame, text="General Parameters")
+    general_frame.pack(fill="x", side="left", anchor=tk.N, padx=10, pady=5)
     for key, default in DEFAULT_GENERAL.items():
         row = ttk.Frame(general_frame)
         row.pack(fill="x", pady=2)
@@ -791,8 +794,8 @@ if __name__ == "__main__":
         gen_entries[key] = ent
         ToolTip(ent, ENTRY_HELP.get(key, ""))
 
-    user_frame = ttk.LabelFrame(root, text="User-specific Parameters")
-    user_frame.pack(fill="x", padx=10, pady=5)
+    user_frame = ttk.LabelFrame(parameters_frame, text="User-specific Parameters")
+    user_frame.pack(fill="x", side="left", anchor=tk.N, padx=10, pady=5)
     for key, default in DEFAULT_USER.items():
         row = ttk.Frame(user_frame)
         row.pack(fill="x", pady=2)
@@ -897,9 +900,9 @@ if __name__ == "__main__":
 
     run_frame = ttk.Frame(root)
     run_frame.pack(fill="x", padx=10, pady=5)
-    ttk.Button(run_frame, text="Run Simulations", command=run_sim).pack()
-    ttk.Button(run_frame, text="Explain Calculations", command=explain_calculations).pack()
-    ttk.Button(run_frame, text="Load Defaults", command=load_defaults).pack()
+    ttk.Button(run_frame, text="Run Simulations", command=run_sim).pack(side="left", padx=5)
+    ttk.Button(run_frame, text="Explain Calculations", command=explain_calculations).pack(side="left", padx=5)
+    ttk.Button(run_frame, text="Load Defaults", command=load_defaults).pack(side="left", padx=5)
 
     results_frame = ttk.LabelFrame(root, text="Results")
     results_frame.pack(fill="both", expand=True, padx=10, pady=5)
