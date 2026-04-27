@@ -83,6 +83,14 @@ TAX_RATES = {
     for status in TAX_BRACKETS
 }
 
+# Social Security taxation thresholds (not inflation-adjusted in current law).
+# Tuple: (base_threshold, second_threshold, second_tier_base_amount)
+SS_TAX_THRESHOLDS = {
+    "single": (25_000.0, 34_000.0, 4_500.0),
+    "married": (32_000.0, 44_000.0, 6_000.0),
+    "head_of_household": (25_000.0, 34_000.0, 4_500.0),
+}
+
 # Provide module-level single-filer defaults for backwards compatibility
 brackets = TAX_BRACKETS["single"]
 rates = TAX_RATES["single"]
@@ -113,6 +121,28 @@ def parse_dollars(val: str) -> float:
     if amt < 0:
         raise ValueError("Dollar amount cannot be negative")
     return amt
+
+
+def taxable_social_security(
+    other_income: float, social_security_yearly_amount: float, filing_status: str
+) -> float:
+    """Calculate taxable Social Security benefits using IRS provisional income rules."""
+    if social_security_yearly_amount <= 0:
+        return 0.0
+    try:
+        base, second, second_tier_base = SS_TAX_THRESHOLDS[filing_status]
+    except KeyError as exc:  # pragma: no cover - guarded by config validation
+        raise ValueError(f"Unknown filing status: {filing_status}") from exc
+
+    provisional_income = other_income + 0.5 * social_security_yearly_amount
+    if provisional_income <= base:
+        return 0.0
+    if provisional_income <= second:
+        taxable = 0.5 * (provisional_income - base)
+        return min(taxable, 0.5 * social_security_yearly_amount)
+
+    taxable = 0.85 * (provisional_income - second) + second_tier_base
+    return min(taxable, 0.85 * social_security_yearly_amount)
 
 
 @njit(cache=True)
@@ -220,6 +250,17 @@ class SimulationConfig:
                 raise ValueError(f"Unknown filing status: {self.filing_status}")
             self.tax_brackets = TAX_BRACKETS[self.filing_status].copy()
             self.tax_rates = TAX_RATES[self.filing_status].copy()
+        self.death_probs = np.asarray(self.death_probs, dtype=np.float64)
+        if self.death_probs.ndim != 1 or self.death_probs.size == 0:
+            raise ValueError("death_probs must be provided as a 1D array.")
+        required_len = self.retirement_age + self.years_of_retirement
+        if self.death_probs.size < required_len:
+            raise ValueError(
+                "death_probs must cover ages up to "
+                f"{required_len - 1} (got length {self.death_probs.size})."
+            )
+        if np.any(self.death_probs < 0.0) or np.any(self.death_probs > 1.0):
+            raise ValueError("death_probs must contain values between 0 and 1.")
         self._roth_conversion_rate_index = None
         self._roth_conversion_upper_limit = None
         if self.enable_roth_conversion:
@@ -378,9 +419,48 @@ def gross_from_net(net_amt: float, cfg) -> float:
 
 
 @njit(cache=True)
+def _taxable_social_security_and_derivative(
+    other_income: float,
+    social_security_yearly_amount: float,
+    filing_status_is_married: bool,
+) -> Tuple[float, float]:
+    """Return taxable Social Security and d(taxable_ss)/d(other_income)."""
+    if social_security_yearly_amount <= 0:
+        return 0.0, 0.0
+
+    if filing_status_is_married:
+        base = 32000.0
+        second = 44000.0
+        second_tier_base = 6000.0
+    else:
+        base = 25000.0
+        second = 34000.0
+        second_tier_base = 4500.0
+
+    provisional_income = other_income + 0.5 * social_security_yearly_amount
+
+    if provisional_income <= base:
+        return 0.0, 0.0
+
+    if provisional_income <= second:
+        taxable = 0.5 * (provisional_income - base)
+        cap = 0.5 * social_security_yearly_amount
+        if taxable >= cap:
+            return cap, 0.0
+        return taxable, 0.5
+
+    taxable = 0.85 * (provisional_income - second) + second_tier_base
+    cap = 0.85 * social_security_yearly_amount
+    if taxable >= cap:
+        return cap, 0.0
+    return taxable, 0.85
+
+
+@njit(cache=True)
 def _gross_from_net_with_ss_jit(
     net_amt: float,
     social_security_yearly_amount: float,
+    filing_status_is_married: bool,
     bracket_arr: np.ndarray,
     rate_arr: np.ndarray,
     cumulative_tax: np.ndarray
@@ -388,22 +468,23 @@ def _gross_from_net_with_ss_jit(
     """
     JIT-compiled version: Find G such that
        (G + taxable_ss) - tax_liability(G + taxable_ss) == net_amt
-    where taxable_ss is 85% of social_security_yearly_amount (IRS max taxable portion).
+    where taxable_ss follows IRS provisional income rules (capped at 85%).
     """
-    # IRS rules: max 85% of SS is taxable (worst case)
-    taxable_ss = social_security_yearly_amount * 0.85
-    
     if net_amt <= 0:
         return 0.0
     
     # Initial guess
-    gross = max(0.0, net_amt - social_security_yearly_amount) * 1.25 + taxable_ss * 0.25
+    gross = max(0.0, net_amt - social_security_yearly_amount) * 1.25 + \
+        social_security_yearly_amount * 0.25
     
     # Newton-Raphson: solve for G where G + full_SS - tax(G + taxable_SS) = net_amt
     for _ in range(8):
+        taxable_ss, taxable_ss_derivative = _taxable_social_security_and_derivative(
+            gross, social_security_yearly_amount, filing_status_is_married
+        )
         total = gross + taxable_ss
         tax = _tax_liability_jit(total, bracket_arr, rate_arr, cumulative_tax)
-        # Net result = gross withdrawal + full SS benefit - tax on (gross + 85% of SS)
+        # Net result = gross withdrawal + full SS benefit - tax on (gross + taxable SS)
         net_result = gross + social_security_yearly_amount - tax
         error = net_result - net_amt
         
@@ -418,7 +499,7 @@ def _gross_from_net_with_ss_jit(
             bracket_idx = len(rate_arr) - 1
         marginal_rate = rate_arr[bracket_idx]
         
-        derivative = 1.0 - marginal_rate
+        derivative = 1.0 - marginal_rate * (1.0 + taxable_ss_derivative)
         if derivative > 0.1:
             gross = gross - error / derivative
         else:
@@ -435,13 +516,14 @@ def gross_from_net_with_ss(
 ) -> float:
     """
     Find G such that
-       G + social_security_yearly_amount - tax_liability(G + 0.85*social_security_yearly_amount, cfg) == net_amt
-    i.e. accounts + SS minus tax on (accounts + 85% of SS) = net spending.
-    Uses Newton-Raphson for fast convergence. Per IRS rules, max 85% of SS is taxable.
+       G + social_security_yearly_amount - tax_liability(G + taxable_ss, cfg) == net_amt
+    where taxable_ss follows IRS provisional income rules (capped at 85% of SS).
+    Uses Newton-Raphson for fast convergence.
     """
     bracket_arr, rate_arr, cumulative_tax = _ensure_tax_arrays(cfg)
     return _gross_from_net_with_ss_jit(
         net_amt, social_security_yearly_amount,
+        cfg.filing_status == "married",
         bracket_arr, rate_arr, cumulative_tax
     )
 
@@ -872,17 +954,28 @@ def _simulate_parallel(
         # For dynamic withdrawal, s_bal (savings) serves as the cash reserve (C)
         # initial_cash_reserve tracks the target value to refill to
         
-        # Initial monthly withdrawal need
-        w = base_need
-        if mortgage_remaining > 0:
-            w += mortgage_monthly_payment
-        if health_care_remaining > 0:
-            w += health_care_cost
-        
         # Track yearly values for tax calculations (tax is done yearly)
         year_gross_withdrawal = 0.0
         year_ss_received = 0.0
         last_yearly_taxable_income = 0.0  # For IRMAA and Roth conversion
+
+        if include_ltc_risk and ltc_start_month == 1:
+            ltc_active = True
+
+        # Initial monthly withdrawal need
+        medicare_cost = 0.0
+        if include_medicare_premiums and retirement_age >= 65:
+            medicare_cost = medicare_base_monthly * healthcare_inflation_factor
+        if ltc_active:
+            w = ltc_monthly_cost * healthcare_inflation_factor + medicare_cost
+            mortgage_remaining = 0
+        else:
+            w = base_need
+            if mortgage_remaining > 0:
+                w += mortgage_monthly_payment
+            if health_care_remaining > 0:
+                w += health_care_cost
+            w += medicare_cost
         
         succeeded = True
         for month_idx in range(1, months_of_retirement + 1):
@@ -970,7 +1063,12 @@ def _simulate_parallel(
                         if receiving_ss:
                             ss_annual = social_security_monthly_amount * 12
                             gross_annual = _gross_from_net_with_ss_jit(
-                                annualized_remaining, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                                annualized_remaining,
+                                ss_annual,
+                                filing_status_is_married,
+                                bracket_arr,
+                                rate_arr,
+                                cumulative_tax,
                             )
                         else:
                             gross_annual = _gross_from_net_jit(annualized_remaining, bracket_arr, rate_arr, cumulative_tax)
@@ -986,7 +1084,9 @@ def _simulate_parallel(
                             if r_bal >= rem_gross:
                                 r_bal -= rem_gross
                             else:
+                                rem_gross -= r_bal
                                 r_bal = 0.0
+                                s_bal -= rem_gross
                                 
                 elif rp < dynamic_withdrawal_trigger and s_bal <= 0:
                     # Out of reserve funds month - pay expenses normally
@@ -998,7 +1098,12 @@ def _simulate_parallel(
                     if receiving_ss:
                         ss_annual = social_security_monthly_amount * 12
                         gross_annual = _gross_from_net_with_ss_jit(
-                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                            annualized_need,
+                            ss_annual,
+                            filing_status_is_married,
+                            bracket_arr,
+                            rate_arr,
+                            cumulative_tax,
                         )
                         gross_monthly = gross_annual / 12
                         year_ss_received += social_security_monthly_amount
@@ -1029,7 +1134,12 @@ def _simulate_parallel(
                     if receiving_ss:
                         ss_annual = social_security_monthly_amount * 12
                         gross_annual = _gross_from_net_with_ss_jit(
-                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                            annualized_need,
+                            ss_annual,
+                            filing_status_is_married,
+                            bracket_arr,
+                            rate_arr,
+                            cumulative_tax,
                         )
                         gross_monthly = gross_annual / 12
                         year_ss_received += social_security_monthly_amount
@@ -1058,7 +1168,12 @@ def _simulate_parallel(
                     if receiving_ss:
                         ss_annual = social_security_monthly_amount * 12
                         gross_annual = _gross_from_net_with_ss_jit(
-                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                            annualized_need,
+                            ss_annual,
+                            filing_status_is_married,
+                            bracket_arr,
+                            rate_arr,
+                            cumulative_tax,
                         )
                         gross_monthly = gross_annual / 12
                         year_ss_received += social_security_monthly_amount
@@ -1107,7 +1222,12 @@ def _simulate_parallel(
                     if receiving_ss:
                         ss_annual = social_security_monthly_amount * 12
                         gross_annual = _gross_from_net_with_ss_jit(
-                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                            annualized_need,
+                            ss_annual,
+                            filing_status_is_married,
+                            bracket_arr,
+                            rate_arr,
+                            cumulative_tax,
                         )
                         gross_monthly = gross_annual / 12
                         year_ss_received += social_security_monthly_amount
@@ -1136,7 +1256,12 @@ def _simulate_parallel(
                 if receiving_ss:
                     ss_annual = social_security_monthly_amount * 12
                     gross_annual = _gross_from_net_with_ss_jit(
-                        annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                        annualized_need,
+                        ss_annual,
+                        filing_status_is_married,
+                        bracket_arr,
+                        rate_arr,
+                        cumulative_tax,
                     )
                     gross_monthly = gross_annual / 12
                     year_ss_received += social_security_monthly_amount
@@ -1170,9 +1295,12 @@ def _simulate_parallel(
                 health_care_cost *= (1.0 + healthcare_infl)
                 health_care_remaining -= 1
             
-            # Medicare costs (age 65+) - monthly
+            # Medicare costs (age 65+) - monthly, for next month's spending.
             medicare_cost = 0.0
-            if include_medicare_premiums and current_age >= 65:
+            next_month_idx = month_idx + 1
+            next_year_idx = (next_month_idx - 1) // 12
+            next_age = retirement_age + next_year_idx
+            if include_medicare_premiums and next_age >= 65:
                 base_premium = medicare_base_monthly * healthcare_inflation_factor
                 # IRMAA surcharge based on last year's income
                 surcharge = 0.0
@@ -1192,8 +1320,8 @@ def _simulate_parallel(
             ltc_cost = 0.0
             entering_ltc_this_month = False
             if include_ltc_risk and ltc_start_month > 0:
-                # Check if we're entering LTC this month
-                if not ltc_active and month_idx >= ltc_start_month:
+                # Check if we're entering LTC next month; w is the next month's need.
+                if not ltc_active and next_month_idx >= ltc_start_month:
                     ltc_active = True
                     entering_ltc_this_month = True
                 
@@ -1217,8 +1345,10 @@ def _simulate_parallel(
             
             # At end of year, do Roth conversion and update yearly income tracking
             if month_in_year == 11:
-                # IRS rules: max 85% of SS is taxable
-                taxable_income = year_gross_withdrawal + year_ss_received * 0.85
+                taxable_ss, _ = _taxable_social_security_and_derivative(
+                    year_gross_withdrawal, year_ss_received, filing_status_is_married
+                )
+                taxable_income = year_gross_withdrawal + taxable_ss
                 
                 # Roth conversion at end of year
                 if enable_roth_conversion and p_bal > 0:
@@ -1405,19 +1535,6 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
         
         healthcare_inflation_factor = 1.0
         
-        # Dynamic withdrawal strategy tracking
-        # initial_cash_reserve tracks the target value to refill to
-        # s_bal serves as the cash reserve (C)
-        initial_cash_reserve = cfg.current_savings if cfg.enable_dynamic_withdrawal else 0.0
-        running_return_tally = 0.0
-        in_drawdown_sequence = False
-        
-        w = base_need
-        if mortgage_remaining > 0:
-            w += cfg.mortgage_monthly_payment
-        if health_care_remaining > 0:
-            w += health_care_cost
-            
         death_year = sample_death_year(
             cfg.retirement_age, years_of_retirement, cfg.death_probs
         )
@@ -1438,6 +1555,13 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
                 ltc_random,
                 ltc_duration_random
             )
+
+        # Dynamic withdrawal strategy tracking
+        # initial_cash_reserve tracks the target value to refill to
+        # s_bal serves as the cash reserve (C)
+        initial_cash_reserve = cfg.current_savings if cfg.enable_dynamic_withdrawal else 0.0
+        running_return_tally = 0.0
+        in_drawdown_sequence = False
         
         # Generate monthly returns
         stock_returns, bond_returns, infls = generate_correlated_returns(
@@ -1459,6 +1583,29 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
         year_gross_withdrawal = 0.0
         year_ss_received = 0.0
         last_yearly_taxable_income = 0.0
+
+        if cfg.include_ltc_risk and ltc_start_month == 1:
+            ltc_active = True
+
+        medicare_cost = 0.0
+        if cfg.include_medicare_premiums and cfg.retirement_age >= 65:
+            medicare_cost = calculate_medicare_premium(
+                cfg.retirement_age,
+                last_yearly_taxable_income,
+                cfg.filing_status,
+                healthcare_inflation_factor,
+            ) / 12
+
+        w = base_need
+        if ltc_active:
+            w = cfg.ltc_monthly_cost * healthcare_inflation_factor + medicare_cost
+            mortgage_remaining = 0
+        else:
+            if mortgage_remaining > 0:
+                w += cfg.mortgage_monthly_payment
+            if health_care_remaining > 0:
+                w += health_care_cost
+            w += medicare_cost
         
         failed = False
         for month_idx in range(1, months_of_retirement + 1):
@@ -1538,7 +1685,12 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
                         if receiving_ss:
                             ss_annual = cfg.social_security_monthly_amount * 12
                             gross_annual = _gross_from_net_with_ss_jit(
-                                annualized_remaining, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                                annualized_remaining,
+                                ss_annual,
+                                cfg.filing_status == "married",
+                                bracket_arr,
+                                rate_arr,
+                                cumulative_tax,
                             )
                         else:
                             gross_annual = _gross_from_net_jit(annualized_remaining, bracket_arr, rate_arr, cumulative_tax)
@@ -1553,7 +1705,9 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
                             if r_bal >= rem_gross:
                                 r_bal -= rem_gross
                             else:
+                                rem_gross -= r_bal
                                 r_bal = 0.0
+                                s_bal -= rem_gross
                                 
                 elif rp < cfg.dynamic_withdrawal_trigger and s_bal <= 0:
                     in_drawdown_sequence = True
@@ -1563,7 +1717,12 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
                     if receiving_ss:
                         ss_annual = cfg.social_security_monthly_amount * 12
                         gross_annual = _gross_from_net_with_ss_jit(
-                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                            annualized_need,
+                            ss_annual,
+                            cfg.filing_status == "married",
+                            bracket_arr,
+                            rate_arr,
+                            cumulative_tax,
                         )
                         gross_monthly = gross_annual / 12
                         year_ss_received += cfg.social_security_monthly_amount
@@ -1592,7 +1751,12 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
                     if receiving_ss:
                         ss_annual = cfg.social_security_monthly_amount * 12
                         gross_annual = _gross_from_net_with_ss_jit(
-                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                            annualized_need,
+                            ss_annual,
+                            cfg.filing_status == "married",
+                            bracket_arr,
+                            rate_arr,
+                            cumulative_tax,
                         )
                         gross_monthly = gross_annual / 12
                         year_ss_received += cfg.social_security_monthly_amount
@@ -1620,7 +1784,12 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
                     if receiving_ss:
                         ss_annual = cfg.social_security_monthly_amount * 12
                         gross_annual = _gross_from_net_with_ss_jit(
-                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                            annualized_need,
+                            ss_annual,
+                            cfg.filing_status == "married",
+                            bracket_arr,
+                            rate_arr,
+                            cumulative_tax,
                         )
                         gross_monthly = gross_annual / 12
                         year_ss_received += cfg.social_security_monthly_amount
@@ -1667,7 +1836,12 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
                     if receiving_ss:
                         ss_annual = cfg.social_security_monthly_amount * 12
                         gross_annual = _gross_from_net_with_ss_jit(
-                            annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                            annualized_need,
+                            ss_annual,
+                            cfg.filing_status == "married",
+                            bracket_arr,
+                            rate_arr,
+                            cumulative_tax,
                         )
                         gross_monthly = gross_annual / 12
                         year_ss_received += cfg.social_security_monthly_amount
@@ -1694,7 +1868,12 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
                 if receiving_ss:
                     ss_annual = cfg.social_security_monthly_amount * 12
                     gross_annual = _gross_from_net_with_ss_jit(
-                        annualized_need, ss_annual, bracket_arr, rate_arr, cumulative_tax
+                        annualized_need,
+                        ss_annual,
+                        cfg.filing_status == "married",
+                        bracket_arr,
+                        rate_arr,
+                        cumulative_tax,
                     )
                     gross_monthly = gross_annual / 12
                     year_ss_received += cfg.social_security_monthly_amount
@@ -1725,11 +1904,14 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
                 health_care_cost *= (1.0 + healthcare_infl)
                 health_care_remaining -= 1
             
-            # Medicare costs (monthly)
+            # Medicare costs (monthly), for next month's spending.
             medicare_cost = 0.0
-            if cfg.include_medicare_premiums and current_age >= 65:
+            next_month_idx = month_idx + 1
+            next_year_idx = (next_month_idx - 1) // 12
+            next_age = cfg.retirement_age + next_year_idx
+            if cfg.include_medicare_premiums and next_age >= 65:
                 medicare_cost = calculate_medicare_premium(
-                    current_age, 
+                    next_age,
                     last_yearly_taxable_income, 
                     cfg.filing_status,
                     healthcare_inflation_factor
@@ -1739,8 +1921,8 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
             ltc_cost = 0.0
             entering_ltc_this_month = False
             if cfg.include_ltc_risk and ltc_start_month > 0:
-                # Check if we're entering LTC this month
-                if not ltc_active and month_idx >= ltc_start_month:
+                # Check if we're entering LTC next month; w is the next month's need.
+                if not ltc_active and next_month_idx >= ltc_start_month:
                     ltc_active = True
                     entering_ltc_this_month = True
                 
@@ -1764,8 +1946,10 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
             
             # End of year processing
             if month_in_year == 11:
-                # IRS rules: max 85% of SS is taxable
-                taxable_income = year_gross_withdrawal + year_ss_received * 0.85
+                taxable_ss = taxable_social_security(
+                    year_gross_withdrawal, year_ss_received, cfg.filing_status
+                )
+                taxable_income = year_gross_withdrawal + taxable_ss
                 
                 # Roth conversion at end of year
                 if cfg.enable_roth_conversion:

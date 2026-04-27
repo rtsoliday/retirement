@@ -1,0 +1,40 @@
+{
+  "general": {
+    "number_of_simulations": 500000,
+    "pre_retirement_mean_return": 0.1472,
+    "pre_retirement_std_dev": 0.292,
+    "stock_mean_return": 0.10460000000000001,
+    "stock_std_dev": 0.20800000000000002,
+    "bond_mean_return": 0.03,
+    "bond_std_dev": 0.053,
+    "inflation_mean": 0.033,
+    "inflation_std_dev": 0.04,
+    "inflation_bond_correlation": -0.4,
+    "stock_bond_correlation": 0.1
+  },
+  "user": {
+    "gender": "male",
+    "filing_status": "single",
+    "current_age": 51,
+    "retirement_age": 51,
+    "average_yearly_need": 94434.0,
+    "current_roth": 89246.0,
+    "current_401a_and_403b": 984210.0,
+    "current_savings": 50299.0,
+    "savings_interest_rate": 0.04,
+    "full_social_security_at_67": 50094.0,
+    "social_security_age_started": 62,
+    "mortgage_payment": 1294.0,
+    "mortgage_years_left": 10,
+    "health_care_payment": 650.0,
+    "healthcare_inflation_mean": 0.055,
+    "healthcare_inflation_std": 0.02,
+    "include_medicare_premiums": true,
+    "include_ltc_risk": true,
+    "ltc_annual_cost": 100000.0,
+    "enable_roth_conversion": true,
+    "roth_conversion_rate_cap": 0.22,
+    "enable_dynamic_withdrawal": false,
+    "dynamic_withdrawal_trigger": -0.03
+  }
+}
