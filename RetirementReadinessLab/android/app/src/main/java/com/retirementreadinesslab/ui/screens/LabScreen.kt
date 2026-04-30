@@ -357,7 +357,7 @@ private fun LabComparisonType.subtitle(): String {
         LabComparisonType.RothConversion -> "Fill the 22% bracket after retirement"
         LabComparisonType.LongTermCare -> "Late-life care shock"
         LabComparisonType.HealthcareInflation -> "Higher medical cost growth"
-        LabComparisonType.MarketDownturn -> "Lower expected returns, higher volatility"
+        LabComparisonType.MarketDownturn -> "Lower expected returns, wider swings"
         LabComparisonType.MortgagePayoff -> "Tests retirement cash flow without mortgage payments"
     }
 }

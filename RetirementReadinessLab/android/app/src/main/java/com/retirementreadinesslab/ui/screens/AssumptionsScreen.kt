@@ -135,12 +135,14 @@ fun AssumptionsScreen(state: RetirementLabState) {
         item {
             AssumptionCard("Spending and Social Security") {
                 MoneyField("Annual base spending", form.annualSpending) { form = form.copy(annualSpending = it) }
-                PercentField("General inflation mean", form.generalInflationMean) {
-                    form = form.copy(generalInflationMean = it)
-                }
-                PercentField("General inflation volatility", form.generalInflationStdDev) {
-                    form = form.copy(generalInflationStdDev = it)
-                }
+                RateFieldHelp()
+                RatePairFields(
+                    title = "General inflation",
+                    averageValue = form.generalInflationMean,
+                    swingValue = form.generalInflationStdDev,
+                    onAverageChange = { form = form.copy(generalInflationMean = it) },
+                    onSwingChange = { form = form.copy(generalInflationStdDev = it) }
+                )
                 MoneyField("Social Security at 67", form.socialSecurityAt67) {
                     form = form.copy(socialSecurityAt67 = it)
                 }
@@ -162,12 +164,14 @@ fun AssumptionsScreen(state: RetirementLabState) {
                 MoneyField("Pre-Medicare monthly premium", form.preMedicareMonthlyPremium) {
                     form = form.copy(preMedicareMonthlyPremium = it)
                 }
-                PercentField("Healthcare inflation mean", form.healthcareInflationMean) {
-                    form = form.copy(healthcareInflationMean = it)
-                }
-                PercentField("Healthcare inflation volatility", form.healthcareInflationStdDev) {
-                    form = form.copy(healthcareInflationStdDev = it)
-                }
+                RateFieldHelp()
+                RatePairFields(
+                    title = "Healthcare inflation",
+                    averageValue = form.healthcareInflationMean,
+                    swingValue = form.healthcareInflationStdDev,
+                    onAverageChange = { form = form.copy(healthcareInflationMean = it) },
+                    onSwingChange = { form = form.copy(healthcareInflationStdDev = it) }
+                )
                 AssumptionToggleRow(
                     title = "Medicare premiums",
                     checked = form.includeMedicarePremiums,
@@ -189,24 +193,28 @@ fun AssumptionsScreen(state: RetirementLabState) {
 
         item {
             AssumptionCard("Market returns") {
-                PercentField("Pre-retirement return mean", form.preRetirementMeanReturn) {
-                    form = form.copy(preRetirementMeanReturn = it)
-                }
-                PercentField("Pre-retirement return volatility", form.preRetirementStdDev) {
-                    form = form.copy(preRetirementStdDev = it)
-                }
-                PercentField("Stock return mean", form.stockMeanReturn) {
-                    form = form.copy(stockMeanReturn = it)
-                }
-                PercentField("Stock return volatility", form.stockStdDev) {
-                    form = form.copy(stockStdDev = it)
-                }
-                PercentField("Bond return mean", form.bondMeanReturn) {
-                    form = form.copy(bondMeanReturn = it)
-                }
-                PercentField("Bond return volatility", form.bondStdDev) {
-                    form = form.copy(bondStdDev = it)
-                }
+                RateFieldHelp()
+                RatePairFields(
+                    title = "Pre-retirement return",
+                    averageValue = form.preRetirementMeanReturn,
+                    swingValue = form.preRetirementStdDev,
+                    onAverageChange = { form = form.copy(preRetirementMeanReturn = it) },
+                    onSwingChange = { form = form.copy(preRetirementStdDev = it) }
+                )
+                RatePairFields(
+                    title = "Stock return",
+                    averageValue = form.stockMeanReturn,
+                    swingValue = form.stockStdDev,
+                    onAverageChange = { form = form.copy(stockMeanReturn = it) },
+                    onSwingChange = { form = form.copy(stockStdDev = it) }
+                )
+                RatePairFields(
+                    title = "Bond return",
+                    averageValue = form.bondMeanReturn,
+                    swingValue = form.bondStdDev,
+                    onAverageChange = { form = form.copy(bondMeanReturn = it) },
+                    onSwingChange = { form = form.copy(bondStdDev = it) }
+                )
             }
         }
 
@@ -335,14 +343,58 @@ private fun NumberField(
 }
 
 @Composable
-private fun PercentField(label: String, value: String, onValueChange: (String) -> Unit) {
+private fun PercentField(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    onValueChange: (String) -> Unit
+) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         label = { Text("$label (%)") },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun RatePairFields(
+    title: String,
+    averageValue: String,
+    swingValue: String,
+    onAverageChange: (String) -> Unit,
+    onSwingChange: (String) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(title, style = MaterialTheme.typography.labelLarge, color = LabMutedText)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            PercentField(
+                label = "Average",
+                value = averageValue,
+                modifier = Modifier.weight(1f),
+                onValueChange = onAverageChange
+            )
+            PercentField(
+                label = "+/- Swing",
+                value = swingValue,
+                modifier = Modifier.weight(1f),
+                onValueChange = onSwingChange
+            )
+        }
+    }
+}
+
+@Composable
+private fun RateFieldHelp() {
+    Text(
+        "Average is the baseline. +/- swing is typical year-to-year variation, not a guaranteed range.",
+        style = MaterialTheme.typography.bodySmall,
+        color = LabMutedText
     )
 }
 
@@ -458,23 +510,23 @@ private data class EditableAssumptions(
             requireInt("Current age", currentAge, 18, 90),
             requireInt("Retirement age", retirementAge, 18, 75),
             requireMoney("Annual base spending", annualSpending),
-            requirePercent("General inflation mean", generalInflationMean, -0.02, 0.15),
-            requirePercent("General inflation volatility", generalInflationStdDev, 0.0, 0.30),
+            requirePercent("General inflation average", generalInflationMean, -0.02, 0.15),
+            requirePercent("General inflation +/- swing", generalInflationStdDev, 0.0, 0.30),
             requireMoney("Pre-tax accounts", pretax),
             requireMoney("Roth accounts", roth),
             requireMoney("Taxable investments", taxable),
             requireMoney("Cash reserve", cash),
             requireMoney("Pre-Medicare monthly premium", preMedicareMonthlyPremium),
-            requirePercent("Healthcare inflation mean", healthcareInflationMean, 0.0, 0.20),
-            requirePercent("Healthcare inflation volatility", healthcareInflationStdDev, 0.0, 0.30),
+            requirePercent("Healthcare inflation average", healthcareInflationMean, 0.0, 0.20),
+            requirePercent("Healthcare inflation +/- swing", healthcareInflationStdDev, 0.0, 0.30),
             requireMoney("Social Security at 67", socialSecurityAt67),
             requireInt("Social Security claim age", claimAge, 62, 70),
-            requirePercent("Pre-retirement return mean", preRetirementMeanReturn, -0.20, 0.25),
-            requirePercent("Pre-retirement return volatility", preRetirementStdDev, 0.0, 0.60),
-            requirePercent("Stock return mean", stockMeanReturn, -0.20, 0.25),
-            requirePercent("Stock return volatility", stockStdDev, 0.0, 0.60),
-            requirePercent("Bond return mean", bondMeanReturn, -0.20, 0.20),
-            requirePercent("Bond return volatility", bondStdDev, 0.0, 0.40),
+            requirePercent("Pre-retirement return average", preRetirementMeanReturn, -0.20, 0.25),
+            requirePercent("Pre-retirement return +/- swing", preRetirementStdDev, 0.0, 0.60),
+            requirePercent("Stock return average", stockMeanReturn, -0.20, 0.25),
+            requirePercent("Stock return +/- swing", stockStdDev, 0.0, 0.60),
+            requirePercent("Bond return average", bondMeanReturn, -0.20, 0.20),
+            requirePercent("Bond return +/- swing", bondStdDev, 0.0, 0.40),
             requirePercent("Drawdown trigger", drawdownTrigger, -0.50, 0.25),
             requireMoney("Long-term care annual cost", longTermCareAnnualCost),
             requireInt("Long-term care duration years", longTermCareDurationYears, 1, 10),

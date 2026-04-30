@@ -176,19 +176,19 @@ fun RetirementScenario.validate(): List<String> {
         errors += "Account balances cannot be negative."
     }
     if (spending.annualBaseSpending < 0) errors += "Annual spending cannot be negative."
-    if (spending.generalInflationStdDev < 0) errors += "General inflation volatility cannot be negative."
+    if (spending.generalInflationStdDev < 0) errors += "General inflation swing cannot be negative."
     if (mortgage.monthlyPayment < 0 || mortgage.yearsLeft < 0) {
         errors += "Mortgage payment and years left cannot be negative."
     }
     if (healthcare.preMedicareMonthlyPremium < 0) errors += "Healthcare premium cannot be negative."
-    if (healthcare.healthcareInflationStdDev < 0) errors += "Healthcare inflation volatility cannot be negative."
+    if (healthcare.healthcareInflationStdDev < 0) errors += "Healthcare inflation swing cannot be negative."
     if (socialSecurity.annualBenefitAt67 < 0) errors += "Social Security estimate cannot be negative."
     if (
         market.preRetirementStdDev < 0 ||
         market.stockStdDev < 0 ||
         market.bondStdDev < 0
     ) {
-        errors += "Market return volatility cannot be negative."
+        errors += "Market return swing cannot be negative."
     }
     if (rothConversion.enabled && !supportedRothBracketCaps.any { kotlin.math.abs(it - rothConversion.marginalRateCap) < 0.0001 }) {
         errors += "Roth conversion bracket cap must match a supported federal tax bracket."

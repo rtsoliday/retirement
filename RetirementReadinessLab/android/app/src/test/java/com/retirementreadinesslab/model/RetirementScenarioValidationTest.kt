@@ -19,8 +19,8 @@ class RetirementScenarioValidationTest {
 
         val errors = scenario.validate()
 
-        assertTrue(errors.any { it.contains("Healthcare inflation volatility") })
-        assertTrue(errors.any { it.contains("Market return volatility") })
+        assertTrue(errors.any { it.contains("Healthcare inflation swing") })
+        assertTrue(errors.any { it.contains("Market return swing") })
         assertTrue(errors.any { it.contains("Long-term care cost") })
     }
 

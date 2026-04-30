@@ -277,7 +277,7 @@ object ScenarioLabAnalyzer {
                 type = LabComparisonType.MarketDownturn,
                 readinessDelta = marketDownturn - baseReadiness,
                 takeaway = if (marketDownturn < baseReadiness - 0.05) {
-                    "Lower returns and higher volatility materially weaken this plan."
+                    "Lower returns and wider swings materially weaken this plan."
                 } else {
                     "The plan is not highly sensitive to this market stress in the quick estimate."
                 }
