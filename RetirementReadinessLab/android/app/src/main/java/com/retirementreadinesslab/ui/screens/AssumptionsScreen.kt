@@ -27,11 +27,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.retirementreadinesslab.compliance.ComplianceText
 import com.retirementreadinesslab.model.AccountBalances
+import com.retirementreadinesslab.model.DEFAULT_PROJECTION_END_AGE
 import com.retirementreadinesslab.model.FilingStatus
 import com.retirementreadinesslab.model.Gender
 import com.retirementreadinesslab.model.HealthcarePlan
@@ -45,6 +47,7 @@ import com.retirementreadinesslab.model.SpendingPlan
 import com.retirementreadinesslab.model.WithdrawalStrategy
 import com.retirementreadinesslab.model.validate
 import com.retirementreadinesslab.model.warnings
+import com.retirementreadinesslab.simulation.MedicarePremiums
 import com.retirementreadinesslab.state.RetirementLabState
 import com.retirementreadinesslab.ui.asCurrency
 import com.retirementreadinesslab.ui.components.KeyValueRow
@@ -63,7 +66,9 @@ fun AssumptionsScreen(state: RetirementLabState) {
     val warnings = scenario.warnings()
 
     LazyColumn(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("assumptions-screen"),
         verticalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = PaddingValues(16.dp)
     ) {
@@ -102,9 +107,14 @@ fun AssumptionsScreen(state: RetirementLabState) {
 
         item {
             AssumptionCard("Household profile") {
-                NumberField("Current age", form.currentAge) { form = form.copy(currentAge = it) }
+                NumberField(
+                    label = "Current age",
+                    value = form.currentAge,
+                    modifier = Modifier.testTag("current-age-input")
+                ) {
+                    form = form.copy(currentAge = it)
+                }
                 NumberField("Retirement age", form.retirementAge) { form = form.copy(retirementAge = it) }
-                NumberField("Target end age", form.targetEndAge) { form = form.copy(targetEndAge = it) }
                 ChoiceGroup(
                     title = "Filing status",
                     options = FilingStatus.entries.toList(),
@@ -232,6 +242,8 @@ fun AssumptionsScreen(state: RetirementLabState) {
                 }
                 NumberField("Random seed", form.seed) { form = form.copy(seed = it) }
                 KeyValueRow("Federal tax table", "2024 brackets")
+                KeyValueRow("Medicare model", MedicarePremiums.PREMIUM_TABLE_VERSION)
+                KeyValueRow("Projection horizon", "Mortality table, capped at age $DEFAULT_PROJECTION_END_AGE")
                 KeyValueRow("Engine cadence", "Monthly cashflow model")
             }
         }
@@ -248,7 +260,9 @@ fun AssumptionsScreen(state: RetirementLabState) {
                     state.updateSelected { parsed.scenario!! }
                 },
                 enabled = !state.isRunning,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("apply-assumptions-button")
             ) {
                 Text(
                     when {
@@ -304,14 +318,19 @@ private fun MoneyField(label: String, value: String, onValueChange: (String) -> 
 }
 
 @Composable
-private fun NumberField(label: String, value: String, onValueChange: (String) -> Unit) {
+private fun NumberField(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    onValueChange: (String) -> Unit
+) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         label = { Text(label) },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
     )
 }
 
@@ -378,7 +397,6 @@ private fun <T> ChoiceGroup(
 private data class EditableAssumptions(
     val currentAge: String,
     val retirementAge: String,
-    val targetEndAge: String,
     val filingStatus: FilingStatus,
     val gender: Gender,
     val annualSpending: String,
@@ -413,7 +431,6 @@ private data class EditableAssumptions(
     fun toScenario(base: RetirementScenario): ParsedAssumptions {
         val currentAge = currentAge.toIntOrNull()
         val retirementAge = retirementAge.toIntOrNull()
-        val targetEndAge = targetEndAge.toIntOrNull()
         val annualSpending = parseMoney(annualSpending)
         val generalInflationMean = parsePercent(generalInflationMean)
         val generalInflationStdDev = parsePercent(generalInflationStdDev)
@@ -440,7 +457,6 @@ private data class EditableAssumptions(
         val firstError = listOfNotNull(
             requireInt("Current age", currentAge, 18, 90),
             requireInt("Retirement age", retirementAge, 18, 75),
-            requireInt("Target end age", targetEndAge, 60, 115),
             requireMoney("Annual base spending", annualSpending),
             requirePercent("General inflation mean", generalInflationMean, -0.02, 0.15),
             requirePercent("General inflation volatility", generalInflationStdDev, 0.0, 0.30),
@@ -472,7 +488,7 @@ private data class EditableAssumptions(
             household = HouseholdProfile(
                 currentAge = currentAge!!,
                 retirementAge = retirementAge!!,
-                targetEndAge = targetEndAge!!,
+                targetEndAge = DEFAULT_PROJECTION_END_AGE,
                 filingStatus = filingStatus,
                 gender = gender
             ),
@@ -535,7 +551,6 @@ private data class EditableAssumptions(
             return EditableAssumptions(
                 currentAge = scenario.household.currentAge.toString(),
                 retirementAge = scenario.household.retirementAge.toString(),
-                targetEndAge = scenario.household.targetEndAge.toString(),
                 filingStatus = scenario.household.filingStatus,
                 gender = scenario.household.gender,
                 annualSpending = scenario.spending.annualBaseSpending.wholeDollarText(),

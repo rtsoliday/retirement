@@ -2,6 +2,7 @@ package com.retirementreadinesslab.simulation
 
 import com.retirementreadinesslab.model.AccountBalances
 import com.retirementreadinesslab.model.HealthcarePlan
+import com.retirementreadinesslab.model.LongTermCareAssumption
 import com.retirementreadinesslab.model.SocialSecurityPlan
 import com.retirementreadinesslab.model.SpendingPlan
 import com.retirementreadinesslab.model.sampleBaseScenario
@@ -14,11 +15,14 @@ import org.junit.Test
 class RetirementOptimizerTest {
     @Test
     fun estimateReturnsDecisionTargetsForSamplePlan() {
-        val scenario = sampleBaseScenario().copy(numberOfSimulations = 100)
+        val scenario = sampleBaseScenario().copy(
+            longTermCare = LongTermCareAssumption(enabled = false),
+            numberOfSimulations = 100
+        )
 
         val estimate = RetirementOptimizer.estimate(
             scenario = scenario,
-            targetReadiness = 0.70,
+            targetReadiness = 0.45,
             simulationCount = 80
         )
 

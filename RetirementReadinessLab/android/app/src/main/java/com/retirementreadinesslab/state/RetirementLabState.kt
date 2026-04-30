@@ -132,6 +132,26 @@ class RetirementLabState(
         }
     }
 
+    fun renameSelected(name: String): String? {
+        return renameScenario(selectedScenarioId, name)
+    }
+
+    fun renameScenario(id: String, name: String): String? {
+        val trimmed = name.trim()
+        if (trimmed.isBlank()) return "Scenario name cannot be blank."
+        val index = scenarios.indexOfFirst { it.id == id }
+        if (index < 0) return "Scenario could not be renamed."
+
+        val current = scenarios[index]
+        if (current.name == trimmed) return null
+
+        val updated = current.copy(name = trimmed)
+        scenarios[index] = updated
+        lastRunMessage = "Renamed scenario to $trimmed."
+        persist()
+        return null
+    }
+
     fun duplicateSelected() {
         val source = selectedScenario
         val copy = source.copy(
@@ -147,20 +167,28 @@ class RetirementLabState(
     }
 
     fun deleteSelected() {
+        deleteScenario(selectedScenarioId)
+    }
+
+    fun deleteScenario(id: String) {
         if (scenarios.size <= 1) return
 
-        val index = scenarios.indexOfFirst { it.id == selectedScenarioId }
+        val index = scenarios.indexOfFirst { it.id == id }
         if (index < 0) return
 
         val removed = scenarios.removeAt(index)
         results.remove(removed.id)
         labAnalyses.remove(removed.id)
-        selectedScenarioId = scenarios.getOrNull(index)?.id ?: scenarios.last().id
-        if (results[selectedScenarioId] == null) {
-            runScenarioAsync(selectedScenarioId)
-        }
-        if (labAnalyses[selectedScenarioId] == null) {
-            runLabAnalysisAsync(selectedScenarioId)
+        lastRunMessage = "Deleted scenario ${removed.name}."
+
+        if (removed.id == selectedScenarioId) {
+            selectedScenarioId = scenarios.getOrNull(index)?.id ?: scenarios.last().id
+            if (results[selectedScenarioId] == null) {
+                runScenarioAsync(selectedScenarioId)
+            }
+            if (labAnalyses[selectedScenarioId] == null) {
+                runLabAnalysisAsync(selectedScenarioId)
+            }
         }
         persist()
     }
@@ -227,19 +255,28 @@ class RetirementLabState(
     }
 
     fun runAllScenarios() {
+        if (isRunning) return
+        val scenariosToRun = scenarios.toList()
         isRunning = true
-        scenarios.forEach { scenario ->
-            runScenario(scenario.id)
+        lastRunMessage = "Running ${scenariosToRun.size} scenario${if (scenariosToRun.size == 1) "" else "s"} for comparison..."
+        scope.launch {
+            val run = runCatching {
+                withContext(Dispatchers.Default) {
+                    scenariosToRun.associate { scenario ->
+                        scenario.id to RetirementSimulator.run(scenario)
+                    }
+                }
+            }
+            run.onSuccess { comparisonResults ->
+                comparisonResults.forEach { (id, result) ->
+                    results[id] = result
+                }
+                lastRunMessage = "Compared ${scenariosToRun.size} scenario${if (scenariosToRun.size == 1) "" else "s"}."
+            }.onFailure {
+                storageMessage = "Scenario comparison failed: ${it.message ?: "unknown error"}"
+            }
+            isRunning = false
         }
-        isRunning = false
-        lastRunMessage = "Compared ${scenarios.size} scenario${if (scenarios.size == 1) "" else "s"}."
-    }
-
-    private fun runScenario(id: String) {
-        val scenario = scenarios.firstOrNull { it.id == id } ?: return
-        val result = RetirementSimulator.run(scenario)
-        results[id] = result
-        lastRunMessage = buildRunMessage(scenario, result)
     }
 
     private fun runScenarioAsync(id: String) {

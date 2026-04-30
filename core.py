@@ -221,6 +221,7 @@ class SimulationConfig:
     inflation_monthly_std: float = field(default=0.0, init=False)
     healthcare_inflation_monthly_mean: float = field(default=0.0, init=False)
     healthcare_inflation_monthly_std: float = field(default=0.0, init=False)
+    pre_retirement_healthcare_inflation_factor: float = field(default=1.0, init=False)
     base_monthly_need: float = field(default=0.0, init=False)
     mortgage_monthly_payment: float = field(default=0.0, init=False)
     mortgage_months_in_retirement: int = field(default=0, init=False)
@@ -307,6 +308,9 @@ class SimulationConfig:
         self.inflation_monthly_std = self.inflation_std_dev / sqrt_12
         self.healthcare_inflation_monthly_mean = self.healthcare_inflation_mean / 12
         self.healthcare_inflation_monthly_std = self.healthcare_inflation_std / sqrt_12
+        self.pre_retirement_healthcare_inflation_factor = (
+            1.0 + self.healthcare_inflation_mean
+        ) ** max(0, self.retirement_age - self.current_age)
         
         # Convert spending to monthly
         self.base_monthly_need = self.base_retirement_need / 12
@@ -871,6 +875,7 @@ def _simulate_parallel(
     health_care_monthly_payment: float,
     healthcare_inflation_monthly_mean: float,
     healthcare_inflation_monthly_std: float,
+    initial_healthcare_inflation_factor: float,
     include_medicare_premiums: bool,
     include_ltc_risk: bool,
     ltc_monthly_cost: float,
@@ -921,7 +926,7 @@ def _simulate_parallel(
         health_care_remaining = health_care_months_in_retirement
         health_care_cost = health_care_monthly_payment if health_care_remaining > 0 else 0.0
         
-        healthcare_inflation_factor = 1.0
+        healthcare_inflation_factor = initial_healthcare_inflation_factor
         
         # Sample death year FIRST (still yearly resolution for mortality)
         death_year = years_of_retirement
@@ -1464,6 +1469,7 @@ def simulate(cfg: SimulationConfig, collect_paths: bool = False):
         health_care_monthly_payment=cfg.health_care_monthly_payment,
         healthcare_inflation_monthly_mean=cfg.healthcare_inflation_monthly_mean,
         healthcare_inflation_monthly_std=cfg.healthcare_inflation_monthly_std,
+        initial_healthcare_inflation_factor=cfg.pre_retirement_healthcare_inflation_factor,
         include_medicare_premiums=cfg.include_medicare_premiums,
         include_ltc_risk=cfg.include_ltc_risk,
         ltc_monthly_cost=cfg.ltc_monthly_cost,
@@ -1533,7 +1539,7 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
         health_care_remaining = cfg.health_care_months_in_retirement
         health_care_cost = cfg.health_care_monthly_payment if health_care_remaining > 0 else 0.0
         
-        healthcare_inflation_factor = 1.0
+        healthcare_inflation_factor = cfg.pre_retirement_healthcare_inflation_factor
         
         death_year = sample_death_year(
             cfg.retirement_age, years_of_retirement, cfg.death_probs

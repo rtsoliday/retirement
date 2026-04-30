@@ -38,7 +38,7 @@ class RetirementScenarioValidationTest {
     @Test
     fun warningsFlagSuspiciousButAllowedAssumptions() {
         val scenario = sampleBaseScenario().copy(
-            household = sampleBaseScenario().household.copy(retirementAge = 48, targetEndAge = 98),
+            household = sampleBaseScenario().household.copy(retirementAge = 48),
             socialSecurity = sampleBaseScenario().socialSecurity.copy(annualBenefitAt67 = 0.0),
             healthcare = sampleBaseScenario().healthcare.copy(preMedicareMonthlyPremium = 0.0),
             longTermCare = LongTermCareAssumption(enabled = false),

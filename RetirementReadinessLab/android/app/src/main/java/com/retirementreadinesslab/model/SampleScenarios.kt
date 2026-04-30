@@ -11,7 +11,6 @@ fun sampleBaseScenario(): RetirementScenario {
         household = HouseholdProfile(
             currentAge = 50,
             retirementAge = 58,
-            targetEndAge = 95,
             filingStatus = FilingStatus.Single,
             gender = Gender.Male
         ),

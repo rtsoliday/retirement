@@ -22,6 +22,8 @@ enum class ScenarioWarningSeverity {
     Watch
 }
 
+const val DEFAULT_PROJECTION_END_AGE = 119
+
 data class ScenarioWarning(
     val title: String,
     val detail: String,
@@ -31,7 +33,7 @@ data class ScenarioWarning(
 data class HouseholdProfile(
     val currentAge: Int,
     val retirementAge: Int,
-    val targetEndAge: Int = 95,
+    val targetEndAge: Int = DEFAULT_PROJECTION_END_AGE,
     val filingStatus: FilingStatus = FilingStatus.Single,
     val gender: Gender = Gender.Male
 )
@@ -165,7 +167,7 @@ fun RetirementScenario.validate(): List<String> {
         errors += "Retirement age must be greater than or equal to current age."
     }
     if (household.targetEndAge <= household.retirementAge) {
-        errors += "Target end age must be greater than retirement age."
+        errors += "Projection end age must be greater than retirement age."
     }
     if (socialSecurity.claimAge !in 62..70) {
         errors += "Social Security claim age must be between 62 and 70."
@@ -209,10 +211,10 @@ fun RetirementScenario.warnings(): List<ScenarioWarning> {
             detail = "Retiring before 50 creates a long drawdown period and makes healthcare assumptions especially important."
         )
     }
-    if (retirementHorizon > 38) {
+    if (household.retirementAge < 55 && retirementHorizon > 50) {
         warnings += ScenarioWarning(
             title = "Long retirement horizon",
-            detail = "The plan models more than 38 retirement years, so longevity and inflation assumptions carry extra weight."
+            detail = "The mortality-modeled projection includes a long potential drawdown period, so inflation and healthcare assumptions carry extra weight."
         )
     }
     if (spendingRatio > 0.07) {
@@ -264,7 +266,7 @@ fun RetirementScenario.warnings(): List<ScenarioWarning> {
     if (mortgage.yearsLeft > 0 && mortgage.yearsLeft > yearsToRetirement + retirementHorizon) {
         warnings += ScenarioWarning(
             title = "Mortgage extends beyond horizon",
-            detail = "Mortgage years left exceeds the modeled planning horizon."
+            detail = "Mortgage years left exceeds the internal mortality projection cap."
         )
     }
     if (numberOfSimulations < 500) {

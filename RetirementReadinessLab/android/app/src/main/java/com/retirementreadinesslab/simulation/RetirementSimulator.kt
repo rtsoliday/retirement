@@ -16,12 +16,11 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 object RetirementSimulator {
-    private const val ENGINE_VERSION = "2026.04-monthly-mvp"
+    private const val ENGINE_VERSION = "2026.04-medicare-parity"
     private const val ENGINE_CADENCE = "Monthly cashflow model with annual result bands"
     private const val TAX_TABLE_VERSION = "2024 federal brackets"
-    private const val MORTALITY_MODEL_VERSION = "Heuristic annual hazard v1"
+    private val MORTALITY_MODEL_VERSION = MortalityTables.TABLE_VERSION
     private const val MONTHS_PER_YEAR = 12
-    private const val MEDICARE_PART_B_AND_D_ANNUAL = (174.70 + 55.50) * 12.0
     private val MONTHLY_CASH_RETURN = monthlyEquivalent(0.02)
 
     fun run(scenario: RetirementScenario): SimulationResult {
@@ -104,11 +103,7 @@ object RetirementSimulator {
         val preRetirementMonthlyMean = monthlyEquivalent(scenario.market.preRetirementMeanReturn)
         val preRetirementMonthlyStdDev = monthlyStdDev(scenario.market.preRetirementStdDev)
         repeat(preRetirementMonths) {
-            val growth = sampleNormal(
-                random,
-                preRetirementMonthlyMean,
-                preRetirementMonthlyStdDev
-            ).coerceAtLeast(monthlyEquivalent(-0.65))
+            val growth = samplePreRetirementMonthlyGrowth(random, preRetirementMonthlyMean, preRetirementMonthlyStdDev)
             balances.pretax *= 1.0 + growth
             balances.roth *= 1.0 + growth
             balances.taxable *= 1.0 + growth
@@ -129,17 +124,15 @@ object RetirementSimulator {
             compound(1.0 + monthlyInflationMean, preRetirementMonths)
         var monthlyHealthcare = scenario.healthcare.preMedicareMonthlyPremium *
             compound(1.0 + monthlyHealthcareInflationMean, preRetirementMonths)
-        var monthlyMedicare = MEDICARE_PART_B_AND_D_ANNUAL / MONTHS_PER_YEAR.toDouble() *
-            compound(
-                1.0 + monthlyHealthcareInflationMean,
-                max(0, 65 - scenario.household.currentAge) * MONTHS_PER_YEAR
-            )
+        var medicareInflationMultiplier = compound(1.0 + monthlyHealthcareInflationMean, preRetirementMonths)
         val monthlyStockMean = monthlyEquivalent(scenario.market.stockMeanReturn)
         val monthlyStockStdDev = monthlyStdDev(scenario.market.stockStdDev)
         val monthlyBondMean = monthlyEquivalent(scenario.market.bondMeanReturn)
         val monthlyBondStdDev = monthlyStdDev(scenario.market.bondStdDev)
 
         val pathBalances = mutableListOf(balances.total)
+        val annualMedicareIncomeHistory = mutableListOf<Double>()
+        var currentAnnualMedicareIncome = 0.0
         var failureAge: Int? = null
 
         for (monthOffset in 0 until horizonMonths(scenario)) {
@@ -152,30 +145,13 @@ object RetirementSimulator {
                 continue
             }
 
-            val stockReturn = sampleNormal(random, monthlyStockMean, monthlyStockStdDev)
-            val bondReturn = sampleNormal(random, monthlyBondMean, monthlyBondStdDev)
-            val annualizedSpending = monthlySpending * MONTHS_PER_YEAR.toDouble()
-            val stockAllocation = stockAllocation(balances.invested, annualizedSpending)
-            val portfolioReturn = stockAllocation * stockReturn + (1.0 - stockAllocation) * bondReturn
-
-            balances.pretax *= 1.0 + portfolioReturn
-            balances.roth *= 1.0 + portfolioReturn
-            balances.taxable *= 1.0 + portfolioReturn
-            balances.cash *= 1.0 + MONTHLY_CASH_RETURN
-
             val mortgageCost = if (monthOffset < mortgageMonthsInRetirement(scenario)) {
                 scenario.mortgage.monthlyPayment
             } else {
                 0.0
             }
-            val healthcareCost = if (age < 65) {
-                monthlyHealthcare
-            } else if (scenario.healthcare.includeMedicarePremiums) {
-                monthlyMedicare
-            } else {
-                0.0
-            }
-            val ltcCost = if (ltcStartAge != null && age >= ltcStartAge) {
+            val inLongTermCare = ltcStartAge != null && age >= ltcStartAge
+            val ltcCost = if (inLongTermCare) {
                 scenario.longTermCare.annualCost / MONTHS_PER_YEAR.toDouble()
             } else {
                 0.0
@@ -185,7 +161,51 @@ object RetirementSimulator {
             } else {
                 0.0
             }
-            val netNeed = monthlySpending + mortgageCost + healthcareCost + ltcCost
+            val baseNeedBeforeHealthcare = monthlyRetirementNeed(
+                monthlySpending = monthlySpending,
+                mortgageCost = mortgageCost,
+                healthcareCost = 0.0,
+                longTermCareCost = ltcCost,
+                inLongTermCare = inLongTermCare
+            )
+            val estimatedAnnualIncomeForIrmaa = baseNeedBeforeHealthcare
+                .coerceAtLeast(0.0) * MONTHS_PER_YEAR.toDouble() +
+                socialSecurity * MONTHS_PER_YEAR.toDouble()
+            val healthcareCost = if (age < 65) {
+                monthlyHealthcare
+            } else if (scenario.healthcare.includeMedicarePremiums) {
+                val irmaaIncome = medicareIncomeLookback(
+                    annualMedicareIncomeHistory,
+                    estimatedAnnualIncomeForIrmaa
+                )
+                MedicarePremiums
+                    .estimateAnnualPremium(
+                        modifiedAdjustedGrossIncome = irmaaIncome,
+                        filingStatus = scenario.household.filingStatus,
+                        inflationMultiplier = medicareInflationMultiplier
+                    )
+                    .monthlyPremium
+            } else {
+                0.0
+            }
+            val netNeed = monthlyRetirementNeed(
+                monthlySpending = monthlySpending,
+                mortgageCost = mortgageCost,
+                healthcareCost = healthcareCost,
+                longTermCareCost = ltcCost,
+                inLongTermCare = inLongTermCare
+            )
+
+            val stockReturn = sampleNormal(random, monthlyStockMean, monthlyStockStdDev)
+            val bondReturn = sampleNormal(random, monthlyBondMean, monthlyBondStdDev)
+            val annualizedSpending = netNeed * MONTHS_PER_YEAR.toDouble()
+            val stockAllocation = stockAllocation(balances.invested, annualizedSpending)
+            val portfolioReturn = stockAllocation * stockReturn + (1.0 - stockAllocation) * bondReturn
+
+            balances.pretax *= 1.0 + portfolioReturn
+            balances.roth *= 1.0 + portfolioReturn
+            balances.taxable *= 1.0 + portfolioReturn
+            balances.cash *= 1.0 + MONTHLY_CASH_RETURN
 
             val grossWithdrawal = TaxCalculator.grossWithdrawalForNetNeed(
                 netNeed = netNeed * MONTHS_PER_YEAR.toDouble(),
@@ -205,6 +225,14 @@ object RetirementSimulator {
                 withdrawStandard(grossWithdrawal, balances)
             }
 
+            val annualizedGrossWithdrawal = grossWithdrawal * MONTHS_PER_YEAR.toDouble()
+            currentAnnualMedicareIncome += grossWithdrawal +
+                TaxCalculator.taxableSocialSecurity(
+                    otherIncome = annualizedGrossWithdrawal,
+                    annualSocialSecurity = socialSecurity * MONTHS_PER_YEAR.toDouble(),
+                    filingStatus = scenario.household.filingStatus
+                ) / MONTHS_PER_YEAR.toDouble()
+
             if (scenario.rothConversion.enabled && monthInYear == 0) {
                 val conversionLimit = TaxCalculator.upperBracketLimitForRate(
                     scenario.rothConversion.marginalRateCap,
@@ -216,6 +244,7 @@ object RetirementSimulator {
                     balances.pretax -= conversion
                     balances.roth += conversion
                     withdrawForConversionTax(tax, balances)
+                    currentAnnualMedicareIncome += conversion
                 }
             }
 
@@ -244,7 +273,12 @@ object RetirementSimulator {
 
             monthlySpending *= 1.0 + inflation
             monthlyHealthcare *= 1.0 + healthcareInflation
-            monthlyMedicare *= 1.0 + healthcareInflation
+            medicareInflationMultiplier *= 1.0 + healthcareInflation
+
+            if (monthInYear == MONTHS_PER_YEAR - 1) {
+                annualMedicareIncomeHistory += currentAnnualMedicareIncome
+                currentAnnualMedicareIncome = 0.0
+            }
         }
 
         while (pathBalances.size < horizonYears(scenario) + 1) {
@@ -303,6 +337,24 @@ object RetirementSimulator {
         return mean + random.nextGaussian() * stdDev
     }
 
+    internal fun samplePreRetirementMonthlyGrowth(random: Random, mean: Double, stdDev: Double): Double {
+        return sampleNormal(random, mean, stdDev)
+    }
+
+    internal fun monthlyRetirementNeed(
+        monthlySpending: Double,
+        mortgageCost: Double,
+        healthcareCost: Double,
+        longTermCareCost: Double,
+        inLongTermCare: Boolean
+    ): Double {
+        return if (inLongTermCare) {
+            longTermCareCost + healthcareCost
+        } else {
+            monthlySpending + mortgageCost + healthcareCost
+        }
+    }
+
     private fun stockAllocation(investedBalance: Double, annualSpending: Double): Double {
         if (annualSpending <= 0.0) return 0.50
         val ratio = investedBalance / annualSpending
@@ -318,19 +370,12 @@ object RetirementSimulator {
 
     private fun sampleDeathAge(scenario: RetirementScenario, random: Random): Int {
         var age = scenario.household.retirementAge
-        while (age < scenario.household.targetEndAge + 10) {
-            val baseHazard = when {
-                age < 65 -> 0.004
-                age < 75 -> 0.015
-                age < 85 -> 0.045
-                age < 95 -> 0.095
-                else -> 0.18
-            }
-            val genderAdjustment = if (scenario.household.gender.name == "Female") 0.85 else 1.0
-            if (random.nextDouble() < baseHazard * genderAdjustment) return age
+        while (age <= scenario.household.targetEndAge) {
+            val deathProbability = MortalityTables.annualDeathProbability(scenario.household.gender, age)
+            if (random.nextDouble() < deathProbability) return age
             age += 1
         }
-        return scenario.household.targetEndAge + 10
+        return scenario.household.targetEndAge + 1
     }
 
     private fun sampleLongTermCareStartAge(
@@ -378,6 +423,15 @@ object RetirementSimulator {
         return annualStdDev / sqrt(MONTHS_PER_YEAR.toDouble())
     }
 
+    private fun medicareIncomeLookback(
+        annualMedicareIncomeHistory: List<Double>,
+        fallbackAnnualIncome: Double
+    ): Double {
+        return annualMedicareIncomeHistory
+            .getOrNull(annualMedicareIncomeHistory.lastIndex - 1)
+            ?: fallbackAnnualIncome
+    }
+
     private fun percentile(sortedValues: List<Double>, percentile: Double): Double {
         if (sortedValues.isEmpty()) return 0.0
         val index = ((sortedValues.size - 1) * percentile).roundToInt()
@@ -410,7 +464,7 @@ object RetirementSimulator {
             scenario.spending.annualBaseSpending.coerceAtLeast(1.0)
         val taxBurden = scenario.accounts.pretax / scenario.accounts.total.coerceAtLeast(1.0)
         val spendingRatio = scenario.spending.annualBaseSpending / scenario.accounts.total.coerceAtLeast(1.0)
-        val horizon = scenario.household.targetEndAge - scenario.household.retirementAge
+        val retirementAge = scenario.household.retirementAge
 
         val market = riskFrom(successProbability, 0.82, 0.65)
         val healthcare = when {
@@ -429,8 +483,8 @@ object RetirementSimulator {
             else -> RiskLevel.Healthy
         }
         val longevity = when {
-            horizon > 38 -> RiskLevel.AtRisk
-            horizon > 30 -> RiskLevel.Watch
+            retirementAge < 55 -> RiskLevel.AtRisk
+            retirementAge < 62 -> RiskLevel.Watch
             else -> RiskLevel.Healthy
         }
 

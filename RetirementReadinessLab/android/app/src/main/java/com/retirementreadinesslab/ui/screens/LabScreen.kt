@@ -30,6 +30,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.retirementreadinesslab.simulation.LabComparisonAnalysis
@@ -55,7 +60,9 @@ fun LabScreen(state: RetirementLabState) {
     val isPending = state.isAnalyzingLab && analysis == null
 
     LazyColumn(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("lab-screen"),
         verticalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp)
     ) {
@@ -219,6 +226,14 @@ private fun SweepResultRow(row: LabSweepRowAnalysis) {
                 modifier = Modifier
                     .weight(1f)
                     .height(9.dp)
+                    .testTag("lab-sweep-readiness-${row.label.accessibilityTagSuffix()}")
+                    .semantics {
+                        contentDescription = "Lab sweep ${row.label}: ${row.readiness.asPercent()} readiness, ${row.failureLabel}"
+                        progressBarRangeInfo = ProgressBarRangeInfo(
+                            current = row.readiness.toFloat().coerceIn(0f, 1f),
+                            range = 0f..1f
+                        )
+                    }
                     .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
             ) {
                 Box(
@@ -289,6 +304,12 @@ private fun deltaColor(delta: Double): Color {
 private fun signedPercent(value: Double): String {
     val sign = if (value >= 0.0) "+" else ""
     return "$sign${value.asPercent()}"
+}
+
+private fun String.accessibilityTagSuffix(): String {
+    return lowercase()
+        .replace(Regex("[^a-z0-9]+"), "-")
+        .trim('-')
 }
 
 private fun LabSweepType.title(): String {

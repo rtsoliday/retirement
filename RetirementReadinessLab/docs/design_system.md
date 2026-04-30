@@ -51,7 +51,7 @@ Retirement Readiness Lab should feel calm, premium, clear, and serious. The inte
 
 Use direct, measured language:
 
-- "82% of simulations lasted through age 95."
+- "82% of simulations avoided portfolio depletion across the mortality-modeled horizon."
 - "Healthcare costs are the largest modeled pressure."
 - "Try delaying Social Security or reducing spending by 5%."
 

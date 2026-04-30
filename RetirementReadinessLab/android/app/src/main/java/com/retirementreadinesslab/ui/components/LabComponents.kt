@@ -27,7 +27,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -117,6 +119,10 @@ fun ReadinessGauge(probability: Double, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier.semantics {
             contentDescription = "Readiness gauge: ${probability.asPercent()} readiness"
+            progressBarRangeInfo = ProgressBarRangeInfo(
+                current = probability.toFloat().coerceIn(0f, 1f),
+                range = 0f..1f
+            )
         },
         contentAlignment = Alignment.Center
     ) {
@@ -200,12 +206,36 @@ fun BalancePathChart(bands: List<OutcomeBand>, modifier: Modifier = Modifier) {
                     )
                 }
             }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                ChartLegendItem(color = LabDivider, label = "90th percentile")
+                ChartLegendItem(color = LabPrimary, label = "Median")
+                ChartLegendItem(color = LabRisk.copy(alpha = 0.75f), label = "10th percentile")
+            }
             Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                 Text("Age ${bands.first().age}", style = MaterialTheme.typography.labelSmall, color = LabMutedText)
                 Text(bands.last().median.asCompactCurrency(), style = MaterialTheme.typography.labelSmall, color = LabMutedText)
                 Text("Age ${bands.last().age}", style = MaterialTheme.typography.labelSmall, color = LabMutedText)
             }
         }
+    }
+}
+
+@Composable
+private fun ChartLegendItem(color: Color, label: String) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(9.dp)
+                .background(color, RoundedCornerShape(8.dp))
+        )
+        Text(label, style = MaterialTheme.typography.labelSmall, color = LabMutedText)
     }
 }
 

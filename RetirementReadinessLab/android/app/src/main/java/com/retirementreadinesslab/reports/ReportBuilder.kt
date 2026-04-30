@@ -4,6 +4,8 @@ import com.retirementreadinesslab.compliance.ComplianceText
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.SimulationResult
 import com.retirementreadinesslab.model.warnings
+import com.retirementreadinesslab.simulation.MedicarePremiums
+import com.retirementreadinesslab.simulation.ResultInsights
 import com.retirementreadinesslab.simulation.ScenarioComparison
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
@@ -74,7 +76,7 @@ object ReportBuilder {
             appendLine("Summary")
             appendLine("- Scenario: ${scenario.name}")
             appendLine("- Retirement age: ${scenario.household.retirementAge}")
-            appendLine("- Target end age: ${scenario.household.targetEndAge}")
+            appendLine("- Horizon model: Mortality table, capped at age ${scenario.household.targetEndAge}")
             appendLine("- Readiness: ${result?.successProbability?.percent() ?: "Not run"}")
             appendLine("- Median ending balance: ${result?.medianEndingBalance?.money() ?: "Not run"}")
             appendLine("- 10th percentile ending balance: ${result?.pessimisticEndingBalance?.money() ?: "Not run"}")
@@ -87,6 +89,13 @@ object ReportBuilder {
                 appendLine("- Healthcare risk: ${result.riskBreakdown.healthcare.label()}")
                 appendLine("- Tax risk: ${result.riskBreakdown.taxes.label()}")
                 appendLine("- Spending risk: ${result.riskBreakdown.spending.label()}")
+                val insight = ResultInsights.summarize(scenario, result)
+                appendLine()
+                appendLine("Readiness interpretation")
+                appendLine("- ${insight.title}: ${insight.summary}")
+                insight.bullets.forEach { bullet ->
+                    appendLine("- $bullet")
+                }
             }
             if (!result?.failureAgeBuckets.isNullOrEmpty()) {
                 appendLine()
@@ -119,7 +128,7 @@ object ReportBuilder {
             appendLine("- Filing status: ${scenario.household.filingStatus.label}")
             appendLine("- Mortality table: ${scenario.household.gender.label}")
             appendLine("- Current age: ${scenario.household.currentAge}")
-            appendLine("- Target end age: ${scenario.household.targetEndAge}")
+            appendLine("- Projection cap: Age ${scenario.household.targetEndAge}")
             appendLine("- Annual spending: ${scenario.spending.annualBaseSpending.money()}")
             appendLine("- General inflation mean: ${scenario.spending.generalInflationMean.percent()}")
             appendLine("- General inflation volatility: ${scenario.spending.generalInflationStdDev.percent()}")
@@ -132,6 +141,7 @@ object ReportBuilder {
             appendLine("- Pre-Medicare monthly premium: ${scenario.healthcare.preMedicareMonthlyPremium.money()}")
             appendLine("- Healthcare inflation mean: ${scenario.healthcare.healthcareInflationMean.percent()}")
             appendLine("- Medicare premiums: ${if (scenario.healthcare.includeMedicarePremiums) "Included" else "Excluded"}")
+            appendLine("- Medicare premium model: ${MedicarePremiums.PREMIUM_TABLE_VERSION}")
             appendLine("- Mortgage payment: ${scenario.mortgage.monthlyPayment.money()}")
             appendLine("- Mortgage years left: ${scenario.mortgage.yearsLeft}")
             appendLine("- Pre-retirement return mean: ${scenario.market.preRetirementMeanReturn.percent()}")

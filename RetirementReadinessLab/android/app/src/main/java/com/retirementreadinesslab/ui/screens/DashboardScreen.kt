@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.retirementreadinesslab.model.warnings
+import com.retirementreadinesslab.simulation.ResultInsights
 import com.retirementreadinesslab.state.RetirementLabState
 import com.retirementreadinesslab.ui.asCompactCurrency
 import com.retirementreadinesslab.ui.asPercent
@@ -131,11 +132,24 @@ fun DashboardScreen(
             }
 
             item {
+                val insight = ResultInsights.summarize(scenario, result)
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(insight.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(insight.summary, style = MaterialTheme.typography.bodyMedium, color = LabMutedText)
+                        insight.bullets.take(3).forEach { bullet ->
+                            Text("- $bullet", style = MaterialTheme.typography.bodySmall, color = LabMutedText)
+                        }
+                    }
+                }
+            }
+
+            item {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                     MetricCard(
                         title = "Retirement age",
                         value = scenario.household.retirementAge.toString(),
-                        detail = "Target through age ${scenario.household.targetEndAge}",
+                        detail = "Mortality-adjusted horizon",
                         icon = Icons.Filled.Schedule,
                         modifier = Modifier.weight(1f)
                     )

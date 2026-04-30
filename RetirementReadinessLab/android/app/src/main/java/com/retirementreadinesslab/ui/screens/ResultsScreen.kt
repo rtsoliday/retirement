@@ -21,9 +21,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.retirementreadinesslab.model.FailureAgeBucket
+import com.retirementreadinesslab.simulation.ResultInsights
 import com.retirementreadinesslab.model.SimulationResult
 import com.retirementreadinesslab.state.RetirementLabState
 import com.retirementreadinesslab.ui.asCompactCurrency
@@ -46,7 +48,9 @@ fun ResultsScreen(state: RetirementLabState) {
     val result = state.selectedResult
 
     LazyColumn(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("results-screen"),
         verticalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp)
     ) {
@@ -78,7 +82,7 @@ fun ResultsScreen(state: RetirementLabState) {
                 MetricCard(
                     title = "Readiness",
                     value = result.successProbability.asPercent(),
-                    detail = "Simulations lasting through age ${scenario.household.targetEndAge}",
+                    detail = "Mortality-adjusted simulations",
                     icon = Icons.Filled.Savings,
                     modifier = Modifier.weight(1f)
                 )
@@ -94,6 +98,19 @@ fun ResultsScreen(state: RetirementLabState) {
 
         item {
             BalancePathChart(bands = result.balanceBands)
+        }
+
+        item {
+            val insight = ResultInsights.summarize(scenario, result)
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(insight.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(insight.summary, style = MaterialTheme.typography.bodyMedium, color = LabMutedText)
+                    insight.bullets.forEach { bullet ->
+                        Text("- $bullet", style = MaterialTheme.typography.bodySmall, color = LabMutedText)
+                    }
+                }
+            }
         }
 
         item {

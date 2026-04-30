@@ -15,12 +15,15 @@ This folder currently contains:
 
 - A detailed implementation plan.
 - Product and design documentation.
-- A native Android project skeleton under `android/`.
-- Initial Kotlin domain models.
-- A first-pass deterministic Monte Carlo simulation engine.
-- Initial Jetpack Compose screens for Dashboard, Setup, Scenarios, Lab, Assumptions, and Reports.
+- A native Android project under `android/`.
+- Kotlin domain models and local scenario persistence.
+- A monthly Monte Carlo simulation engine with deterministic seeds and calculation provenance.
+- Jetpack Compose screens for Dashboard, Setup, Scenarios, Lab, Assumptions, Results, Welcome, and Reports.
+- PDF/text/CSV/JSON export paths.
+- App icon, splash branding, privacy/disclaimer copy, and release-prep documentation.
+- Unit tests, Compose instrumentation test compilation, and a simulator performance profile.
 
-The Android project is scaffolded but was not built in this environment because Gradle and the Android SDK are not installed here.
+The app has been built and launched from Android Studio during development. Use the Gradle wrapper from `RetirementReadinessLab/android`.
 
 ## Open In Android Studio
 
@@ -34,6 +37,23 @@ Android Studio should sync Gradle dependencies from the root `settings.gradle.kt
 
 ## Implementation Notes
 
-The current simulation engine is deliberately smaller than the mature Python engine. It is meant to provide a working Android product foundation and should be expanded against `docs/simulation_model.md` before release.
+The current simulation engine is still smaller than the mature Python engine. It provides a working Android product foundation and should continue to be expanded against `docs/simulation_model.md` before release.
 
 Before commercial release, resolve the licensing decision documented in `IMPLEMENTATION_PLAN.md`.
+
+## Useful Commands
+
+From `RetirementReadinessLab/android`:
+
+```bash
+./gradlew :app:testDebugUnitTest
+./gradlew :app:assembleDebug
+./gradlew :app:assembleDebugAndroidTest
+```
+
+Release-prep docs:
+
+- `docs/release_checklist.md`
+- `docs/closed_testing_plan.md`
+- `docs/store_listing.md`
+- `docs/privacy_policy_draft.md`

@@ -76,7 +76,7 @@ object ReportPdfExporter {
         lines.forEach { line ->
             val extraGap = when {
                 line.isBlank() -> LINE_HEIGHT * 0.55f
-                isHeading(line) -> LINE_HEIGHT * 1.2f
+                isHeading(line) -> LINE_HEIGHT * 2.25f
                 else -> LINE_HEIGHT
             }
             if (y + extraGap > PAGE_HEIGHT - PAGE_MARGIN) {
@@ -91,7 +91,7 @@ object ReportPdfExporter {
                 isHeading(line) -> {
                     y += 8f
                     canvas.drawText(line, PAGE_MARGIN, y, headingPaint)
-                    y += LINE_HEIGHT * 0.35f
+                    y += LINE_HEIGHT * 1.10f
                 }
                 else -> {
                     canvas.drawText(line, PAGE_MARGIN, y, bodyPaint)
@@ -142,7 +142,17 @@ object ReportPdfExporter {
     }
 
     private fun isHeading(line: String): Boolean {
-        return line in setOf("Summary", "Key assumptions", "Suggested next test", "Disclaimer")
+        return line in setOf(
+            "Summary",
+            "Readiness interpretation",
+            "Failure timing",
+            "Calculation provenance",
+            "Assumption checks",
+            "Key assumptions",
+            "Suggested next test",
+            "Privacy note",
+            "Disclaimer"
+        )
     }
 
     private fun safeFileName(value: String): String {

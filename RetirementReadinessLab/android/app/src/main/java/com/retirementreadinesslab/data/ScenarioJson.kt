@@ -1,6 +1,7 @@
 package com.retirementreadinesslab.data
 
 import com.retirementreadinesslab.model.AccountBalances
+import com.retirementreadinesslab.model.DEFAULT_PROJECTION_END_AGE
 import com.retirementreadinesslab.model.FilingStatus
 import com.retirementreadinesslab.model.Gender
 import com.retirementreadinesslab.model.HealthcarePlan
@@ -102,7 +103,7 @@ object ScenarioJson {
             household = HouseholdProfile(
                 currentAge = household.optInt("currentAge", 50),
                 retirementAge = household.optInt("retirementAge", 60),
-                targetEndAge = household.optInt("targetEndAge", 95),
+                targetEndAge = DEFAULT_PROJECTION_END_AGE,
                 filingStatus = enumOrDefault(household.optString("filingStatus"), FilingStatus.Single),
                 gender = enumOrDefault(household.optString("gender"), Gender.Male)
             ),

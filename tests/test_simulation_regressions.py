@@ -57,3 +57,20 @@ def test_medicare_premiums_apply_in_first_retirement_month_at_65():
     )
 
     assert simulate(cfg) == 0.0
+
+
+def test_medicare_premiums_inflate_from_current_age_to_medicare_age():
+    annual_medicare = MEDICARE_PART_B_BASE + MEDICARE_PART_D_BASE
+    inflation_factor = 1.10 ** 5
+    monthly_grossed_up_for_ten_percent_tax = (
+        annual_medicare * inflation_factor / 0.9
+    ) / 12
+
+    cfg = _make_config(
+        current_age=60,
+        retirement_age=65,
+        healthcare_inflation_mean=0.10,
+        current_savings=monthly_grossed_up_for_ten_percent_tax * 11.5,
+    )
+
+    assert simulate(cfg) == 0.0
