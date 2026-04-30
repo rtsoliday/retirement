@@ -1,0 +1,37 @@
+package com.retirementreadinesslab.simulation
+
+import com.retirementreadinesslab.model.FilingStatus
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class TaxCalculatorTest {
+    @Test
+    fun singleFilerUsesProgressiveBrackets() {
+        val tax = TaxCalculator.taxLiability(50_000.0, FilingStatus.Single)
+
+        assertEquals(6_053.0, tax, 1.0)
+    }
+
+    @Test
+    fun socialSecurityIsUntaxedBelowThreshold() {
+        val taxable = TaxCalculator.taxableSocialSecurity(
+            otherIncome = 10_000.0,
+            annualSocialSecurity = 20_000.0,
+            filingStatus = FilingStatus.Single
+        )
+
+        assertEquals(0.0, taxable, 0.01)
+    }
+
+    @Test
+    fun grossWithdrawalExceedsNetNeedWhenTaxable() {
+        val gross = TaxCalculator.grossWithdrawalForNetNeed(
+            netNeed = 75_000.0,
+            annualSocialSecurity = 0.0,
+            filingStatus = FilingStatus.Single
+        )
+
+        assertTrue(gross > 75_000.0)
+    }
+}

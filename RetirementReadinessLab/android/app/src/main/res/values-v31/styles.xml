@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.RetirementReadinessLab" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:navigationBarColor">#F7F8F5</item>
+        <item name="android:statusBarColor">#F7F8F5</item>
+        <item name="android:windowSplashScreenBackground">#F7F8F5</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/retirement_readiness_icon</item>
+    </style>
+</resources>
