@@ -34,4 +34,16 @@ class TaxCalculatorTest {
 
         assertTrue(gross > 75_000.0)
     }
+
+    @Test
+    fun otherTaxableIncomeCanCoverNetNeedBeforePortfolioWithdrawal() {
+        val gross = TaxCalculator.grossWithdrawalForNetNeed(
+            netNeed = 10_000.0,
+            annualSocialSecurity = 0.0,
+            filingStatus = FilingStatus.Single,
+            annualOtherTaxableIncome = 12_000.0
+        )
+
+        assertEquals(0.0, gross, 0.01)
+    }
 }

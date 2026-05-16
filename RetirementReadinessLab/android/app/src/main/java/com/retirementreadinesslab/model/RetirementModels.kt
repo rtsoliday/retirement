@@ -22,7 +22,13 @@ enum class ScenarioWarningSeverity {
     Watch
 }
 
+enum class SpendingPathModel(val label: String) {
+    Flat("Flat real spending"),
+    EmpiricalAgeDecline("Empirical age decline")
+}
+
 const val DEFAULT_PROJECTION_END_AGE = 119
+const val SENIOR_APARTMENT_MONTHLY_RENT_2026 = 3_000.0
 
 data class ScenarioWarning(
     val title: String,
@@ -35,7 +41,8 @@ data class HouseholdProfile(
     val retirementAge: Int,
     val targetEndAge: Int = DEFAULT_PROJECTION_END_AGE,
     val filingStatus: FilingStatus = FilingStatus.Single,
-    val gender: Gender = Gender.Male
+    val gender: Gender = Gender.Male,
+    val spouseCurrentAge: Int = currentAge
 )
 
 data class AccountBalances(
@@ -51,12 +58,77 @@ data class AccountBalances(
 data class SpendingPlan(
     val annualBaseSpending: Double,
     val generalInflationMean: Double = 0.033,
-    val generalInflationStdDev: Double = 0.04
+    val generalInflationStdDev: Double = 0.04,
+    val spendingPathModel: SpendingPathModel = SpendingPathModel.EmpiricalAgeDecline,
+    val lowPortfolioSpendingReduction: Double = 0.10
 )
+
+data class BudgetLineItem(
+    val id: String,
+    val name: String,
+    val monthlyAmount: Double
+)
+
+data class MonthlyBudget(
+    val month: String,
+    val checkingSavingsBills: List<BudgetLineItem> = emptyList(),
+    val creditCardBills: List<BudgetLineItem> = emptyList(),
+    val cashAndAtmWithdrawals: Double = 0.0
+) {
+    val checkingSavingsTotal: Double
+        get() = checkingSavingsBills.sumOf { it.monthlyAmount }
+
+    val creditCardTotal: Double
+        get() = creditCardBills.sumOf { it.monthlyAmount }
+
+    val monthlyTotal: Double
+        get() = checkingSavingsTotal + creditCardTotal + cashAndAtmWithdrawals
+}
+
+data class BudgetProfile(
+    val annualPropertyTaxes: Double = 0.0,
+    val annualHomeInsurance: Double = 0.0,
+    val annualAutoInsurance: Double = 0.0,
+    val monthlyBudgets: List<MonthlyBudget> = emptyList()
+) {
+    val annualFixedSpending: Double
+        get() = annualPropertyTaxes + annualHomeInsurance + annualAutoInsurance
+
+    val monthsUsedForEstimate: List<MonthlyBudget>
+        get() = monthlyBudgets
+            .groupBy { it.month }
+            .map { (_, entries) -> entries.last() }
+            .sortedBy { it.month }
+            .takeLast(MAX_BUDGET_MONTHS_FOR_ESTIMATE)
+
+    val averageMonthlySpending: Double
+        get() {
+            val months = monthsUsedForEstimate
+            if (months.isEmpty()) return 0.0
+            return months.sumOf { it.monthlyTotal } / months.size.toDouble()
+        }
+
+    val annualizedMonthlySpending: Double
+        get() = averageMonthlySpending * 12.0
+
+    val annualBaseSpendingEstimate: Double
+        get() = annualFixedSpending + annualizedMonthlySpending
+}
+
+const val MAX_BUDGET_MONTHS_FOR_ESTIMATE = 12
 
 data class MortgagePlan(
     val monthlyPayment: Double = 0.0,
-    val yearsLeft: Int = 0
+    val yearsLeft: Int = 0,
+    val currentBalance: Double = 0.0
+)
+
+data class RentPlan(
+    val monthlyRent: Double = 0.0
+)
+
+data class HomePlan(
+    val currentValue: Double = 0.0
 )
 
 data class HealthcarePlan(
@@ -69,6 +141,13 @@ data class HealthcarePlan(
 data class SocialSecurityPlan(
     val annualBenefitAt67: Double,
     val claimAge: Int = 67
+)
+
+data class GuaranteedIncomePlan(
+    val annualIncome: Double = 0.0,
+    val startAge: Int = 65,
+    val annualIncrease: Double = 0.0,
+    val survivorPercent: Double = 1.0
 )
 
 data class MarketAssumptions(
@@ -102,9 +181,13 @@ data class RetirementScenario(
     val household: HouseholdProfile,
     val accounts: AccountBalances,
     val spending: SpendingPlan,
+    val budget: BudgetProfile = BudgetProfile(),
     val mortgage: MortgagePlan = MortgagePlan(),
+    val rent: RentPlan = RentPlan(),
+    val home: HomePlan = HomePlan(),
     val healthcare: HealthcarePlan = HealthcarePlan(),
     val socialSecurity: SocialSecurityPlan,
+    val guaranteedIncome: GuaranteedIncomePlan = GuaranteedIncomePlan(),
     val market: MarketAssumptions = MarketAssumptions(),
     val rothConversion: RothConversionStrategy = RothConversionStrategy(),
     val withdrawalStrategy: WithdrawalStrategy = WithdrawalStrategy(),
@@ -118,6 +201,24 @@ data class OutcomeBand(
     val pessimistic: Double,
     val median: Double,
     val optimistic: Double
+)
+
+data class SimulationPathPoint(
+    val yearsInRetirement: Int,
+    val balance: Double,
+    val successfulPath: Boolean,
+    val separatedFromOppositeOutcome: Boolean
+)
+
+data class SimulationMeanPoint(
+    val yearsInRetirement: Int,
+    val balance: Double
+)
+
+data class PortfolioSurvivalPoint(
+    val age: Int,
+    val notFailedShare: Double,
+    val aliveShare: Double
 )
 
 data class FailureAgeBucket(
@@ -155,6 +256,9 @@ data class SimulationResult(
     val medianFailureAge: Int?,
     val failureAgeBuckets: List<FailureAgeBucket>,
     val balanceBands: List<OutcomeBand>,
+    val notFailedByAge: List<PortfolioSurvivalPoint>,
+    val pathPoints: List<SimulationPathPoint>,
+    val meanPath: List<SimulationMeanPoint>,
     val riskBreakdown: RiskBreakdown,
     val provenance: CalculationProvenance,
     val generatedAtEpochMillis: Long
@@ -165,6 +269,13 @@ fun RetirementScenario.validate(): List<String> {
     if (household.currentAge <= 0) errors += "Current age must be positive."
     if (household.retirementAge < household.currentAge) {
         errors += "Retirement age must be greater than or equal to current age."
+    }
+    if (household.filingStatus == FilingStatus.Married) {
+        if (household.spouseCurrentAge <= 0) errors += "Spouse age must be positive."
+        val spouseAgeAtRetirement = household.spouseCurrentAge + (household.retirementAge - household.currentAge)
+        if (spouseAgeAtRetirement > household.targetEndAge) {
+            errors += "Spouse age at retirement must be below the mortality projection cap."
+        }
     }
     if (household.targetEndAge <= household.retirementAge) {
         errors += "Projection end age must be greater than retirement age."
@@ -177,12 +288,22 @@ fun RetirementScenario.validate(): List<String> {
     }
     if (spending.annualBaseSpending < 0) errors += "Annual spending cannot be negative."
     if (spending.generalInflationStdDev < 0) errors += "General inflation swing cannot be negative."
-    if (mortgage.monthlyPayment < 0 || mortgage.yearsLeft < 0) {
-        errors += "Mortgage payment and years left cannot be negative."
+    if (spending.lowPortfolioSpendingReduction !in 0.0..1.0) {
+        errors += "Spending reduction must be between 0% and 100%."
     }
+    if (mortgage.monthlyPayment < 0 || mortgage.yearsLeft < 0 || mortgage.currentBalance < 0) {
+        errors += "Mortgage payment, years left, and balance cannot be negative."
+    }
+    if (rent.monthlyRent < 0) errors += "Rent cannot be negative."
+    if (home.currentValue < 0) errors += "Home value cannot be negative."
     if (healthcare.preMedicareMonthlyPremium < 0) errors += "Healthcare premium cannot be negative."
     if (healthcare.healthcareInflationStdDev < 0) errors += "Healthcare inflation swing cannot be negative."
     if (socialSecurity.annualBenefitAt67 < 0) errors += "Social Security estimate cannot be negative."
+    if (guaranteedIncome.annualIncome < 0) errors += "Guaranteed income cannot be negative."
+    if (guaranteedIncome.startAge < 0) errors += "Guaranteed income start age cannot be negative."
+    if (guaranteedIncome.survivorPercent !in 0.0..1.0) {
+        errors += "Guaranteed income survivor benefit must be between 0% and 100%."
+    }
     if (
         market.preRetirementStdDev < 0 ||
         market.stockStdDev < 0 ||
@@ -220,7 +341,7 @@ fun RetirementScenario.warnings(): List<ScenarioWarning> {
     if (spendingRatio > 0.07) {
         warnings += ScenarioWarning(
             title = "High spending draw",
-            detail = "Annual spending is more than 7% of current assets before taxes, healthcare, and mortgage costs."
+            detail = "Annual spending is more than 7% of current assets before taxes, healthcare, mortgage, and rent costs."
         )
     }
     if (spending.generalInflationMean < 0.015) {
@@ -267,6 +388,20 @@ fun RetirementScenario.warnings(): List<ScenarioWarning> {
         warnings += ScenarioWarning(
             title = "Mortgage extends beyond horizon",
             detail = "Mortgage years left exceeds the internal mortality projection cap."
+        )
+    }
+    if ((mortgage.monthlyPayment > 0.0 || mortgage.yearsLeft > 0) && home.currentValue <= 0.0) {
+        warnings += ScenarioWarning(
+            title = "Home value not entered",
+            detail = "Enter current home value if the home could be sold later to fund senior apartment rent.",
+            severity = ScenarioWarningSeverity.Note
+        )
+    }
+    if ((mortgage.monthlyPayment > 0.0 || mortgage.yearsLeft > 0) && mortgage.currentBalance <= 0.0) {
+        warnings += ScenarioWarning(
+            title = "Mortgage balance not entered",
+            detail = "Enter the current mortgage balance so a forced home sale uses net home equity instead of gross home value.",
+            severity = ScenarioWarningSeverity.Note
         )
     }
     if (numberOfSimulations < 500) {

@@ -30,17 +30,15 @@ import com.retirementreadinesslab.model.SimulationResult
 import com.retirementreadinesslab.state.RetirementLabState
 import com.retirementreadinesslab.ui.asCompactCurrency
 import com.retirementreadinesslab.ui.asPercent
-import com.retirementreadinesslab.ui.components.BalancePathChart
 import com.retirementreadinesslab.ui.components.KeyValueRow
 import com.retirementreadinesslab.ui.components.MetricCard
+import com.retirementreadinesslab.ui.components.PortfolioSurvivalChart
 import com.retirementreadinesslab.ui.components.RiskPill
 import com.retirementreadinesslab.ui.components.SectionHeader
+import com.retirementreadinesslab.ui.components.SimulationPathsChart
 import com.retirementreadinesslab.ui.theme.LabCaution
 import com.retirementreadinesslab.ui.theme.LabMutedText
 import com.retirementreadinesslab.ui.theme.LabPrimary
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 @Composable
 fun ResultsScreen(state: RetirementLabState) {
@@ -56,8 +54,7 @@ fun ResultsScreen(state: RetirementLabState) {
     ) {
         item {
             SectionHeader(
-                title = "Results Detail",
-                subtitle = scenario.name
+                title = "Results Detail"
             )
         }
 
@@ -97,7 +94,15 @@ fun ResultsScreen(state: RetirementLabState) {
         }
 
         item {
-            BalancePathChart(bands = result.balanceBands)
+            PortfolioSurvivalChart(points = result.notFailedByAge)
+        }
+
+        item {
+            SimulationPathsChart(
+                points = result.pathPoints,
+                meanPath = result.meanPath,
+                retirementAge = scenario.household.retirementAge
+            )
         }
 
         item {
@@ -141,26 +146,6 @@ fun ResultsScreen(state: RetirementLabState) {
             }
         }
 
-        item {
-            ProvenanceCard(result)
-        }
-    }
-}
-
-@Composable
-private fun ProvenanceCard(result: SimulationResult) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Calculation provenance", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            KeyValueRow("Generated", result.generatedAtEpochMillis.formatGeneratedAt())
-            KeyValueRow("Engine", result.provenance.engineVersion)
-            KeyValueRow("Cadence", result.provenance.engineCadence)
-            KeyValueRow("Tax table", result.provenance.taxTableVersion)
-            KeyValueRow("Mortality model", result.provenance.mortalityModelVersion)
-            KeyValueRow("Random seed", result.provenance.randomSeed.toString())
-            KeyValueRow("Simulations", result.provenance.simulationCount.toString())
-            KeyValueRow("Assumption fingerprint", result.provenance.assumptionFingerprint)
-        }
     }
 }
 
@@ -228,8 +213,4 @@ private fun FailureBucketRow(bucket: FailureAgeBucket) {
             )
         }
     }
-}
-
-private fun Long.formatGeneratedAt(): String {
-    return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(this))
 }

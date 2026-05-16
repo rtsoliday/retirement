@@ -22,7 +22,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -40,8 +39,7 @@ import com.retirementreadinesslab.ui.theme.LabPrimary
 @Composable
 fun WelcomeScreen(
     state: RetirementLabState,
-    onStartSetup: () -> Unit,
-    onUseSamplePlans: () -> Unit
+    onStartSetup: () -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxWidth(),
@@ -77,8 +75,7 @@ fun WelcomeScreen(
         item {
             WelcomeActionCard(
                 state = state,
-                onStartSetup = onStartSetup,
-                onUseSamplePlans = onUseSamplePlans
+                onStartSetup = onStartSetup
             )
         }
 
@@ -123,8 +120,7 @@ fun WelcomeScreen(
 @Composable
 private fun WelcomeActionCard(
     state: RetirementLabState,
-    onStartSetup: () -> Unit,
-    onUseSamplePlans: () -> Unit
+    onStartSetup: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(8.dp),
@@ -138,7 +134,7 @@ private fun WelcomeActionCard(
         ) {
             Text("Start with your numbers", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
-                "The guided setup starts with the active sample plan, then saves your changes locally.",
+                "Setup starts with editable sample data, then saves your changes locally.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = LabMutedText
             )
@@ -150,13 +146,6 @@ private fun WelcomeActionCard(
                 Text("Start Setup")
                 Spacer(modifier = Modifier.width(8.dp))
                 Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
-            }
-            OutlinedButton(
-                onClick = onUseSamplePlans,
-                enabled = !state.isLoading,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Use Sample Plans")
             }
         }
     }

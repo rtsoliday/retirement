@@ -2,67 +2,18 @@ package com.retirementreadinesslab.reports
 
 import com.retirementreadinesslab.compliance.ComplianceText
 import com.retirementreadinesslab.model.RetirementScenario
+import com.retirementreadinesslab.model.SENIOR_APARTMENT_MONTHLY_RENT_2026
 import com.retirementreadinesslab.model.SimulationResult
+import com.retirementreadinesslab.model.SpendingPathModel
 import com.retirementreadinesslab.model.warnings
 import com.retirementreadinesslab.simulation.MedicarePremiums
 import com.retirementreadinesslab.simulation.ResultInsights
-import com.retirementreadinesslab.simulation.ScenarioComparison
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 object ReportBuilder {
-    fun buildScenarioCsv(
-        scenarios: List<RetirementScenario>,
-        results: Map<String, SimulationResult>
-    ): String {
-        val comparison = scenarios.firstOrNull()?.let { baseline ->
-            ScenarioComparison.build(scenarios, results, baseline)
-        }
-        val rowsById = comparison?.rows.orEmpty().associateBy { it.scenarioId }
-        return buildString {
-            appendLine(
-                listOf(
-                    "Scenario",
-                    "Retirement age",
-                    "Claim age",
-                    "Annual spending",
-                    "Total assets",
-                    "Readiness",
-                    "Median ending balance",
-                    "10th percentile ending balance",
-                    "90th percentile ending balance",
-                    "Median failure age",
-                    "Most common failure window",
-                    "Changed assumptions",
-                    "Primary risk"
-                ).joinToString(",")
-            )
-            scenarios.forEach { scenario ->
-                val result = results[scenario.id]
-                val comparisonRow = rowsById[scenario.id]
-                appendLine(
-                    listOf(
-                        scenario.name.csv(),
-                        scenario.household.retirementAge.toString(),
-                        scenario.socialSecurity.claimAge.toString(),
-                        scenario.spending.annualBaseSpending.csvNumber(),
-                        scenario.accounts.total.csvNumber(),
-                        result?.successProbability?.percent() ?: "",
-                        result?.medianEndingBalance?.csvNumber() ?: "",
-                        result?.pessimisticEndingBalance?.csvNumber() ?: "",
-                        result?.optimisticEndingBalance?.csvNumber() ?: "",
-                        result?.medianFailureAge?.toString() ?: "",
-                        comparisonRow?.mostCommonFailureWindow?.csv() ?: "",
-                        comparisonRow?.changedAssumptions.orEmpty().joinToString("; ").csv(),
-                        result?.riskBreakdown?.primaryRisk?.csv() ?: ""
-                    ).joinToString(",")
-                )
-            }
-        }
-    }
-
     fun buildTextReport(
         scenario: RetirementScenario,
         result: SimulationResult?
@@ -70,13 +21,12 @@ object ReportBuilder {
         val generated = result?.generatedAtEpochMillis ?: System.currentTimeMillis()
         return buildString {
             appendLine("Retirement Readiness Lab")
-            appendLine("Scenario report")
+            appendLine("Readiness report")
             appendLine("Generated: ${formatDate(generated)}")
             appendLine()
             appendLine("Summary")
-            appendLine("- Scenario: ${scenario.name}")
             appendLine("- Retirement age: ${scenario.household.retirementAge}")
-            appendLine("- Horizon model: Mortality table, capped at age ${scenario.household.targetEndAge}")
+            appendLine("- Horizon model: Mortality table, capped at age ${scenario.household.targetEndAge} per modeled person")
             appendLine("- Readiness: ${result?.successProbability?.percent() ?: "Not run"}")
             appendLine("- Median ending balance: ${result?.medianEndingBalance?.money() ?: "Not run"}")
             appendLine("- 10th percentile ending balance: ${result?.pessimisticEndingBalance?.money() ?: "Not run"}")
@@ -127,17 +77,28 @@ object ReportBuilder {
             appendLine("Key assumptions")
             appendLine("- Filing status: ${scenario.household.filingStatus.label}")
             appendLine("- Mortality table: ${scenario.household.gender.label}")
+            if (scenario.household.filingStatus == com.retirementreadinesslab.model.FilingStatus.Married) {
+                appendLine("- Spouse current age: ${scenario.household.spouseCurrentAge}")
+                appendLine("- Spouse mortality table: opposite gender, no separate spouse income")
+            }
             appendLine("- Current age: ${scenario.household.currentAge}")
             appendLine("- Projection cap: Age ${scenario.household.targetEndAge}")
             appendLine("- Annual spending: ${scenario.spending.annualBaseSpending.money()}")
+            appendLine("- Spending path: ${scenario.spending.spendingPathModel.label}")
+            appendLine("- Spending path detail: ${scenario.spending.spendingPathModel.detail()}")
             appendLine("- General inflation average: ${scenario.spending.generalInflationMean.percent()}")
             appendLine("- General inflation +/- swing: ${scenario.spending.generalInflationStdDev.percent()}")
+            appendLine("- Spending cut below 50% portfolio: ${scenario.spending.lowPortfolioSpendingReduction.percent()}")
             appendLine("- Pre-tax balance: ${scenario.accounts.pretax.money()}")
             appendLine("- Roth balance: ${scenario.accounts.roth.money()}")
             appendLine("- Taxable balance: ${scenario.accounts.taxable.money()}")
             appendLine("- Cash reserve: ${scenario.accounts.cash.money()}")
             appendLine("- Social Security at 67: ${scenario.socialSecurity.annualBenefitAt67.money()}")
             appendLine("- Social Security claim age: ${scenario.socialSecurity.claimAge}")
+            appendLine("- Annual guaranteed income: ${scenario.guaranteedIncome.annualIncome.money()}")
+            appendLine("- Guaranteed income start age: ${scenario.guaranteedIncome.startAge}")
+            appendLine("- Guaranteed income annual increase: ${scenario.guaranteedIncome.annualIncrease.percent()}")
+            appendLine("- Guaranteed income survivor benefit: ${scenario.guaranteedIncome.survivorPercent.percent()}")
             appendLine("- Pre-Medicare monthly premium: ${scenario.healthcare.preMedicareMonthlyPremium.money()}")
             appendLine("- Healthcare inflation average: ${scenario.healthcare.healthcareInflationMean.percent()}")
             appendLine("- Healthcare inflation +/- swing: ${scenario.healthcare.healthcareInflationStdDev.percent()}")
@@ -145,6 +106,10 @@ object ReportBuilder {
             appendLine("- Medicare premium model: ${MedicarePremiums.PREMIUM_TABLE_VERSION}")
             appendLine("- Mortgage payment: ${scenario.mortgage.monthlyPayment.money()}")
             appendLine("- Mortgage years left: ${scenario.mortgage.yearsLeft}")
+            appendLine("- Current mortgage balance: ${scenario.mortgage.currentBalance.money()}")
+            appendLine("- Current home value: ${scenario.home.currentValue.money()}")
+            appendLine("- Monthly rent: ${scenario.rent.monthlyRent.money()}")
+            appendLine("- Senior apartment rent after home sale: ${SENIOR_APARTMENT_MONTHLY_RENT_2026.money()} in 2026 dollars, inflated with general inflation")
             appendLine("- Pre-retirement return average: ${scenario.market.preRetirementMeanReturn.percent()}")
             appendLine("- Pre-retirement return +/- swing: ${scenario.market.preRetirementStdDev.percent()}")
             appendLine("- Stock return average: ${scenario.market.stockMeanReturn.percent()}")
@@ -179,6 +144,14 @@ object ReportBuilder {
         }.format(this)
     }
 
+    private fun SpendingPathModel.detail(): String {
+        return when (this) {
+            SpendingPathModel.Flat -> "Annual base spending keeps pace with general inflation."
+            SpendingPathModel.EmpiricalAgeDecline ->
+                "Annual base spending uses Hurd and Rohwedder 2023 HRS/CAMS real spending declines after age 65, capped at age 85."
+        }
+    }
+
     private fun Double.percent(): String {
         return "${"%.0f".format(Locale.US, this * 100.0)}%"
     }
@@ -188,19 +161,6 @@ object ReportBuilder {
             com.retirementreadinesslab.model.RiskLevel.Healthy -> "Healthy"
             com.retirementreadinesslab.model.RiskLevel.Watch -> "Watch"
             com.retirementreadinesslab.model.RiskLevel.AtRisk -> "At risk"
-        }
-    }
-
-    private fun Double.csvNumber(): String {
-        return "%.2f".format(Locale.US, this)
-    }
-
-    private fun String.csv(): String {
-        val escaped = replace("\"", "\"\"")
-        return if (escaped.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
-            "\"$escaped\""
-        } else {
-            escaped
         }
     }
 

@@ -5,10 +5,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
-import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Science
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -27,13 +26,12 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.retirementreadinesslab.state.rememberRetirementLabState
-import com.retirementreadinesslab.ui.screens.AssumptionsScreen
+import com.retirementreadinesslab.ui.screens.BudgetScreen
 import com.retirementreadinesslab.ui.screens.DashboardScreen
 import com.retirementreadinesslab.ui.screens.LabScreen
-import com.retirementreadinesslab.ui.screens.OnboardingScreen
 import com.retirementreadinesslab.ui.screens.ReportsScreen
 import com.retirementreadinesslab.ui.screens.ResultsScreen
-import com.retirementreadinesslab.ui.screens.ScenariosScreen
+import com.retirementreadinesslab.ui.screens.SetupScreen
 import com.retirementreadinesslab.ui.screens.WelcomeScreen
 
 private data class Destination(
@@ -45,9 +43,8 @@ private data class Destination(
 private val destinations = listOf(
     Destination("dashboard", "Home", Icons.Filled.Home),
     Destination("setup", "Setup", Icons.Filled.Tune),
-    Destination("scenarios", "Plans", Icons.AutoMirrored.Filled.List),
+    Destination("budget", "Budget", Icons.AutoMirrored.Filled.ReceiptLong),
     Destination("lab", "Lab", Icons.Filled.Science),
-    Destination("assumptions", "Assumptions", Icons.Filled.Settings),
     Destination("reports", "Reports", Icons.AutoMirrored.Filled.Article)
 )
 
@@ -112,13 +109,6 @@ fun RetirementReadinessLabApp() {
                         navController.navigate("setup") {
                             launchSingleTop = true
                         }
-                    },
-                    onUseSamplePlans = {
-                        appState.completeFirstLaunch()
-                        navController.navigate("dashboard") {
-                            launchSingleTop = true
-                            popUpTo("welcome") { inclusive = true }
-                        }
                     }
                 )
             }
@@ -128,10 +118,9 @@ fun RetirementReadinessLabApp() {
                     onViewResults = { navController.navigate("results") }
                 )
             }
-            composable("setup") { OnboardingScreen(appState) }
-            composable("scenarios") { ScenariosScreen(appState) }
+            composable("setup") { SetupScreen(appState) }
+            composable("budget") { BudgetScreen(appState) }
             composable("lab") { LabScreen(appState) }
-            composable("assumptions") { AssumptionsScreen(appState) }
             composable("reports") { ReportsScreen(appState) }
             composable("results") { ResultsScreen(appState) }
         }

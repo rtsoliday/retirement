@@ -3,25 +3,48 @@ package com.retirementreadinesslab.simulation
 import com.retirementreadinesslab.model.CalculationProvenance
 import com.retirementreadinesslab.model.OutcomeBand
 import com.retirementreadinesslab.model.FailureAgeBucket
+import com.retirementreadinesslab.model.FilingStatus
+import com.retirementreadinesslab.model.Gender
+import com.retirementreadinesslab.model.PortfolioSurvivalPoint
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.RiskBreakdown
 import com.retirementreadinesslab.model.RiskLevel
+import com.retirementreadinesslab.model.SENIOR_APARTMENT_MONTHLY_RENT_2026
+import com.retirementreadinesslab.model.SimulationMeanPoint
+import com.retirementreadinesslab.model.SimulationPathPoint
 import com.retirementreadinesslab.model.SimulationResult
+import com.retirementreadinesslab.model.SpendingPathModel
 import com.retirementreadinesslab.model.validate
 import java.util.Locale
 import java.util.Random
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 object RetirementSimulator {
-    private const val ENGINE_VERSION = "2026.04-medicare-parity"
+    private const val ENGINE_VERSION = "2026.05-married-income"
     private const val ENGINE_CADENCE = "Monthly cashflow model with annual result bands"
     private const val TAX_TABLE_VERSION = "2024 federal brackets"
     private val MORTALITY_MODEL_VERSION = MortalityTables.TABLE_VERSION
     private const val MONTHS_PER_YEAR = 12
+    private const val MAX_PATH_SCATTER_POINTS = 30_000
     private val MONTHLY_CASH_RETURN = monthlyEquivalent(0.02)
+
+    // Hurd and Rohwedder (2023), "Spending trajectories after age 65: variation by initial wealth",
+    // Journal of the Economics of Ageing 26, 100468, doi:10.1016/j.jeoa.2023.100468, estimates
+    // HRS/CAMS 2005-2019 real spending declines of about 1.7%/yr for singles and 2.4%/yr for
+    // coupled households after age 65.
+    private const val EMPIRICAL_SPENDING_DECLINE_START_AGE = 65
+    private const val EMPIRICAL_SPENDING_DECLINE_END_AGE = 85
+    private const val EMPIRICAL_SINGLE_REAL_SPENDING_DECLINE = 0.017
+    private const val EMPIRICAL_MARRIED_REAL_SPENDING_DECLINE = 0.024
+    private const val EMPIRICAL_SINGLE_SPENDING_FLOOR = 0.65
+    private const val EMPIRICAL_MARRIED_SPENDING_FLOOR = 0.60
+    // Same Hurd and Rohwedder 2023 paper reports a 16% median household spending drop
+    // when a coupled household transitions to widowhood between adjacent CAMS waves.
+    private const val WIDOWHOOD_SPENDING_REDUCTION = 0.16
 
     fun run(scenario: RetirementScenario): SimulationResult {
         val validationErrors = scenario.validate()
@@ -31,10 +54,12 @@ object RetirementSimulator {
         val yearlyBalances = MutableList(horizonYears(scenario) + 1) { mutableListOf<Double>() }
         val endingBalances = mutableListOf<Double>()
         val failureAges = mutableListOf<Int>()
+        val paths = mutableListOf<ScenarioPath>()
         var successes = 0
 
         repeat(scenario.numberOfSimulations) {
             val path = runOneScenario(scenario, random)
+            paths += path
             for ((index, balance) in path.yearEndBalances.withIndex()) {
                 yearlyBalances[index] += balance
             }
@@ -72,10 +97,104 @@ object RetirementSimulator {
             medianFailureAge = medianFailureAge,
             failureAgeBuckets = buildFailureBuckets(failureAges),
             balanceBands = bands,
+            notFailedByAge = buildNotFailedByAge(scenario, paths),
+            pathPoints = buildPathPoints(paths),
+            meanPath = buildMeanPath(paths),
             riskBreakdown = buildRiskBreakdown(scenario, successProbability),
             provenance = buildProvenance(scenario),
             generatedAtEpochMillis = System.currentTimeMillis()
         )
+    }
+
+    private fun buildNotFailedByAge(
+        scenario: RetirementScenario,
+        paths: List<ScenarioPath>
+    ): List<PortfolioSurvivalPoint> {
+        if (paths.isEmpty()) return emptyList()
+        val simulationCount = paths.size.toDouble()
+        val maxSurvivedAge = paths.maxOf { it.survivedThroughAge }
+            .coerceAtLeast(scenario.household.retirementAge)
+        return (scenario.household.retirementAge..maxSurvivedAge).map { age ->
+            val notFailedCount = paths.count { path ->
+                path.failureAge == null || path.failureAge > age
+            }
+            val aliveCount = paths.count { path ->
+                path.survivedThroughAge >= age
+            }
+            PortfolioSurvivalPoint(
+                age = age,
+                notFailedShare = notFailedCount.toDouble() / simulationCount,
+                aliveShare = aliveCount.toDouble() / simulationCount
+            )
+        }
+    }
+
+    private fun buildPathPoints(paths: List<ScenarioPath>): List<SimulationPathPoint> {
+        if (paths.isEmpty()) return emptyList()
+        val years = paths.maxOf { it.chartBalances.size }
+        val failedMaxByYear = DoubleArray(years) { Double.NEGATIVE_INFINITY }
+        val successMinByYear = DoubleArray(years) { Double.POSITIVE_INFINITY }
+        var positivePointCount = 0
+
+        paths.forEach { path ->
+            path.chartBalances.forEachIndexed { year, balance ->
+                if (balance > 0.0) {
+                    positivePointCount += 1
+                    if (path.succeeded) {
+                        successMinByYear[year] = minOf(successMinByYear[year], balance)
+                    } else {
+                        failedMaxByYear[year] = maxOf(failedMaxByYear[year], balance)
+                    }
+                }
+            }
+        }
+
+        if (positivePointCount == 0) return emptyList()
+        val stride = max(1, ceil(positivePointCount.toDouble() / MAX_PATH_SCATTER_POINTS.toDouble()).toInt())
+        val points = mutableListOf<SimulationPathPoint>()
+        var positiveIndex = 0
+        paths.forEach { path ->
+            path.chartBalances.forEachIndexed { year, balance ->
+                if (balance > 0.0) {
+                    if (positiveIndex % stride == 0) {
+                        points += SimulationPathPoint(
+                            yearsInRetirement = year,
+                            balance = balance,
+                            successfulPath = path.succeeded,
+                            separatedFromOppositeOutcome = if (path.succeeded) {
+                                balance > failedMaxByYear[year]
+                            } else {
+                                balance < successMinByYear[year]
+                            }
+                        )
+                    }
+                    positiveIndex += 1
+                }
+            }
+        }
+        return points
+    }
+
+    private fun buildMeanPath(paths: List<ScenarioPath>): List<SimulationMeanPoint> {
+        if (paths.isEmpty()) return emptyList()
+        val years = paths.maxOf { it.chartBalances.size }
+        val sums = DoubleArray(years)
+        val counts = IntArray(years)
+        paths.forEach { path ->
+            path.chartBalances.forEachIndexed { year, balance ->
+                if (balance > 0.0) {
+                    sums[year] += balance
+                    counts[year] += 1
+                }
+            }
+        }
+        return sums.indices.mapNotNull { year ->
+            if (counts[year] > 0) {
+                SimulationMeanPoint(yearsInRetirement = year, balance = sums[year] / counts[year].toDouble())
+            } else {
+                null
+            }
+        }
     }
 
     private fun buildProvenance(scenario: RetirementScenario): CalculationProvenance {
@@ -110,8 +229,31 @@ object RetirementSimulator {
             balances.cash *= 1.0 + MONTHLY_CASH_RETURN
         }
 
-        val deathAge = sampleDeathAge(scenario, random)
-        val ltcStartAge = sampleLongTermCareStartAge(scenario, deathAge, random)
+        val married = scenario.household.filingStatus == FilingStatus.Married
+        val spouseAgeAtRetirement = spouseAgeAtRetirement(scenario)
+        val primaryDeathAge = sampleDeathAge(
+            gender = scenario.household.gender,
+            startAge = scenario.household.retirementAge,
+            targetEndAge = scenario.household.targetEndAge,
+            random = random
+        )
+        val spouseDeathAge = if (married) {
+            sampleDeathAge(
+                gender = scenario.household.gender.opposite(),
+                startAge = spouseAgeAtRetirement,
+                targetEndAge = scenario.household.targetEndAge,
+                random = random
+            )
+        } else {
+            primaryDeathAge
+        }
+        val spouseDeathPrimaryAge = scenario.household.retirementAge + (spouseDeathAge - spouseAgeAtRetirement)
+        val householdDeathAge = if (married) {
+            max(primaryDeathAge, spouseDeathPrimaryAge)
+        } else {
+            primaryDeathAge
+        }
+        val ltcStartAge = sampleLongTermCareStartAge(scenario, primaryDeathAge, random)
         val claimBenefit = SocialSecurity.annualBenefitAtClaimAge(
             scenario.socialSecurity.annualBenefitAt67,
             scenario.socialSecurity.claimAge
@@ -120,8 +262,28 @@ object RetirementSimulator {
         val monthlyInflationStdDev = monthlyStdDev(scenario.spending.generalInflationStdDev)
         val monthlyHealthcareInflationMean = monthlyEquivalent(scenario.healthcare.healthcareInflationMean)
         val monthlyHealthcareInflationStdDev = monthlyStdDev(scenario.healthcare.healthcareInflationStdDev)
+        val monthlyGuaranteedIncomeIncrease = monthlyEquivalent(scenario.guaranteedIncome.annualIncrease)
+        val initialRetirementBalance = balances.total
+        val lowPortfolioThreshold = initialRetirementBalance * 0.50
+        var spendingPathMultiplier = spendingPathMultiplierAtRetirementMonth(scenario, monthOffset = 0)
         var monthlySpending = scenario.spending.annualBaseSpending / MONTHS_PER_YEAR.toDouble() *
+            compound(1.0 + monthlyInflationMean, preRetirementMonths) *
+            spendingPathMultiplier
+        var monthlyRent = scenario.rent.monthlyRent *
             compound(1.0 + monthlyInflationMean, preRetirementMonths)
+        var monthlyHomeValue = scenario.home.currentValue *
+            compound(1.0 + monthlyInflationMean, preRetirementMonths)
+        var remainingMortgageBalance = mortgageBalanceAtRetirement(scenario)
+        var remainingMortgageMonths = mortgageMonthsInRetirement(scenario)
+        var monthlySeniorApartmentRent = SENIOR_APARTMENT_MONTHLY_RENT_2026 *
+            compound(1.0 + monthlyInflationMean, preRetirementMonths)
+        var monthlyGuaranteedIncome = scenario.guaranteedIncome.annualIncome / MONTHS_PER_YEAR.toDouble() *
+            compound(1.0 + monthlyGuaranteedIncomeIncrease, preRetirementMonths)
+        var monthlyHomeOwnershipCostInBase =
+            (scenario.budget.annualPropertyTaxes + scenario.budget.annualHomeInsurance) /
+                MONTHS_PER_YEAR.toDouble() *
+                compound(1.0 + monthlyInflationMean, preRetirementMonths) *
+                spendingPathMultiplier
         var monthlyHealthcare = scenario.healthcare.preMedicareMonthlyPremium *
             compound(1.0 + monthlyHealthcareInflationMean, preRetirementMonths)
         var medicareInflationMultiplier = compound(1.0 + monthlyHealthcareInflationMean, preRetirementMonths)
@@ -131,49 +293,100 @@ object RetirementSimulator {
         val monthlyBondStdDev = monthlyStdDev(scenario.market.bondStdDev)
 
         val pathBalances = mutableListOf(balances.total)
+        val chartBalances = mutableListOf(balances.total)
         val annualMedicareIncomeHistory = mutableListOf<Double>()
         var currentAnnualMedicareIncome = 0.0
         var failureAge: Int? = null
+        var homeSold = false
 
         for (monthOffset in 0 until horizonMonths(scenario)) {
             val age = scenario.household.retirementAge + monthOffset / MONTHS_PER_YEAR
+            val spouseAge = spouseAgeAtRetirement + monthOffset / MONTHS_PER_YEAR
             val monthInYear = monthOffset % MONTHS_PER_YEAR
-            if (age >= deathAge) {
-                if (monthInYear == MONTHS_PER_YEAR - 1) {
-                    pathBalances += balances.total
-                }
-                continue
+            if (age >= householdDeathAge) {
+                break
+            }
+            val primaryAlive = age < primaryDeathAge
+            val spouseAlive = married && age < spouseDeathPrimaryAge
+            val bothSpousesAlive = married && primaryAlive && spouseAlive
+            val alivePeople = (if (primaryAlive) 1 else 0) + (if (spouseAlive) 1 else 0)
+            val currentFilingStatus = if (married) {
+                if (bothSpousesAlive) FilingStatus.Married else FilingStatus.Single
+            } else {
+                scenario.household.filingStatus
             }
 
-            val mortgageCost = if (monthOffset < mortgageMonthsInRetirement(scenario)) {
+            val mortgageCost = if (!homeSold && monthOffset < mortgageMonthsInRetirement(scenario)) {
                 scenario.mortgage.monthlyPayment
             } else {
                 0.0
             }
-            val inLongTermCare = ltcStartAge != null && age >= ltcStartAge
+            val inLongTermCare = primaryAlive && ltcStartAge != null && age >= ltcStartAge
+            val rentCost = if (inLongTermCare) {
+                0.0
+            } else if (homeSold) {
+                monthlySeniorApartmentRent
+            } else {
+                monthlyRent
+            }
+            val housingAdjustedSpending = if (homeSold) {
+                (monthlySpending - monthlyHomeOwnershipCostInBase).coerceAtLeast(0.0)
+            } else {
+                monthlySpending
+            }
+            val spendingReduction = if (
+                initialRetirementBalance > 0.0 &&
+                balances.total < lowPortfolioThreshold
+            ) {
+                scenario.spending.lowPortfolioSpendingReduction
+            } else {
+                0.0
+            }
+            val widowhoodSpendingMultiplier = if (married && !bothSpousesAlive) {
+                1.0 - WIDOWHOOD_SPENDING_REDUCTION
+            } else {
+                1.0
+            }
+            val baseSpending = housingAdjustedSpending *
+                (1.0 - spendingReduction) *
+                widowhoodSpendingMultiplier
             val ltcCost = if (inLongTermCare) {
                 scenario.longTermCare.annualCost / MONTHS_PER_YEAR.toDouble()
             } else {
                 0.0
             }
-            val socialSecurity = if (age >= scenario.socialSecurity.claimAge) {
+            val socialSecurity = if (age >= scenario.socialSecurity.claimAge && alivePeople > 0) {
                 claimBenefit / MONTHS_PER_YEAR.toDouble()
             } else {
                 0.0
             }
+            val guaranteedIncome = if (age >= scenario.guaranteedIncome.startAge && alivePeople > 0) {
+                if (primaryAlive) {
+                    monthlyGuaranteedIncome
+                } else {
+                    monthlyGuaranteedIncome * scenario.guaranteedIncome.survivorPercent
+                }
+            } else {
+                0.0
+            }
             val baseNeedBeforeHealthcare = monthlyRetirementNeed(
-                monthlySpending = monthlySpending,
+                monthlySpending = baseSpending,
                 mortgageCost = mortgageCost,
+                rentCost = rentCost,
                 healthcareCost = 0.0,
                 longTermCareCost = ltcCost,
                 inLongTermCare = inLongTermCare
             )
             val estimatedAnnualIncomeForIrmaa = baseNeedBeforeHealthcare
                 .coerceAtLeast(0.0) * MONTHS_PER_YEAR.toDouble() +
-                socialSecurity * MONTHS_PER_YEAR.toDouble()
-            val healthcareCost = if (age < 65) {
-                monthlyHealthcare
-            } else if (scenario.healthcare.includeMedicarePremiums) {
+                socialSecurity * MONTHS_PER_YEAR.toDouble() +
+                guaranteedIncome * MONTHS_PER_YEAR.toDouble()
+            val preMedicarePeople = (if (primaryAlive && age < 65) 1 else 0) +
+                (if (spouseAlive && spouseAge < 65) 1 else 0)
+            val medicarePeople = (if (primaryAlive && age >= 65) 1 else 0) +
+                (if (spouseAlive && spouseAge >= 65) 1 else 0)
+            val preMedicareCost = monthlyHealthcare * preMedicarePeople.toDouble()
+            val medicareCost = if (scenario.healthcare.includeMedicarePremiums && medicarePeople > 0) {
                 val irmaaIncome = medicareIncomeLookback(
                     annualMedicareIncomeHistory,
                     estimatedAnnualIncomeForIrmaa
@@ -181,16 +394,19 @@ object RetirementSimulator {
                 MedicarePremiums
                     .estimateAnnualPremium(
                         modifiedAdjustedGrossIncome = irmaaIncome,
-                        filingStatus = scenario.household.filingStatus,
+                        filingStatus = currentFilingStatus,
+                        coveredPeople = medicarePeople,
                         inflationMultiplier = medicareInflationMultiplier
                     )
                     .monthlyPremium
             } else {
                 0.0
             }
+            val healthcareCost = preMedicareCost + medicareCost
             val netNeed = monthlyRetirementNeed(
-                monthlySpending = monthlySpending,
+                monthlySpending = baseSpending,
                 mortgageCost = mortgageCost,
+                rentCost = rentCost,
                 healthcareCost = healthcareCost,
                 longTermCareCost = ltcCost,
                 inLongTermCare = inLongTermCare
@@ -210,37 +426,39 @@ object RetirementSimulator {
             val grossWithdrawal = TaxCalculator.grossWithdrawalForNetNeed(
                 netNeed = netNeed * MONTHS_PER_YEAR.toDouble(),
                 annualSocialSecurity = socialSecurity * MONTHS_PER_YEAR.toDouble(),
-                filingStatus = scenario.household.filingStatus
+                filingStatus = currentFilingStatus,
+                annualOtherTaxableIncome = guaranteedIncome * MONTHS_PER_YEAR.toDouble()
             ) / MONTHS_PER_YEAR.toDouble()
 
-            if (scenario.withdrawalStrategy.useCashReserveDuringDrawdowns &&
+            val portfolioWithdrawal = if (scenario.withdrawalStrategy.useCashReserveDuringDrawdowns &&
                 portfolioReturn < scenario.withdrawalStrategy.drawdownTrigger &&
                 balances.cash > 0.0
             ) {
-                val netAfterSocialSecurity = max(0.0, netNeed - socialSecurity)
-                val cashDraw = minOf(balances.cash, netAfterSocialSecurity)
+                val cashDraw = minOf(balances.cash, grossWithdrawal)
                 balances.cash -= cashDraw
-                withdrawStandard(grossWithdrawal - cashDraw, balances)
+                grossWithdrawal - cashDraw
             } else {
-                withdrawStandard(grossWithdrawal, balances)
-            }
+                grossWithdrawal
+            }.coerceAtLeast(0.0)
+            withdrawStandard(portfolioWithdrawal, balances)
 
-            val annualizedGrossWithdrawal = grossWithdrawal * MONTHS_PER_YEAR.toDouble()
-            currentAnnualMedicareIncome += grossWithdrawal +
+            val annualizedPortfolioWithdrawal = portfolioWithdrawal * MONTHS_PER_YEAR.toDouble()
+            currentAnnualMedicareIncome += portfolioWithdrawal +
+                guaranteedIncome +
                 TaxCalculator.taxableSocialSecurity(
-                    otherIncome = annualizedGrossWithdrawal,
+                    otherIncome = annualizedPortfolioWithdrawal + guaranteedIncome * MONTHS_PER_YEAR.toDouble(),
                     annualSocialSecurity = socialSecurity * MONTHS_PER_YEAR.toDouble(),
-                    filingStatus = scenario.household.filingStatus
+                    filingStatus = currentFilingStatus
                 ) / MONTHS_PER_YEAR.toDouble()
 
             if (scenario.rothConversion.enabled && monthInYear == 0) {
                 val conversionLimit = TaxCalculator.upperBracketLimitForRate(
                     scenario.rothConversion.marginalRateCap,
-                    scenario.household.filingStatus
+                    currentFilingStatus
                 )
                 if (conversionLimit != null && balances.pretax > 0.0) {
                     val conversion = minOf(balances.pretax, conversionLimit * 0.20)
-                    val tax = TaxCalculator.taxLiability(conversion, scenario.household.filingStatus)
+                    val tax = TaxCalculator.taxLiability(conversion, currentFilingStatus)
                     balances.pretax -= conversion
                     balances.roth += conversion
                     withdrawForConversionTax(tax, balances)
@@ -248,16 +466,31 @@ object RetirementSimulator {
                 }
             }
 
-            val totalBalance = balances.total
-            if (totalBalance < 0.0 && failureAge == null) {
-                failureAge = age
-                if (monthInYear != MONTHS_PER_YEAR - 1) {
-                    pathBalances += totalBalance
-                }
-                break
+            if (!homeSold && remainingMortgageMonths > 0) {
+                val principalReduction = remainingMortgageBalance / remainingMortgageMonths.toDouble()
+                remainingMortgageBalance = (remainingMortgageBalance - principalReduction).coerceAtLeast(0.0)
+                remainingMortgageMonths -= 1
             }
+
+            if (balances.total < 0.0 && failureAge == null) {
+                if (!homeSold && monthlyHomeValue > 0.0) {
+                    val netHomeEquity = (monthlyHomeValue - remainingMortgageBalance).coerceAtLeast(0.0)
+                    balances.cash += netHomeEquity
+                    monthlyHomeValue = 0.0
+                    remainingMortgageBalance = 0.0
+                    remainingMortgageMonths = 0
+                    homeSold = true
+                }
+                if (balances.total < 0.0) {
+                    failureAge = age
+                    pathBalances += balances.total
+                    break
+                }
+            }
+            val totalBalance = balances.total
             if (monthInYear == MONTHS_PER_YEAR - 1) {
                 pathBalances += totalBalance
+                chartBalances += totalBalance
             }
 
             val inflation = sampleNormal(
@@ -270,10 +503,23 @@ object RetirementSimulator {
                 monthlyHealthcareInflationMean,
                 monthlyHealthcareInflationStdDev
             ).coerceAtLeast(monthlyEquivalent(-0.02))
+            val nextSpendingPathMultiplier = spendingPathMultiplierAtRetirementMonth(
+                scenario,
+                monthOffset = monthOffset + 1
+            )
+            val spendingPathChange = nextSpendingPathMultiplier / spendingPathMultiplier.coerceAtLeast(0.0001)
 
-            monthlySpending *= 1.0 + inflation
+            monthlySpending *= (1.0 + inflation) * spendingPathChange
+            monthlyRent *= 1.0 + inflation
+            if (!homeSold) {
+                monthlyHomeValue *= 1.0 + inflation
+            }
+            monthlySeniorApartmentRent *= 1.0 + inflation
+            monthlyGuaranteedIncome *= 1.0 + monthlyGuaranteedIncomeIncrease
+            monthlyHomeOwnershipCostInBase *= (1.0 + inflation) * spendingPathChange
             monthlyHealthcare *= 1.0 + healthcareInflation
             medicareInflationMultiplier *= 1.0 + healthcareInflation
+            spendingPathMultiplier = nextSpendingPathMultiplier
 
             if (monthInYear == MONTHS_PER_YEAR - 1) {
                 annualMedicareIncomeHistory += currentAnnualMedicareIncome
@@ -288,7 +534,12 @@ object RetirementSimulator {
         return ScenarioPath(
             succeeded = failureAge == null,
             failureAge = failureAge,
-            yearEndBalances = pathBalances
+            survivedThroughAge = minOf(
+                householdDeathAge,
+                scenario.household.retirementAge + horizonYears(scenario)
+            ),
+            yearEndBalances = pathBalances,
+            chartBalances = chartBalances
         )
     }
 
@@ -344,6 +595,7 @@ object RetirementSimulator {
     internal fun monthlyRetirementNeed(
         monthlySpending: Double,
         mortgageCost: Double,
+        rentCost: Double,
         healthcareCost: Double,
         longTermCareCost: Double,
         inLongTermCare: Boolean
@@ -351,7 +603,7 @@ object RetirementSimulator {
         return if (inLongTermCare) {
             longTermCareCost + healthcareCost
         } else {
-            monthlySpending + mortgageCost + healthcareCost
+            monthlySpending + mortgageCost + rentCost + healthcareCost
         }
     }
 
@@ -368,14 +620,31 @@ object RetirementSimulator {
         }
     }
 
-    private fun sampleDeathAge(scenario: RetirementScenario, random: Random): Int {
-        var age = scenario.household.retirementAge
-        while (age <= scenario.household.targetEndAge) {
-            val deathProbability = MortalityTables.annualDeathProbability(scenario.household.gender, age)
+    private fun sampleDeathAge(
+        gender: Gender,
+        startAge: Int,
+        targetEndAge: Int,
+        random: Random
+    ): Int {
+        var age = startAge
+        while (age <= targetEndAge) {
+            val deathProbability = MortalityTables.annualDeathProbability(gender, age)
             if (random.nextDouble() < deathProbability) return age
             age += 1
         }
-        return scenario.household.targetEndAge + 1
+        return targetEndAge + 1
+    }
+
+    private fun Gender.opposite(): Gender {
+        return when (this) {
+            Gender.Male -> Gender.Female
+            Gender.Female -> Gender.Male
+        }
+    }
+
+    private fun spouseAgeAtRetirement(scenario: RetirementScenario): Int {
+        return scenario.household.spouseCurrentAge +
+            (scenario.household.retirementAge - scenario.household.currentAge)
     }
 
     private fun sampleLongTermCareStartAge(
@@ -399,8 +668,21 @@ object RetirementSimulator {
         return max(0, scenario.mortgage.yearsLeft - yearsToRetirement) * MONTHS_PER_YEAR
     }
 
+    private fun mortgageBalanceAtRetirement(scenario: RetirementScenario): Double {
+        val totalMortgageMonths = scenario.mortgage.yearsLeft * MONTHS_PER_YEAR
+        if (totalMortgageMonths <= 0) return scenario.mortgage.currentBalance
+        val yearsToRetirement = scenario.household.retirementAge - scenario.household.currentAge
+        val preRetirementMonths = yearsToRetirement * MONTHS_PER_YEAR
+        val remainingMonths = (totalMortgageMonths - preRetirementMonths).coerceAtLeast(0)
+        return scenario.mortgage.currentBalance * remainingMonths.toDouble() / totalMortgageMonths.toDouble()
+    }
+
     private fun horizonYears(scenario: RetirementScenario): Int {
-        return scenario.household.targetEndAge - scenario.household.retirementAge
+        val primaryHorizon = scenario.household.targetEndAge - scenario.household.retirementAge
+        if (scenario.household.filingStatus != FilingStatus.Married) return primaryHorizon
+
+        val spouseHorizon = scenario.household.targetEndAge - spouseAgeAtRetirement(scenario)
+        return max(primaryHorizon, spouseHorizon).coerceAtLeast(primaryHorizon)
     }
 
     private fun horizonMonths(scenario: RetirementScenario): Int {
@@ -413,6 +695,37 @@ object RetirementSimulator {
             result *= base
         }
         return result
+    }
+
+    private fun spendingPathMultiplierAtRetirementMonth(
+        scenario: RetirementScenario,
+        monthOffset: Int
+    ): Double {
+        if (scenario.spending.spendingPathModel == SpendingPathModel.Flat) return 1.0
+
+        val currentAgeMonths = scenario.household.retirementAge * MONTHS_PER_YEAR + monthOffset
+        val baselineAgeMonths = max(
+            EMPIRICAL_SPENDING_DECLINE_START_AGE,
+            scenario.household.currentAge
+        ) * MONTHS_PER_YEAR
+        val cappedAgeMonths = minOf(
+            currentAgeMonths,
+            EMPIRICAL_SPENDING_DECLINE_END_AGE * MONTHS_PER_YEAR
+        )
+        val declineMonths = (cappedAgeMonths - baselineAgeMonths).coerceAtLeast(0)
+        val yearsOfDecline = declineMonths.toDouble() / MONTHS_PER_YEAR.toDouble()
+        val annualDecline = if (scenario.household.filingStatus == FilingStatus.Married) {
+            EMPIRICAL_MARRIED_REAL_SPENDING_DECLINE
+        } else {
+            EMPIRICAL_SINGLE_REAL_SPENDING_DECLINE
+        }
+        val floor = if (scenario.household.filingStatus == FilingStatus.Married) {
+            EMPIRICAL_MARRIED_SPENDING_FLOOR
+        } else {
+            EMPIRICAL_SINGLE_SPENDING_FLOOR
+        }
+
+        return (1.0 - annualDecline).pow(yearsOfDecline).coerceAtLeast(floor)
     }
 
     private fun monthlyEquivalent(annualRate: Double): Double {
@@ -534,12 +847,12 @@ object RetirementSimulator {
 
     private fun assumptionFingerprint(scenario: RetirementScenario): String {
         val source = listOf(
-            scenario.name,
             scenario.household.currentAge.toString(),
             scenario.household.retirementAge.toString(),
             scenario.household.targetEndAge.toString(),
             scenario.household.filingStatus.name,
             scenario.household.gender.name,
+            scenario.household.spouseCurrentAge.toString(),
             scenario.accounts.pretax.fingerprintNumber(),
             scenario.accounts.roth.fingerprintNumber(),
             scenario.accounts.taxable.fingerprintNumber(),
@@ -547,14 +860,23 @@ object RetirementSimulator {
             scenario.spending.annualBaseSpending.fingerprintNumber(),
             scenario.spending.generalInflationMean.fingerprintNumber(),
             scenario.spending.generalInflationStdDev.fingerprintNumber(),
+            scenario.spending.spendingPathModel.name,
+            scenario.spending.lowPortfolioSpendingReduction.fingerprintNumber(),
             scenario.mortgage.monthlyPayment.fingerprintNumber(),
             scenario.mortgage.yearsLeft.toString(),
+            scenario.mortgage.currentBalance.fingerprintNumber(),
+            scenario.rent.monthlyRent.fingerprintNumber(),
+            scenario.home.currentValue.fingerprintNumber(),
             scenario.healthcare.preMedicareMonthlyPremium.fingerprintNumber(),
             scenario.healthcare.healthcareInflationMean.fingerprintNumber(),
             scenario.healthcare.healthcareInflationStdDev.fingerprintNumber(),
             scenario.healthcare.includeMedicarePremiums.toString(),
             scenario.socialSecurity.annualBenefitAt67.fingerprintNumber(),
             scenario.socialSecurity.claimAge.toString(),
+            scenario.guaranteedIncome.annualIncome.fingerprintNumber(),
+            scenario.guaranteedIncome.startAge.toString(),
+            scenario.guaranteedIncome.annualIncrease.fingerprintNumber(),
+            scenario.guaranteedIncome.survivorPercent.fingerprintNumber(),
             scenario.market.preRetirementMeanReturn.fingerprintNumber(),
             scenario.market.preRetirementStdDev.fingerprintNumber(),
             scenario.market.stockMeanReturn.fingerprintNumber(),
@@ -586,7 +908,9 @@ object RetirementSimulator {
     private data class ScenarioPath(
         val succeeded: Boolean,
         val failureAge: Int?,
-        val yearEndBalances: List<Double>
+        val survivedThroughAge: Int,
+        val yearEndBalances: List<Double>,
+        val chartBalances: List<Double>
     )
 
     private data class SimBalances(

@@ -23,6 +23,7 @@ class RetirementSimulatorPerformanceTest {
             scenario.household.targetEndAge - scenario.household.retirementAge + 1,
             result.balanceBands.size
         )
+        assertTrue(result.notFailedByAge.size <= result.balanceBands.size)
         assertTrue(result.successProbability in 0.0..1.0)
         assertTrue(
             "1,000 simulations took ${elapsedMillis}ms",
@@ -44,6 +45,7 @@ class RetirementSimulatorPerformanceTest {
         assertEquals(10_000, result.provenance.simulationCount)
         assertTrue(result.successProbability in 0.0..1.0)
         assertTrue(result.balanceBands.isNotEmpty())
+        assertTrue(result.notFailedByAge.isNotEmpty())
     }
 
     private fun maxAutomatedProfileMillis(): Long {

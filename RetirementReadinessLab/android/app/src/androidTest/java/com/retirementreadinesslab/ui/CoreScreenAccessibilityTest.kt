@@ -1,11 +1,12 @@
 package com.retirementreadinesslab.ui
 
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -14,22 +15,19 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
-import androidx.compose.ui.test.performTouchInput
 import androidx.test.platform.app.InstrumentationRegistry
 import com.retirementreadinesslab.data.ScenarioRepository
 import com.retirementreadinesslab.model.sampleScenarios
 import com.retirementreadinesslab.state.RetirementLabState
-import com.retirementreadinesslab.ui.screens.AssumptionsScreen
+import com.retirementreadinesslab.ui.screens.BudgetScreen
 import com.retirementreadinesslab.ui.screens.DashboardScreen
 import com.retirementreadinesslab.ui.screens.LabScreen
-import com.retirementreadinesslab.ui.screens.OnboardingScreen
 import com.retirementreadinesslab.ui.screens.ReportsScreen
 import com.retirementreadinesslab.ui.screens.ResultsScreen
-import com.retirementreadinesslab.ui.screens.ScenariosScreen
+import com.retirementreadinesslab.ui.screens.SetupScreen
 import com.retirementreadinesslab.ui.theme.RetirementReadinessLabTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
@@ -52,76 +50,51 @@ class CoreScreenAccessibilityTest {
         compose.onNodeWithContentDescription("Readiness gauge: 0% readiness").assertIsDisplayed()
         compose.onNodeWithText("Run Stress Test").assertHasClickAction()
         compose.onNodeWithText("Retirement Readiness Lab").assertIsDisplayed()
+        compose.onAllNodesWithText("Base plan").assertCountEquals(0)
     }
 
     @Test
     fun setupExposesEditableInputsAndPrimaryAction() {
         compose.setContent {
             RetirementReadinessLabTheme {
-                OnboardingScreen(state = testState())
+                SetupScreen(state = testState())
             }
         }
 
         compose.onNodeWithTag("setup-screen").assertIsDisplayed()
-        compose.onNodeWithText("Guided setup").assertIsDisplayed()
-        compose.onNodeWithText("Retirement target").assertIsDisplayed()
+        compose.onNodeWithText("Setup").assertIsDisplayed()
+        compose.onNodeWithText("Household profile").assertIsDisplayed()
         compose.onNodeWithText("Pre-tax accounts").assertIsDisplayed()
-        scrollScreenToText("setup-screen", "Long-term care risk")
-        compose.onNodeWithText("Long-term care risk").assertIsDisplayed()
-        scrollScreenToText("setup-screen", "Run Current Scenario")
-        compose.onNodeWithText("Run Current Scenario").assertHasClickAction()
+        scrollScreenToText("setup-screen", "Max spending cut (%)")
+        compose.onNodeWithText("Max spending cut (%)").assertIsDisplayed()
+        scrollScreenToText("setup-screen", "Monthly rent")
+        compose.onNodeWithText("Mortgage years left").assertIsDisplayed()
+        compose.onNodeWithText("Current mortgage balance").assertIsDisplayed()
+        compose.onNodeWithText("Current home value").assertIsDisplayed()
+        compose.onNodeWithText("Monthly rent").assertIsDisplayed()
+        scrollScreenToText("setup-screen", "Long-term care shock")
+        compose.onNodeWithText("Long-term care shock").assertIsDisplayed()
+        scrollScreenToText("setup-screen", "Run Current Setup")
+        compose.onNodeWithText("Run Current Setup").assertHasClickAction()
     }
 
     @Test
-    fun scenariosExposeComparisonControlsAndDuplicateScenario() {
-        val state = testState()
+    fun budgetExposesMonthlyEditorsAndApplyAction() {
         compose.setContent {
             RetirementReadinessLabTheme {
-                ScenariosScreen(state = state)
+                BudgetScreen(state = testState())
             }
         }
 
-        compose.onNodeWithTag("scenarios-screen").assertIsDisplayed()
-        compose.onNodeWithText("Scenarios").assertIsDisplayed()
-        scrollScreenToTag("scenarios-screen", "run-all-scenarios-button")
-        compose.onNodeWithTag("run-all-scenarios-button").assertHasClickAction().performClick()
-        compose.waitUntil(timeoutMillis = 15_000) {
-            !state.isRunning && state.resultFor("base-plan") != null
-        }
-        val baseReadiness = state.resultFor("base-plan")!!.successProbability.asPercent()
-        scrollScreenToTag("scenarios-screen", "comparison-readiness-base-plan")
-        compose.onNodeWithTag("comparison-readiness-base-plan").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Comparison readiness for Base plan: $baseReadiness").assertIsDisplayed()
-        scrollScreenToTag("scenarios-screen", "scenario-card-base-plan")
-        compose.onNodeWithTag("scenario-card-base-plan").performTouchInput { longClick() }
-        compose.onNodeWithText("Scenario actions").assertIsDisplayed()
-        compose.onNodeWithTag("scenario-action-name-input")
-            .performTextClearance()
-        compose.onNodeWithTag("scenario-action-name-input")
-            .performTextInput("Travel plan")
-        compose.onNodeWithTag("scenario-action-rename-button").assertHasClickAction().performClick()
-        compose.waitForIdle()
-
-        assertEquals("Travel plan", state.selectedScenario.name)
-        scrollScreenToTag("scenarios-screen", "duplicate-scenario-button")
-        compose.onNodeWithTag("duplicate-scenario-button").assertHasClickAction().performClick()
-        compose.waitForIdle()
-
-        assertEquals(4, state.scenarios.size)
-        assertEquals("Travel plan copy", state.selectedScenario.name)
-        val copiedScenarioId = state.selectedScenarioId
-        scrollScreenToTag("scenarios-screen", "scenario-card-$copiedScenarioId")
-        compose.onNodeWithTag("scenario-card-$copiedScenarioId").performTouchInput { longClick() }
-        compose.onNodeWithText("Scenario actions").assertIsDisplayed()
-        compose.onNodeWithTag("scenario-action-delete-button").assertHasClickAction().performClick()
-        compose.waitForIdle()
-
-        assertEquals(3, state.scenarios.size)
-        compose.waitUntil(timeoutMillis = 15_000) { !state.isRunning }
-        scrollScreenToTag("scenarios-screen", "run-all-scenarios-button")
-        compose.onNodeWithTag("run-all-scenarios-button").assertHasClickAction()
-        scrollScreenToTag("scenarios-screen", "restore-samples-button")
-        compose.onNodeWithTag("restore-samples-button").assertHasClickAction()
+        compose.onNodeWithTag("budget-screen").assertIsDisplayed()
+        compose.onNodeWithText("Budget").assertIsDisplayed()
+        compose.onNodeWithText("Yearly property taxes").assertIsDisplayed()
+        scrollScreenToText("budget-screen", "Monthly spending")
+        compose.onNodeWithTag("budget-month-label").assertIsDisplayed()
+        compose.onNodeWithTag("add-checking-bill-button").assertHasClickAction()
+        compose.onNodeWithTag("add-credit-card-bill-button").assertHasClickAction()
+        scrollScreenToTag("budget-screen", "apply-budget-spending-button")
+        compose.onNodeWithText("Use Estimate For Annual Base Spending").assertIsDisplayed()
     }
 
     @Test
@@ -137,8 +110,6 @@ class CoreScreenAccessibilityTest {
         compose.onNodeWithTag("share-pdf-report-button").assertHasClickAction()
         compose.onNodeWithTag("share-text-report-button").assertHasClickAction()
         compose.onNodeWithTag("share-scenario-backup-button").assertHasClickAction()
-        scrollScreenToTag("reports-screen", "share-comparison-csv-button")
-        compose.onNodeWithTag("share-comparison-csv-button").assertHasClickAction()
 
         scrollScreenToTag("reports-screen", "json-backup-input")
         compose.onNodeWithTag("json-backup-input").performTextInput("not json")
@@ -153,21 +124,21 @@ class CoreScreenAccessibilityTest {
     }
 
     @Test
-    fun assumptionsShowValidationErrorForInvalidAge() {
+    fun setupShowsValidationErrorForInvalidAge() {
         compose.setContent {
             RetirementReadinessLabTheme {
-                AssumptionsScreen(state = testState())
+                SetupScreen(state = testState())
             }
         }
 
-        compose.onNodeWithTag("assumptions-screen").assertIsDisplayed()
+        compose.onNodeWithTag("setup-screen").assertIsDisplayed()
         compose.onNodeWithTag("current-age-input")
             .performScrollTo()
             .performTextClearance()
         compose.onNodeWithTag("current-age-input")
             .performTextInput("10")
-        scrollScreenToTag("assumptions-screen", "apply-assumptions-button")
-        compose.onNodeWithTag("apply-assumptions-button")
+        scrollScreenToTag("setup-screen", "apply-setup-button")
+        compose.onNodeWithTag("apply-setup-button")
             .assertHasClickAction()
             .performClick()
 
@@ -175,7 +146,7 @@ class CoreScreenAccessibilityTest {
     }
 
     @Test
-    fun resultsExposeCalculationProvenance() {
+    fun resultsHideScenarioNameAndCalculationProvenance() {
         val state = testState()
 
         compose.setContent {
@@ -189,12 +160,11 @@ class CoreScreenAccessibilityTest {
         }
 
         compose.onNodeWithTag("results-screen").assertIsDisplayed()
-        scrollScreenToText("results-screen", "Calculation provenance")
-        compose.onNodeWithText("Calculation provenance").assertIsDisplayed()
-        scrollScreenToText("results-screen", "Monthly cashflow model with annual result bands")
-        compose.onNodeWithText("Monthly cashflow model with annual result bands").assertIsDisplayed()
-        scrollScreenToText("results-screen", "Assumption fingerprint")
-        compose.onNodeWithText("Assumption fingerprint").assertIsDisplayed()
+        compose.onNodeWithText("Results Detail").assertIsDisplayed()
+        compose.onAllNodesWithText("Base plan").assertCountEquals(0)
+        compose.onAllNodesWithText("Calculation provenance").assertCountEquals(0)
+        compose.onAllNodesWithText("Monthly cashflow model with annual result bands").assertCountEquals(0)
+        compose.onAllNodesWithText("Assumption fingerprint").assertCountEquals(0)
     }
 
     @Test

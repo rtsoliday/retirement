@@ -1,5 +1,6 @@
 package com.retirementreadinesslab.state
 
+import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -7,19 +8,23 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.retirementreadinesslab.data.ScenarioJson
+import com.retirementreadinesslab.data.ScenarioRepository
+import com.retirementreadinesslab.model.BudgetProfile
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.SimulationResult
 import com.retirementreadinesslab.model.sampleScenarios
-import com.retirementreadinesslab.data.ScenarioRepository
 import com.retirementreadinesslab.model.validate
 import com.retirementreadinesslab.simulation.RetirementDecisionEstimate
 import com.retirementreadinesslab.simulation.RetirementSimulator
 import com.retirementreadinesslab.simulation.ScenarioLabAnalysis
 import com.retirementreadinesslab.simulation.ScenarioLabAnalyzer
-import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -36,6 +41,7 @@ class RetirementLabState(
     }
     private val results = mutableStateMapOf<String, SimulationResult>()
     private val labAnalyses = mutableStateMapOf<String, ScenarioLabAnalysis>()
+    private var scenarioRunId = 0L
     private var labAnalysisRunId = 0L
 
     var selectedScenarioId by mutableStateOf(scenarios.first().id)
@@ -71,10 +77,6 @@ class RetirementLabState(
     val selectedDecisionEstimate: RetirementDecisionEstimate?
         get() = selectedLabAnalysis?.decisionEstimate
 
-    fun resultFor(id: String): SimulationResult? = results[id]
-
-    fun allResults(): Map<String, SimulationResult> = results.toMap()
-
     suspend fun loadPersistedState() {
         isLoading = true
         storageMessage = null
@@ -89,7 +91,7 @@ class RetirementLabState(
             runScenarioAsync(selectedScenarioId)
             runLabAnalysisAsync(selectedScenarioId)
         }.onFailure {
-            storageMessage = "Saved scenarios could not be loaded. Sample scenarios are shown."
+            storageMessage = "Saved scenario data could not be loaded. Sample data is shown."
             runScenarioAsync(selectedScenarioId)
             runLabAnalysisAsync(selectedScenarioId)
         }
@@ -107,17 +109,6 @@ class RetirementLabState(
         }
     }
 
-    fun selectScenario(id: String) {
-        selectedScenarioId = id
-        if (results[id] == null) {
-            runScenarioAsync(id)
-        }
-        if (labAnalyses[id] == null) {
-            runLabAnalysisAsync(id)
-        }
-        persist()
-    }
-
     fun updateSelected(transform: (RetirementScenario) -> RetirementScenario) {
         val index = scenarios.indexOfFirst { it.id == selectedScenarioId }
         if (index >= 0) {
@@ -125,83 +116,35 @@ class RetirementLabState(
             scenarios[index] = updated
             results.remove(updated.id)
             labAnalyses.remove(updated.id)
-            lastRunMessage = "Changes applied. Running stress test for ${updated.name}..."
+            lastRunMessage = "Changes applied. Running stress test..."
             runScenarioAsync(updated.id)
             runLabAnalysisAsync(updated.id)
             persist()
         }
     }
 
-    fun renameSelected(name: String): String? {
-        return renameScenario(selectedScenarioId, name)
-    }
-
-    fun renameScenario(id: String, name: String): String? {
-        val trimmed = name.trim()
-        if (trimmed.isBlank()) return "Scenario name cannot be blank."
-        val index = scenarios.indexOfFirst { it.id == id }
-        if (index < 0) return "Scenario could not be renamed."
-
-        val current = scenarios[index]
-        if (current.name == trimmed) return null
-
-        val updated = current.copy(name = trimmed)
-        scenarios[index] = updated
-        lastRunMessage = "Renamed scenario to $trimmed."
-        persist()
-        return null
-    }
-
-    fun duplicateSelected() {
-        val source = selectedScenario
-        val copy = source.copy(
-            id = "scenario-${System.currentTimeMillis()}",
-            name = "${source.name} copy",
-            seed = source.seed + scenarios.size + 1
-        )
-        scenarios += copy
-        selectedScenarioId = copy.id
-        runScenarioAsync(copy.id)
-        runLabAnalysisAsync(copy.id)
-        persist()
-    }
-
-    fun deleteSelected() {
-        deleteScenario(selectedScenarioId)
-    }
-
-    fun deleteScenario(id: String) {
-        if (scenarios.size <= 1) return
-
-        val index = scenarios.indexOfFirst { it.id == id }
-        if (index < 0) return
-
-        val removed = scenarios.removeAt(index)
-        results.remove(removed.id)
-        labAnalyses.remove(removed.id)
-        lastRunMessage = "Deleted scenario ${removed.name}."
-
-        if (removed.id == selectedScenarioId) {
-            selectedScenarioId = scenarios.getOrNull(index)?.id ?: scenarios.last().id
-            if (results[selectedScenarioId] == null) {
-                runScenarioAsync(selectedScenarioId)
-            }
-            if (labAnalyses[selectedScenarioId] == null) {
-                runLabAnalysisAsync(selectedScenarioId)
-            }
+    fun saveSelectedBudget(budget: BudgetProfile) {
+        val index = scenarios.indexOfFirst { it.id == selectedScenarioId }
+        if (index >= 0) {
+            val current = scenarios[index]
+            scenarios[index] = current.copy(budget = budget)
+            storageMessage = "Budget saved."
+            persist()
         }
-        persist()
     }
 
-    fun restoreSamplePlans() {
-        scenarios.clear()
-        scenarios.addAll(sampleScenarios())
-        selectedScenarioId = scenarios.first().id
-        results.clear()
-        labAnalyses.clear()
-        runScenarioAsync(selectedScenarioId)
-        runLabAnalysisAsync(selectedScenarioId)
-        persist()
+    fun applyBudgetToAnnualBaseSpending(budget: BudgetProfile): String? {
+        val estimate = budget.annualBaseSpendingEstimate
+        if (estimate <= 0.0) {
+            return "Enter at least one spending amount before applying the budget estimate."
+        }
+        updateSelected { scenario ->
+            scenario.copy(
+                budget = budget,
+                spending = scenario.spending.copy(annualBaseSpending = estimate)
+            )
+        }
+        return null
     }
 
     fun deleteLocalData() {
@@ -210,7 +153,7 @@ class RetirementLabState(
         selectedScenarioId = scenarios.first().id
         results.clear()
         labAnalyses.clear()
-        storageMessage = "Local saved data deleted. Sample scenarios are loaded."
+        storageMessage = "Local saved data deleted. Sample data is loaded."
         runScenarioAsync(selectedScenarioId)
         runLabAnalysisAsync(selectedScenarioId)
         scope.launch {
@@ -254,35 +197,11 @@ class RetirementLabState(
         runScenarioAsync(selectedScenarioId)
     }
 
-    fun runAllScenarios() {
-        if (isRunning) return
-        val scenariosToRun = scenarios.toList()
-        isRunning = true
-        lastRunMessage = "Running ${scenariosToRun.size} scenario${if (scenariosToRun.size == 1) "" else "s"} for comparison..."
-        scope.launch {
-            val run = runCatching {
-                withContext(Dispatchers.Default) {
-                    scenariosToRun.associate { scenario ->
-                        scenario.id to RetirementSimulator.run(scenario)
-                    }
-                }
-            }
-            run.onSuccess { comparisonResults ->
-                comparisonResults.forEach { (id, result) ->
-                    results[id] = result
-                }
-                lastRunMessage = "Compared ${scenariosToRun.size} scenario${if (scenariosToRun.size == 1) "" else "s"}."
-            }.onFailure {
-                storageMessage = "Scenario comparison failed: ${it.message ?: "unknown error"}"
-            }
-            isRunning = false
-        }
-    }
-
     private fun runScenarioAsync(id: String) {
         val scenario = scenarios.firstOrNull { it.id == id } ?: return
+        val requestId = ++scenarioRunId
         isRunning = true
-        lastRunMessage = "Running stress test for ${scenario.name}..."
+        lastRunMessage = "Running stress test..."
         scope.launch {
             val run = runCatching {
                 withContext(Dispatchers.Default) {
@@ -290,12 +209,19 @@ class RetirementLabState(
                 }
             }
             run.onSuccess { result ->
-                results[id] = result
-                lastRunMessage = buildRunMessage(scenario, result)
+                val stillCurrent = scenarios.firstOrNull { it.id == id } == scenario
+                if (stillCurrent && requestId == scenarioRunId) {
+                    results[id] = result
+                    lastRunMessage = buildRunMessage(scenario, result)
+                }
             }.onFailure {
-                storageMessage = "Stress test failed: ${it.message ?: "unknown error"}"
+                if (requestId == scenarioRunId) {
+                    storageMessage = "Stress test failed: ${it.message ?: "unknown error"}"
+                }
             }
-            isRunning = false
+            if (requestId == scenarioRunId) {
+                isRunning = false
+            }
         }
     }
 
@@ -327,7 +253,7 @@ class RetirementLabState(
 
     private fun buildRunMessage(scenario: RetirementScenario, result: SimulationResult): String {
         val pct = String.format(Locale.US, "%.0f%%", result.successProbability * 100.0)
-        return "Stress test complete: $pct readiness for ${scenario.name} at retirement age ${scenario.household.retirementAge}."
+        return "Stress test complete: $pct readiness at retirement age ${scenario.household.retirementAge}."
     }
 
     private fun persist() {
@@ -343,19 +269,39 @@ class RetirementLabState(
     }
 }
 
+private class RetirementLabViewModel(applicationContext: Context) : ViewModel() {
+    val state = RetirementLabState(
+        repository = ScenarioRepository(applicationContext),
+        scope = viewModelScope,
+        initialScenarios = sampleScenarios()
+    )
+
+    private var hasLoadedPersistedState = false
+
+    fun loadPersistedStateOnce() {
+        if (hasLoadedPersistedState) return
+        hasLoadedPersistedState = true
+        viewModelScope.launch {
+            state.loadPersistedState()
+        }
+    }
+}
+
 @Composable
 fun rememberRetirementLabState(): RetirementLabState {
     val context = LocalContext.current.applicationContext
-    val scope = rememberCoroutineScope()
-    val state = remember(context) {
-        RetirementLabState(
-            repository = ScenarioRepository(context),
-            scope = scope,
-            initialScenarios = sampleScenarios()
-        )
+    val factory = remember(context) {
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return RetirementLabViewModel(context) as T
+            }
+        }
     }
-    LaunchedEffect(state) {
-        state.loadPersistedState()
+    val labViewModel: RetirementLabViewModel = viewModel(factory = factory)
+
+    LaunchedEffect(labViewModel) {
+        labViewModel.loadPersistedStateOnce()
     }
-    return state
+    return labViewModel.state
 }

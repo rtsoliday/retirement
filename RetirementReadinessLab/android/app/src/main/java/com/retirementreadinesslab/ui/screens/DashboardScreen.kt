@@ -30,12 +30,13 @@ import com.retirementreadinesslab.simulation.ResultInsights
 import com.retirementreadinesslab.state.RetirementLabState
 import com.retirementreadinesslab.ui.asCompactCurrency
 import com.retirementreadinesslab.ui.asPercent
-import com.retirementreadinesslab.ui.components.BalancePathChart
 import com.retirementreadinesslab.ui.components.MetricCard
+import com.retirementreadinesslab.ui.components.PortfolioSurvivalChart
 import com.retirementreadinesslab.ui.components.ReadinessGauge
 import com.retirementreadinesslab.ui.components.RiskPill
 import com.retirementreadinesslab.ui.components.ScenarioWarningCard
 import com.retirementreadinesslab.ui.components.SectionHeader
+import com.retirementreadinesslab.ui.components.SimulationPathsChart
 import com.retirementreadinesslab.ui.theme.LabMutedText
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -58,8 +59,7 @@ fun DashboardScreen(
     ) {
         item {
             SectionHeader(
-                title = "Retirement Readiness Lab",
-                subtitle = scenario.name
+                title = "Retirement Readiness Lab"
             )
         }
 
@@ -103,7 +103,7 @@ fun DashboardScreen(
                         )
                         Text(
                             text = result?.riskBreakdown?.recommendedNextTest
-                                ?: "Start with the base plan, then compare retirement age and spending.",
+                                ?: "Start with Setup and Budget, then run a stress test.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = LabMutedText
                         )
@@ -128,7 +128,15 @@ fun DashboardScreen(
 
         if (result != null) {
             item {
-                BalancePathChart(bands = result.balanceBands)
+                PortfolioSurvivalChart(points = result.notFailedByAge)
+            }
+
+            item {
+                SimulationPathsChart(
+                    points = result.pathPoints,
+                    meanPath = result.meanPath,
+                    retirementAge = scenario.household.retirementAge
+                )
             }
 
             item {
@@ -242,7 +250,7 @@ fun DashboardScreen(
 private fun readinessText(probability: Double): String {
     return when {
         probability >= 0.82 -> "Most simulated paths lasted. Compare tradeoffs before changing course."
-        probability >= 0.65 -> "The plan is workable but sensitive to assumptions."
-        else -> "This plan needs pressure relief before it looks durable."
+        probability >= 0.65 -> "The current setup is workable but sensitive to assumptions."
+        else -> "This setup needs pressure relief before it looks durable."
     }
 }

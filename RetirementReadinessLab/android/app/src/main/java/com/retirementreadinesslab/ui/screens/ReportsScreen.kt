@@ -13,7 +13,6 @@ import androidx.compose.material.icons.filled.Backup
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -27,7 +26,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
@@ -39,21 +37,16 @@ import com.retirementreadinesslab.compliance.ComplianceText
 import com.retirementreadinesslab.data.ScenarioJson
 import com.retirementreadinesslab.reports.ReportBuilder
 import com.retirementreadinesslab.reports.ReportPdfExporter
-import com.retirementreadinesslab.simulation.RetirementSimulator
 import com.retirementreadinesslab.state.RetirementLabState
 import com.retirementreadinesslab.ui.asCompactCurrency
 import com.retirementreadinesslab.ui.asPercent
 import com.retirementreadinesslab.ui.components.KeyValueRow
 import com.retirementreadinesslab.ui.components.SectionHeader
 import com.retirementreadinesslab.ui.theme.LabMutedText
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 @Composable
 fun ReportsScreen(state: RetirementLabState) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val scenario = state.selectedScenario
     val result = state.selectedResult
     val report = ReportBuilder.buildTextReport(scenario, result)
@@ -62,7 +55,6 @@ fun ReportsScreen(state: RetirementLabState) {
     var importMessage by remember { mutableStateOf<String?>(null) }
     var exportMessage by remember { mutableStateOf<String?>(null) }
     var confirmDeleteData by remember { mutableStateOf(false) }
-    var isPreparingComparisonCsv by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier
@@ -102,7 +94,6 @@ fun ReportsScreen(state: RetirementLabState) {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Report preview", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    KeyValueRow("Scenario", scenario.name)
                     KeyValueRow("Retirement age", scenario.household.retirementAge.toString())
                     KeyValueRow("Readiness", result?.successProbability?.asPercent() ?: "Not run")
                     KeyValueRow("Median ending", result?.medianEndingBalance?.asCompactCurrency() ?: "Not run")
@@ -174,43 +165,6 @@ fun ReportsScreen(state: RetirementLabState) {
                     ) {
                         Icon(Icons.Filled.Backup, contentDescription = null)
                         Text("Share Scenario Backup")
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            val scenariosForExport = state.scenarios.toList()
-                            isPreparingComparisonCsv = true
-                            exportMessage = "Preparing comparison CSV..."
-                            scope.launch {
-                                val csv = runCatching {
-                                    withContext(Dispatchers.Default) {
-                                        val results = scenariosForExport.associate { exportScenario ->
-                                            exportScenario.id to RetirementSimulator.run(exportScenario)
-                                        }
-                                        ReportBuilder.buildScenarioCsv(
-                                            scenarios = scenariosForExport,
-                                            results = results
-                                        )
-                                    }
-                                }
-                                csv.onSuccess { generatedCsv ->
-                                    exportMessage = null
-                                    context.shareText(
-                                        title = "Retirement Readiness Lab scenario comparison CSV",
-                                        text = generatedCsv
-                                    )
-                                }.onFailure {
-                                    exportMessage = "Comparison CSV could not be created: ${it.message ?: "unknown error"}"
-                                }
-                                isPreparingComparisonCsv = false
-                            }
-                        },
-                        enabled = !isPreparingComparisonCsv,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("share-comparison-csv-button")
-                    ) {
-                        Icon(Icons.Filled.TableChart, contentDescription = null)
-                        Text(if (isPreparingComparisonCsv) "Preparing CSV..." else "Share Comparison CSV")
                     }
                     exportMessage?.let { message ->
                         Text(

@@ -36,14 +36,19 @@ import com.retirementreadinesslab.model.AccountBalances
 import com.retirementreadinesslab.model.DEFAULT_PROJECTION_END_AGE
 import com.retirementreadinesslab.model.FilingStatus
 import com.retirementreadinesslab.model.Gender
+import com.retirementreadinesslab.model.GuaranteedIncomePlan
 import com.retirementreadinesslab.model.HealthcarePlan
+import com.retirementreadinesslab.model.HomePlan
 import com.retirementreadinesslab.model.HouseholdProfile
 import com.retirementreadinesslab.model.LongTermCareAssumption
 import com.retirementreadinesslab.model.MarketAssumptions
+import com.retirementreadinesslab.model.MortgagePlan
+import com.retirementreadinesslab.model.RentPlan
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.RothConversionStrategy
 import com.retirementreadinesslab.model.SocialSecurityPlan
 import com.retirementreadinesslab.model.SpendingPlan
+import com.retirementreadinesslab.model.SpendingPathModel
 import com.retirementreadinesslab.model.WithdrawalStrategy
 import com.retirementreadinesslab.model.validate
 import com.retirementreadinesslab.model.warnings
@@ -57,7 +62,7 @@ import com.retirementreadinesslab.ui.theme.LabMutedText
 import java.util.Locale
 
 @Composable
-fun AssumptionsScreen(state: RetirementLabState) {
+fun SetupScreen(state: RetirementLabState) {
     val scenario = state.selectedScenario
     var form by remember(scenario) { mutableStateOf(EditableAssumptions.from(scenario)) }
     var validationMessage by remember(scenario) { mutableStateOf<String?>(null) }
@@ -68,14 +73,14 @@ fun AssumptionsScreen(state: RetirementLabState) {
     LazyColumn(
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("assumptions-screen"),
+            .testTag("setup-screen"),
         verticalArrangement = Arrangement.spacedBy(14.dp),
         contentPadding = PaddingValues(16.dp)
     ) {
         item {
             SectionHeader(
-                title = "Assumptions",
-                subtitle = "Review and tune the active scenario inputs."
+                title = "Setup",
+                subtitle = "Edit your inputs in one place, then apply and run."
             )
         }
 
@@ -88,7 +93,7 @@ fun AssumptionsScreen(state: RetirementLabState) {
         item {
             AssumptionCard("Scenario status") {
                 Text(
-                    text = if (hasUnsavedChanges) "Unsaved assumption changes" else "Assumptions match the current scenario",
+                    text = if (hasUnsavedChanges) "Unsaved setup changes" else "Setup matches saved inputs",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = if (hasUnsavedChanges) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
@@ -96,7 +101,6 @@ fun AssumptionsScreen(state: RetirementLabState) {
                 state.lastRunMessage?.let { message ->
                     Text(message, style = MaterialTheme.typography.bodySmall, color = LabMutedText)
                 }
-                KeyValueRow("Current scenario", scenario.name)
                 KeyValueRow("Current account total", scenario.accounts.total.asCurrency())
             }
         }
@@ -120,8 +124,27 @@ fun AssumptionsScreen(state: RetirementLabState) {
                     options = FilingStatus.entries.toList(),
                     selected = form.filingStatus,
                     label = { it.label },
-                    onSelected = { form = form.copy(filingStatus = it) }
+                    onSelected = {
+                        form = form.copy(
+                            filingStatus = it,
+                            spouseCurrentAge = if (it == FilingStatus.Married && form.spouseCurrentAge.isBlank()) {
+                                form.currentAge
+                            } else {
+                                form.spouseCurrentAge
+                            }
+                        )
+                    }
                 )
+                if (form.filingStatus == FilingStatus.Married) {
+                    NumberField("Spouse current age", form.spouseCurrentAge) {
+                        form = form.copy(spouseCurrentAge = it)
+                    }
+                    Text(
+                        text = "The spouse is modeled as the opposite gender with no separate earned or Social Security income. The simulation continues until both spouses have died or the household runs out of money.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LabMutedText
+                    )
+                }
                 ChoiceGroup(
                     title = "Mortality table",
                     options = Gender.entries.toList(),
@@ -135,6 +158,23 @@ fun AssumptionsScreen(state: RetirementLabState) {
         item {
             AssumptionCard("Spending and Social Security") {
                 MoneyField("Annual base spending", form.annualSpending) { form = form.copy(annualSpending = it) }
+                Text(
+                    text = "Use Budget to estimate this from regular bills, credit cards, cash spending, property taxes, and insurance. Mortgage, rent, and healthcare remain separate inputs.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LabMutedText
+                )
+                ChoiceGroup(
+                    title = "Spending path",
+                    options = SpendingPathModel.entries.toList(),
+                    selected = form.spendingPathModel,
+                    label = { it.label },
+                    onSelected = { form = form.copy(spendingPathModel = it) }
+                )
+                Text(
+                    text = spendingPathHelpText(form.spendingPathModel),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LabMutedText
+                )
                 RateFieldHelp()
                 RatePairFields(
                     title = "General inflation",
@@ -143,10 +183,40 @@ fun AssumptionsScreen(state: RetirementLabState) {
                     onAverageChange = { form = form.copy(generalInflationMean = it) },
                     onSwingChange = { form = form.copy(generalInflationStdDev = it) }
                 )
+                PercentField("Max spending cut", form.lowPortfolioSpendingReduction) {
+                    form = form.copy(lowPortfolioSpendingReduction = it)
+                }
+                Text(
+                    text = "Applied when portfolio balance falls below 50% of the balance at retirement.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LabMutedText
+                )
                 MoneyField("Social Security at 67", form.socialSecurityAt67) {
                     form = form.copy(socialSecurityAt67 = it)
                 }
                 NumberField("Social Security claim age", form.claimAge) { form = form.copy(claimAge = it) }
+            }
+        }
+
+        item {
+            AssumptionCard("Guaranteed income") {
+                MoneyField("Annual guaranteed income", form.guaranteedAnnualIncome) {
+                    form = form.copy(guaranteedAnnualIncome = it)
+                }
+                NumberField("Income start age", form.guaranteedIncomeStartAge) {
+                    form = form.copy(guaranteedIncomeStartAge = it)
+                }
+                PercentField("Annual income increase", form.guaranteedIncomeAnnualIncrease) {
+                    form = form.copy(guaranteedIncomeAnnualIncrease = it)
+                }
+                PercentField("Survivor benefit", form.guaranteedIncomeSurvivorPercent) {
+                    form = form.copy(guaranteedIncomeSurvivorPercent = it)
+                }
+                Text(
+                    text = "Use this for pensions, annuities, and other guaranteed household income. Survivor benefit is the share that continues if the retiree dies before a spouse.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LabMutedText
+                )
             }
         }
 
@@ -188,6 +258,31 @@ fun AssumptionsScreen(state: RetirementLabState) {
                 NumberField("Long-term care duration years", form.longTermCareDurationYears) {
                     form = form.copy(longTermCareDurationYears = it)
                 }
+            }
+        }
+
+        item {
+            AssumptionCard("Housing") {
+                MoneyField("Monthly mortgage payment", form.mortgagePayment) {
+                    form = form.copy(mortgagePayment = it)
+                }
+                NumberField("Mortgage years left", form.mortgageYearsLeft) {
+                    form = form.copy(mortgageYearsLeft = it)
+                }
+                MoneyField("Current mortgage balance", form.mortgageBalance) {
+                    form = form.copy(mortgageBalance = it)
+                }
+                MoneyField("Current home value", form.homeValue) {
+                    form = form.copy(homeValue = it)
+                }
+                MoneyField("Monthly rent", form.monthlyRent) {
+                    form = form.copy(monthlyRent = it)
+                }
+                Text(
+                    text = "If home value is entered, the model assumes the home can be sold if portfolio assets run out. Sale proceeds use net equity after the remaining mortgage balance. Enter zero for costs or assets that do not apply.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LabMutedText
+                )
             }
         }
 
@@ -251,7 +346,7 @@ fun AssumptionsScreen(state: RetirementLabState) {
                 NumberField("Random seed", form.seed) { form = form.copy(seed = it) }
                 KeyValueRow("Federal tax table", "2024 brackets")
                 KeyValueRow("Medicare model", MedicarePremiums.PREMIUM_TABLE_VERSION)
-                KeyValueRow("Projection horizon", "Mortality table, capped at age $DEFAULT_PROJECTION_END_AGE")
+                KeyValueRow("Projection horizon", "Mortality cap age $DEFAULT_PROJECTION_END_AGE per person")
                 KeyValueRow("Engine cadence", "Monthly cashflow model")
             }
         }
@@ -270,13 +365,13 @@ fun AssumptionsScreen(state: RetirementLabState) {
                 enabled = !state.isRunning,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("apply-assumptions-button")
+                    .testTag("apply-setup-button")
             ) {
                 Text(
                     when {
                         state.isRunning -> "Running..."
-                        hasUnsavedChanges -> "Apply Assumptions And Run Stress Test"
-                        else -> "Run Current Assumptions"
+                        hasUnsavedChanges -> "Apply Setup And Run Stress Test"
+                        else -> "Run Current Setup"
                     }
                 )
             }
@@ -451,9 +546,12 @@ private data class EditableAssumptions(
     val retirementAge: String,
     val filingStatus: FilingStatus,
     val gender: Gender,
+    val spouseCurrentAge: String,
     val annualSpending: String,
     val generalInflationMean: String,
     val generalInflationStdDev: String,
+    val spendingPathModel: SpendingPathModel,
+    val lowPortfolioSpendingReduction: String,
     val pretax: String,
     val roth: String,
     val taxable: String,
@@ -462,8 +560,17 @@ private data class EditableAssumptions(
     val healthcareInflationMean: String,
     val healthcareInflationStdDev: String,
     val includeMedicarePremiums: Boolean,
+    val mortgagePayment: String,
+    val mortgageYearsLeft: String,
+    val mortgageBalance: String,
+    val homeValue: String,
+    val monthlyRent: String,
     val socialSecurityAt67: String,
     val claimAge: String,
+    val guaranteedAnnualIncome: String,
+    val guaranteedIncomeStartAge: String,
+    val guaranteedIncomeAnnualIncrease: String,
+    val guaranteedIncomeSurvivorPercent: String,
     val preRetirementMeanReturn: String,
     val preRetirementStdDev: String,
     val stockMeanReturn: String,
@@ -483,9 +590,11 @@ private data class EditableAssumptions(
     fun toScenario(base: RetirementScenario): ParsedAssumptions {
         val currentAge = currentAge.toIntOrNull()
         val retirementAge = retirementAge.toIntOrNull()
+        val spouseCurrentAge = spouseCurrentAge.toIntOrNull()
         val annualSpending = parseMoney(annualSpending)
         val generalInflationMean = parsePercent(generalInflationMean)
         val generalInflationStdDev = parsePercent(generalInflationStdDev)
+        val lowPortfolioSpendingReduction = parsePercent(lowPortfolioSpendingReduction)
         val pretax = parseMoney(pretax)
         val roth = parseMoney(roth)
         val taxable = parseMoney(taxable)
@@ -493,8 +602,17 @@ private data class EditableAssumptions(
         val preMedicareMonthlyPremium = parseMoney(preMedicareMonthlyPremium)
         val healthcareInflationMean = parsePercent(healthcareInflationMean)
         val healthcareInflationStdDev = parsePercent(healthcareInflationStdDev)
+        val mortgagePayment = parseMoney(mortgagePayment)
+        val mortgageYearsLeft = mortgageYearsLeft.toIntOrNull()
+        val mortgageBalance = parseMoney(mortgageBalance)
+        val homeValue = parseMoney(homeValue)
+        val monthlyRent = parseMoney(monthlyRent)
         val socialSecurityAt67 = parseMoney(socialSecurityAt67)
         val claimAge = claimAge.toIntOrNull()
+        val guaranteedAnnualIncome = parseMoney(guaranteedAnnualIncome)
+        val guaranteedIncomeStartAge = guaranteedIncomeStartAge.toIntOrNull()
+        val guaranteedIncomeAnnualIncrease = parsePercent(guaranteedIncomeAnnualIncrease)
+        val guaranteedIncomeSurvivorPercent = parsePercent(guaranteedIncomeSurvivorPercent)
         val preRetirementMeanReturn = parsePercent(preRetirementMeanReturn)
         val preRetirementStdDev = parsePercent(preRetirementStdDev)
         val stockMeanReturn = parsePercent(stockMeanReturn)
@@ -509,9 +627,15 @@ private data class EditableAssumptions(
         val firstError = listOfNotNull(
             requireInt("Current age", currentAge, 18, 90),
             requireInt("Retirement age", retirementAge, 18, 75),
+            if (filingStatus == FilingStatus.Married) {
+                requireInt("Spouse current age", spouseCurrentAge, 18, 100)
+            } else {
+                null
+            },
             requireMoney("Annual base spending", annualSpending),
             requirePercent("General inflation average", generalInflationMean, -0.02, 0.15),
             requirePercent("General inflation +/- swing", generalInflationStdDev, 0.0, 0.30),
+            requirePercent("Spending reduction below 50% portfolio", lowPortfolioSpendingReduction, 0.0, 1.0),
             requireMoney("Pre-tax accounts", pretax),
             requireMoney("Roth accounts", roth),
             requireMoney("Taxable investments", taxable),
@@ -519,8 +643,17 @@ private data class EditableAssumptions(
             requireMoney("Pre-Medicare monthly premium", preMedicareMonthlyPremium),
             requirePercent("Healthcare inflation average", healthcareInflationMean, 0.0, 0.20),
             requirePercent("Healthcare inflation +/- swing", healthcareInflationStdDev, 0.0, 0.30),
+            requireMoney("Mortgage payment", mortgagePayment),
+            requireInt("Mortgage years left", mortgageYearsLeft, 0, 80),
+            requireMoney("Current mortgage balance", mortgageBalance),
+            requireMoney("Current home value", homeValue),
+            requireMoney("Monthly rent", monthlyRent),
             requireMoney("Social Security at 67", socialSecurityAt67),
             requireInt("Social Security claim age", claimAge, 62, 70),
+            requireMoney("Annual guaranteed income", guaranteedAnnualIncome),
+            requireInt("Guaranteed income start age", guaranteedIncomeStartAge, 18, DEFAULT_PROJECTION_END_AGE),
+            requirePercent("Guaranteed income annual increase", guaranteedIncomeAnnualIncrease, -0.02, 0.15),
+            requirePercent("Guaranteed income survivor benefit", guaranteedIncomeSurvivorPercent, 0.0, 1.0),
             requirePercent("Pre-retirement return average", preRetirementMeanReturn, -0.20, 0.25),
             requirePercent("Pre-retirement return +/- swing", preRetirementStdDev, 0.0, 0.60),
             requirePercent("Stock return average", stockMeanReturn, -0.20, 0.25),
@@ -542,12 +675,15 @@ private data class EditableAssumptions(
                 retirementAge = retirementAge!!,
                 targetEndAge = DEFAULT_PROJECTION_END_AGE,
                 filingStatus = filingStatus,
-                gender = gender
+                gender = gender,
+                spouseCurrentAge = spouseCurrentAge ?: currentAge
             ),
             spending = SpendingPlan(
                 annualBaseSpending = annualSpending!!,
                 generalInflationMean = generalInflationMean!!,
-                generalInflationStdDev = generalInflationStdDev!!
+                generalInflationStdDev = generalInflationStdDev!!,
+                spendingPathModel = spendingPathModel,
+                lowPortfolioSpendingReduction = lowPortfolioSpendingReduction!!
             ),
             accounts = AccountBalances(
                 pretax = pretax!!,
@@ -561,9 +697,22 @@ private data class EditableAssumptions(
                 healthcareInflationStdDev = healthcareInflationStdDev!!,
                 includeMedicarePremiums = includeMedicarePremiums
             ),
+            mortgage = MortgagePlan(
+                monthlyPayment = mortgagePayment!!,
+                yearsLeft = mortgageYearsLeft!!,
+                currentBalance = mortgageBalance!!
+            ),
+            rent = RentPlan(monthlyRent = monthlyRent!!),
+            home = HomePlan(currentValue = homeValue!!),
             socialSecurity = SocialSecurityPlan(
                 annualBenefitAt67 = socialSecurityAt67!!,
                 claimAge = claimAge!!
+            ),
+            guaranteedIncome = GuaranteedIncomePlan(
+                annualIncome = guaranteedAnnualIncome!!,
+                startAge = guaranteedIncomeStartAge!!,
+                annualIncrease = guaranteedIncomeAnnualIncrease!!,
+                survivorPercent = guaranteedIncomeSurvivorPercent!!
             ),
             market = MarketAssumptions(
                 preRetirementMeanReturn = preRetirementMeanReturn!!,
@@ -605,9 +754,12 @@ private data class EditableAssumptions(
                 retirementAge = scenario.household.retirementAge.toString(),
                 filingStatus = scenario.household.filingStatus,
                 gender = scenario.household.gender,
+                spouseCurrentAge = scenario.household.spouseCurrentAge.toString(),
                 annualSpending = scenario.spending.annualBaseSpending.wholeDollarText(),
                 generalInflationMean = scenario.spending.generalInflationMean.percentInputText(),
                 generalInflationStdDev = scenario.spending.generalInflationStdDev.percentInputText(),
+                spendingPathModel = scenario.spending.spendingPathModel,
+                lowPortfolioSpendingReduction = scenario.spending.lowPortfolioSpendingReduction.percentInputText(),
                 pretax = scenario.accounts.pretax.wholeDollarText(),
                 roth = scenario.accounts.roth.wholeDollarText(),
                 taxable = scenario.accounts.taxable.wholeDollarText(),
@@ -616,8 +768,17 @@ private data class EditableAssumptions(
                 healthcareInflationMean = scenario.healthcare.healthcareInflationMean.percentInputText(),
                 healthcareInflationStdDev = scenario.healthcare.healthcareInflationStdDev.percentInputText(),
                 includeMedicarePremiums = scenario.healthcare.includeMedicarePremiums,
+                mortgagePayment = scenario.mortgage.monthlyPayment.wholeDollarText(),
+                mortgageYearsLeft = scenario.mortgage.yearsLeft.toString(),
+                mortgageBalance = scenario.mortgage.currentBalance.wholeDollarText(),
+                homeValue = scenario.home.currentValue.wholeDollarText(),
+                monthlyRent = scenario.rent.monthlyRent.wholeDollarText(),
                 socialSecurityAt67 = scenario.socialSecurity.annualBenefitAt67.wholeDollarText(),
                 claimAge = scenario.socialSecurity.claimAge.toString(),
+                guaranteedAnnualIncome = scenario.guaranteedIncome.annualIncome.wholeDollarText(),
+                guaranteedIncomeStartAge = scenario.guaranteedIncome.startAge.toString(),
+                guaranteedIncomeAnnualIncrease = scenario.guaranteedIncome.annualIncrease.percentInputText(),
+                guaranteedIncomeSurvivorPercent = scenario.guaranteedIncome.survivorPercent.percentInputText(),
                 preRetirementMeanReturn = scenario.market.preRetirementMeanReturn.percentInputText(),
                 preRetirementStdDev = scenario.market.preRetirementStdDev.percentInputText(),
                 stockMeanReturn = scenario.market.stockMeanReturn.percentInputText(),
@@ -651,6 +812,13 @@ private fun closestTaxCap(value: Double): Double {
 
 private fun Double.percentOptionLabel(): String {
     return "${String.format(Locale.US, "%.0f", this * 100.0)}%"
+}
+
+private fun spendingPathHelpText(model: SpendingPathModel): String {
+    return when (model) {
+        SpendingPathModel.Flat -> "Base spending rises with general inflation and does not decline in real terms."
+        SpendingPathModel.EmpiricalAgeDecline -> "Base spending follows an empirical age decline after 65, then flattens at 85. Mortgage, rent, healthcare, and long-term care remain separate."
+    }
 }
 
 private fun parseMoney(value: String): Double? {

@@ -12,14 +12,31 @@ class RetirementScenarioValidationTest {
     @Test
     fun rejectsNegativeAdvancedAssumptions() {
         val scenario = sampleBaseScenario().copy(
+            household = sampleBaseScenario().household.copy(
+                filingStatus = FilingStatus.Married,
+                spouseCurrentAge = -1
+            ),
+            spending = sampleBaseScenario().spending.copy(lowPortfolioSpendingReduction = 1.50),
             healthcare = sampleBaseScenario().healthcare.copy(healthcareInflationStdDev = -0.01),
+            mortgage = sampleBaseScenario().mortgage.copy(currentBalance = -1.0),
+            rent = RentPlan(monthlyRent = -1.0),
+            home = HomePlan(currentValue = -1.0),
+            guaranteedIncome = GuaranteedIncomePlan(annualIncome = -1.0, startAge = -1, survivorPercent = 1.50),
             market = sampleBaseScenario().market.copy(stockStdDev = -0.10),
             longTermCare = sampleBaseScenario().longTermCare.copy(annualCost = -1.0)
         )
 
         val errors = scenario.validate()
 
+        assertTrue(errors.any { it.contains("Spending reduction") })
         assertTrue(errors.any { it.contains("Healthcare inflation swing") })
+        assertTrue(errors.any { it.contains("Mortgage") })
+        assertTrue(errors.any { it.contains("Rent") })
+        assertTrue(errors.any { it.contains("Home value") })
+        assertTrue(errors.any { it.contains("Spouse age") })
+        assertTrue(errors.any { it.contains("Guaranteed income cannot be negative") })
+        assertTrue(errors.any { it.contains("Guaranteed income start age") })
+        assertTrue(errors.any { it.contains("survivor benefit") })
         assertTrue(errors.any { it.contains("Market return swing") })
         assertTrue(errors.any { it.contains("Long-term care cost") })
     }

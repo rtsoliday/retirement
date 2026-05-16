@@ -24,7 +24,7 @@ object ReportPdfExporter {
         result: SimulationResult?
     ): File {
         val reportsDir = File(context.cacheDir, "shared_reports").apply { mkdirs() }
-        val file = File(reportsDir, "retirement-readiness-${safeFileName(scenario.name)}.pdf")
+        val file = File(reportsDir, "retirement-readiness-${reportTimestamp()}.pdf")
         val document = PdfDocument()
 
         try {
@@ -155,13 +155,7 @@ object ReportPdfExporter {
         )
     }
 
-    private fun safeFileName(value: String): String {
-        val slug = value
-            .lowercase(Locale.US)
-            .replace(Regex("[^a-z0-9]+"), "-")
-            .trim('-')
-            .ifBlank { "scenario" }
-        val date = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
-        return "$slug-$date"
+    private fun reportTimestamp(): String {
+        return SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
     }
 }

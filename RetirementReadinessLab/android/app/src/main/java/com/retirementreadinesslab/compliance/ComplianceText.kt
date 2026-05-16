@@ -15,7 +15,7 @@ object ComplianceText {
             "backups can contain sensitive financial assumptions."
 
     const val deletionNotice =
-        "Delete Local Data removes saved scenarios from this device and reloads sample plans."
+        "Delete Local Data removes saved scenarios from this device and reloads sample data."
 
     const val reportPrivacyNotice =
         "This report was generated locally from user-entered scenario data. Keep exported PDFs, " +
