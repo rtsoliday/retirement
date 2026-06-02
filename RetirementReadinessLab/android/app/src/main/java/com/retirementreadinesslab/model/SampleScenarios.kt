@@ -22,13 +22,13 @@ fun sampleBaseScenario(): RetirementScenario {
         ),
         spending = SpendingPlan(annualBaseSpending = 75_000.0),
         mortgage = MortgagePlan(monthlyPayment = 0.0, yearsLeft = 0),
-        healthcare = HealthcarePlan(preMedicareMonthlyPremium = 650.0),
+        healthcare = HealthcarePlan(),
         socialSecurity = SocialSecurityPlan(annualBenefitAt67 = 30_000.0, claimAge = 67),
         market = MarketAssumptions(
-            preRetirementMeanReturn = 0.09,
-            preRetirementStdDev = 0.18,
-            stockMeanReturn = 0.08,
-            stockStdDev = 0.18,
+            preRetirementMeanReturn = 0.133,
+            preRetirementStdDev = 0.162,
+            stockMeanReturn = 0.133,
+            stockStdDev = 0.162,
             bondMeanReturn = 0.03,
             bondStdDev = 0.06
         ),

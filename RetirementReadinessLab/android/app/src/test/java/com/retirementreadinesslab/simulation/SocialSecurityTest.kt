@@ -22,4 +22,46 @@ class SocialSecurityTest {
 
         assertEquals(37_200.0, benefit, 1.0)
     }
+
+    @Test
+    fun fullRetirementAgeUsesBirthYear() {
+        assertEquals(66 * 12 + 8, SocialSecurity.fullRetirementAgeMonths(1958))
+        assertEquals(67 * 12, SocialSecurity.fullRetirementAgeMonths(1960))
+    }
+
+    @Test
+    fun survivorFullRetirementAgeUsesShiftedBirthYearSchedule() {
+        assertEquals(66 * 12 + 4, SocialSecurity.survivorFullRetirementAgeMonths(1958))
+    }
+
+    @Test
+    fun claimingAfterEarlierFraGetsDelayedCredit() {
+        val benefit = SocialSecurity.annualPrimaryBenefitAtClaimAge(
+            annualBenefitAtFullRetirementAge = 30_000.0,
+            birthYear = 1958,
+            claimAge = 67
+        )
+
+        assertEquals(30_800.0, benefit, 1.0)
+    }
+
+    @Test
+    fun spousalBenefitUsesHalfPiaWithEarlyReduction() {
+        val factor = SocialSecurity.spousalBenefitFactor(
+            spouseBirthYear = 1960,
+            spouseClaimAgeMonths = 62 * 12
+        )
+
+        assertEquals(0.325, factor, 0.001)
+    }
+
+    @Test
+    fun survivorBenefitStartsAtSeventyOneAndHalfPercentAtAge60() {
+        val factor = SocialSecurity.survivorBenefitFactor(
+            spouseBirthYear = 1960,
+            survivorClaimAgeMonths = 60 * 12
+        )
+
+        assertEquals(0.715, factor, 0.001)
+    }
 }

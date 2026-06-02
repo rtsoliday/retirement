@@ -1,6 +1,8 @@
 package com.retirementreadinesslab.simulation
 
 import com.retirementreadinesslab.model.LongTermCareAssumption
+import com.retirementreadinesslab.model.PostRetirementAllocationStrategy
+import com.retirementreadinesslab.model.PostRetirementAllocationTier
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.RothConversionStrategy
 import java.util.Locale
@@ -37,6 +39,20 @@ data class LabComparisonAnalysis(
     val takeaway: String
 )
 
+data class PostRetirementAllocationOptimization(
+    val scenarioId: String,
+    val startingAllocation: PostRetirementAllocationStrategy,
+    val recommendedAllocation: PostRetirementAllocationStrategy,
+    val startingReadiness: Double,
+    val recommendedReadiness: Double,
+    val recommendedMedianEndingBalance: Double,
+    val testedAllocations: Int,
+    val simulationCount: Int
+) {
+    val readinessDelta: Double
+        get() = recommendedReadiness - startingReadiness
+}
+
 enum class LabSweepType {
     RetirementAge,
     SpendingFlexibility,
@@ -56,6 +72,7 @@ enum class LabComparisonType {
 
 object ScenarioLabAnalyzer {
     const val QUICK_LAB_SIMULATIONS = 300
+    const val ALLOCATION_OPTIMIZATION_SIMULATIONS = 500
 
     fun analyze(
         scenario: RetirementScenario,
@@ -76,6 +93,52 @@ object ScenarioLabAnalyzer {
                 socialSecuritySweep(scenario, boundedQuickSimulations)
             ),
             comparisons = strategyComparisons(scenario, baseResult.successProbability, boundedQuickSimulations)
+        )
+    }
+
+    fun optimizePostRetirementAllocation(
+        scenario: RetirementScenario,
+        quickSimulations: Int = ALLOCATION_OPTIMIZATION_SIMULATIONS
+    ): PostRetirementAllocationOptimization {
+        val boundedQuickSimulations = quickSimulations.coerceAtLeast(50)
+        val candidateAllocations = (0..20).map { it / 20.0 }
+        var testedAllocations = 0
+
+        fun score(allocation: PostRetirementAllocationStrategy): AllocationScore {
+            testedAllocations += 1
+            val result = RetirementSimulator.run(
+                scenario.copy(
+                    postRetirementAllocation = allocation,
+                    numberOfSimulations = boundedQuickSimulations,
+                    seed = scenario.seed + 900
+                )
+            )
+            return AllocationScore(
+                allocation = allocation,
+                readiness = result.successProbability,
+                medianEndingBalance = result.medianEndingBalance
+            )
+        }
+
+        val startingAllocation = scenario.postRetirementAllocation
+        val startingScore = score(startingAllocation)
+        var bestScore = startingScore
+
+        PostRetirementAllocationTier.entries.forEach { tier ->
+            bestScore = candidateAllocations
+                .map { value -> score(bestScore.allocation.withStockAllocation(tier, value)) }
+                .maxWith(compareBy<AllocationScore> { it.readiness }.thenBy { it.medianEndingBalance })
+        }
+
+        return PostRetirementAllocationOptimization(
+            scenarioId = scenario.id,
+            startingAllocation = startingAllocation,
+            recommendedAllocation = bestScore.allocation,
+            startingReadiness = startingScore.readiness,
+            recommendedReadiness = bestScore.readiness,
+            recommendedMedianEndingBalance = bestScore.medianEndingBalance,
+            testedAllocations = testedAllocations,
+            simulationCount = boundedQuickSimulations
         )
     }
 
@@ -228,7 +291,7 @@ object ScenarioLabAnalyzer {
         )
         val mortgagePayoff = score(
             base.copy(
-                mortgage = base.mortgage.copy(monthlyPayment = 0.0, yearsLeft = 0),
+                mortgage = base.mortgage.copy(monthlyPayment = 0.0, yearsLeft = 0, monthsLeft = 0),
                 seed = base.seed + 80
             ),
             seedOffset = 80
@@ -285,7 +348,7 @@ object ScenarioLabAnalyzer {
             LabComparisonAnalysis(
                 type = LabComparisonType.MortgagePayoff,
                 readinessDelta = mortgagePayoff - baseReadiness,
-                takeaway = if (base.mortgage.monthlyPayment <= 0.0 || base.mortgage.yearsLeft <= 0) {
+                takeaway = if (base.mortgage.monthlyPayment <= 0.0 || base.mortgage.totalMonthsLeft <= 0) {
                     "No active mortgage payment is modeled in this scenario."
                 } else if (mortgagePayoff > baseReadiness + 0.03) {
                     "Removing the mortgage payment materially improves modeled durability."
@@ -344,4 +407,10 @@ object ScenarioLabAnalyzer {
             else -> "$sign\$${"%.0f".format(Locale.US, value)}"
         }
     }
+
+    private data class AllocationScore(
+        val allocation: PostRetirementAllocationStrategy,
+        val readiness: Double,
+        val medianEndingBalance: Double
+    )
 }

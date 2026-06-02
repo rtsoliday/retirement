@@ -118,7 +118,17 @@ fun RetirementReadinessLabApp() {
                     onViewResults = { navController.navigate("results") }
                 )
             }
-            composable("setup") { SetupScreen(appState) }
+            composable("setup") {
+                SetupScreen(
+                    state = appState,
+                    onRunCurrentSetup = {
+                        navController.navigate("dashboard") {
+                            launchSingleTop = true
+                            popUpTo("dashboard")
+                        }
+                    }
+                )
+            }
             composable("budget") { BudgetScreen(appState) }
             composable("lab") { LabScreen(appState) }
             composable("reports") { ReportsScreen(appState) }

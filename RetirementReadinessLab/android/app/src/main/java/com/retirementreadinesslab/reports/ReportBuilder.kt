@@ -1,6 +1,7 @@
 package com.retirementreadinesslab.reports
 
 import com.retirementreadinesslab.compliance.ComplianceText
+import com.retirementreadinesslab.model.PostRetirementAllocationTier
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.SENIOR_APARTMENT_MONTHLY_RENT_2026
 import com.retirementreadinesslab.model.SimulationResult
@@ -8,6 +9,7 @@ import com.retirementreadinesslab.model.SpendingPathModel
 import com.retirementreadinesslab.model.warnings
 import com.retirementreadinesslab.simulation.MedicarePremiums
 import com.retirementreadinesslab.simulation.ResultInsights
+import com.retirementreadinesslab.simulation.SocialSecurity
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -87,35 +89,50 @@ object ReportBuilder {
             appendLine("- Spending path: ${scenario.spending.spendingPathModel.label}")
             appendLine("- Spending path detail: ${scenario.spending.spendingPathModel.detail()}")
             appendLine("- General inflation average: ${scenario.spending.generalInflationMean.percent()}")
-            appendLine("- General inflation +/- swing: ${scenario.spending.generalInflationStdDev.percent()}")
+            appendLine("- General inflation Std Dev: ${scenario.spending.generalInflationStdDev.percent()}")
             appendLine("- Spending cut below 50% portfolio: ${scenario.spending.lowPortfolioSpendingReduction.percent()}")
             appendLine("- Pre-tax balance: ${scenario.accounts.pretax.money()}")
             appendLine("- Roth balance: ${scenario.accounts.roth.money()}")
             appendLine("- Taxable balance: ${scenario.accounts.taxable.money()}")
             appendLine("- Cash reserve: ${scenario.accounts.cash.money()}")
-            appendLine("- Social Security at 67: ${scenario.socialSecurity.annualBenefitAt67.money()}")
-            appendLine("- Social Security claim age: ${scenario.socialSecurity.claimAge}")
+            val primaryBirthYear = SocialSecurity.primaryBirthYear(scenario.household.currentAge)
+            appendLine("- Primary Social Security at FRA: ${scenario.socialSecurity.annualBenefitAt67.money()}")
+            appendLine("- Primary Social Security FRA: ${SocialSecurity.fullRetirementAgeText(primaryBirthYear)}")
+            appendLine("- Primary Social Security claim age: ${scenario.socialSecurity.claimAge}")
+            if (scenario.household.filingStatus == com.retirementreadinesslab.model.FilingStatus.Married) {
+                val spouseBirthYear = SocialSecurity.primaryBirthYear(scenario.household.spouseCurrentAge)
+                appendLine("- Spouse Social Security FRA: ${SocialSecurity.fullRetirementAgeText(spouseBirthYear)}")
+                appendLine("- Spouse survivor FRA: ${SocialSecurity.survivorFullRetirementAgeText(spouseBirthYear)}")
+                appendLine("- Spouse benefit claim age: ${scenario.socialSecurity.spouseClaimAge}")
+            }
+            appendLine("- Social Security model: ${SocialSecurity.MODEL_VERSION}; benefits indexed with general inflation")
             appendLine("- Annual guaranteed income: ${scenario.guaranteedIncome.annualIncome.money()}")
             appendLine("- Guaranteed income start age: ${scenario.guaranteedIncome.startAge}")
             appendLine("- Guaranteed income annual increase: ${scenario.guaranteedIncome.annualIncrease.percent()}")
             appendLine("- Guaranteed income survivor benefit: ${scenario.guaranteedIncome.survivorPercent.percent()}")
             appendLine("- Pre-Medicare monthly premium: ${scenario.healthcare.preMedicareMonthlyPremium.money()}")
             appendLine("- Healthcare inflation average: ${scenario.healthcare.healthcareInflationMean.percent()}")
-            appendLine("- Healthcare inflation +/- swing: ${scenario.healthcare.healthcareInflationStdDev.percent()}")
+            appendLine("- Healthcare inflation Std Dev: ${scenario.healthcare.healthcareInflationStdDev.precisePercent()}")
             appendLine("- Medicare premiums: ${if (scenario.healthcare.includeMedicarePremiums) "Included" else "Excluded"}")
             appendLine("- Medicare premium model: ${MedicarePremiums.PREMIUM_TABLE_VERSION}")
             appendLine("- Mortgage payment: ${scenario.mortgage.monthlyPayment.money()}")
-            appendLine("- Mortgage years left: ${scenario.mortgage.yearsLeft}")
+            appendLine("- Mortgage time left: ${scenario.mortgage.yearsLeft} years, ${scenario.mortgage.monthsLeft} months")
             appendLine("- Current mortgage balance: ${scenario.mortgage.currentBalance.money()}")
             appendLine("- Current home value: ${scenario.home.currentValue.money()}")
             appendLine("- Monthly rent: ${scenario.rent.monthlyRent.money()}")
             appendLine("- Senior apartment rent after home sale: ${SENIOR_APARTMENT_MONTHLY_RENT_2026.money()} in 2026 dollars, inflated with general inflation")
-            appendLine("- Pre-retirement return average: ${scenario.market.preRetirementMeanReturn.percent()}")
-            appendLine("- Pre-retirement return +/- swing: ${scenario.market.preRetirementStdDev.percent()}")
-            appendLine("- Stock return average: ${scenario.market.stockMeanReturn.percent()}")
-            appendLine("- Stock return +/- swing: ${scenario.market.stockStdDev.percent()}")
-            appendLine("- Bond return average: ${scenario.market.bondMeanReturn.percent()}")
-            appendLine("- Bond return +/- swing: ${scenario.market.bondStdDev.percent()}")
+            appendLine("- Current portfolio returns average: ${scenario.market.preRetirementMeanReturn.precisePercent()}")
+            appendLine("- Current portfolio returns Std Dev: ${scenario.market.preRetirementStdDev.precisePercent()}")
+            appendLine("- Post-retirement stock returns average: ${scenario.market.stockMeanReturn.precisePercent()}")
+            appendLine("- Post-retirement stock returns Std Dev: ${scenario.market.stockStdDev.precisePercent()}")
+            appendLine("- Post-retirement stock returns basis: Default 13.3% ± 16.2% values based on the last 50 years of the S&P 500")
+            appendLine("- Post-retirement bond returns average: ${scenario.market.bondMeanReturn.percent()}")
+            appendLine("- Post-retirement bond returns Std Dev: ${scenario.market.bondStdDev.percent()}")
+            appendLine("- Post-retirement investment ratios:")
+            PostRetirementAllocationTier.entries.forEach { tier ->
+                val stockAllocation = scenario.postRetirementAllocation.stockAllocationFor(tier)
+                appendLine("  - ${tier.label}: ${stockAllocation.percent()} stocks / ${(1.0 - stockAllocation).percent()} bonds")
+            }
             appendLine("- Roth conversions: ${if (scenario.rothConversion.enabled) "Enabled" else "Disabled"}")
             appendLine("- Roth conversion bracket cap: ${scenario.rothConversion.marginalRateCap.percent()}")
             appendLine("- Cash reserve drawdown: ${if (scenario.withdrawalStrategy.useCashReserveDuringDrawdowns) "Enabled" else "Disabled"}")
@@ -154,6 +171,13 @@ object ReportBuilder {
 
     private fun Double.percent(): String {
         return "${"%.0f".format(Locale.US, this * 100.0)}%"
+    }
+
+    private fun Double.precisePercent(): String {
+        val percentText = "%.1f".format(Locale.US, this * 100.0)
+            .trimEnd('0')
+            .trimEnd('.')
+        return "$percentText%"
     }
 
     private fun com.retirementreadinesslab.model.RiskLevel.label(): String {

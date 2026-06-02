@@ -10,6 +10,7 @@ import com.retirementreadinesslab.model.HomePlan
 import com.retirementreadinesslab.model.HouseholdProfile
 import com.retirementreadinesslab.model.MarketAssumptions
 import com.retirementreadinesslab.model.MortgagePlan
+import com.retirementreadinesslab.model.PostRetirementAllocationStrategy
 import com.retirementreadinesslab.model.RentPlan
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.SocialSecurityPlan
@@ -31,7 +32,7 @@ class RetirementSimulatorTest {
 
         assertEquals(first.successProbability, second.successProbability, 0.0001)
         assertEquals(first.medianEndingBalance, second.medianEndingBalance, 0.01)
-        assertEquals("2026.05-married-income", first.provenance.engineVersion)
+        assertEquals("2026.06-allocation-lab", first.provenance.engineVersion)
         assertEquals("Monthly cashflow model with annual result bands", first.provenance.engineCadence)
         assertEquals("2024 federal brackets", first.provenance.taxTableVersion)
         assertEquals(
@@ -70,6 +71,46 @@ class RetirementSimulatorTest {
         assertTrue(result.failureAgeBuckets.sumOf { it.count } > 0)
         assertTrue(result.notFailedByAge.isNotEmpty())
         assertTrue(result.notFailedByAge.last().notFailedShare < 0.10)
+    }
+
+    @Test
+    fun customPostRetirementAllocationChangesPortfolioReturns() {
+        val base = sampleScenario().copy(
+            household = HouseholdProfile(currentAge = 40, retirementAge = 40, targetEndAge = 41),
+            accounts = AccountBalances(pretax = 0.0, roth = 480_000.0, taxable = 0.0, cash = 0.0),
+            spending = SpendingPlan(
+                annualBaseSpending = 12_000.0,
+                generalInflationMean = 0.0,
+                generalInflationStdDev = 0.0,
+                spendingPathModel = SpendingPathModel.Flat,
+                lowPortfolioSpendingReduction = 0.0
+            ),
+            healthcare = HealthcarePlan(preMedicareMonthlyPremium = 0.0, includeMedicarePremiums = false),
+            socialSecurity = SocialSecurityPlan(annualBenefitAt67 = 0.0, claimAge = 67),
+            market = MarketAssumptions(
+                preRetirementMeanReturn = 0.0,
+                preRetirementStdDev = 0.0,
+                stockMeanReturn = 0.12,
+                stockStdDev = 0.0,
+                bondMeanReturn = 0.0,
+                bondStdDev = 0.0
+            ),
+            withdrawalStrategy = WithdrawalStrategy(useCashReserveDuringDrawdowns = false),
+            numberOfSimulations = 10,
+            seed = 4L
+        )
+        val stockHeavy = base.copy(
+            postRetirementAllocation = PostRetirementAllocationStrategy(stock40xTo45x = 1.0)
+        )
+        val bondOnly = base.copy(
+            postRetirementAllocation = PostRetirementAllocationStrategy(stock40xTo45x = 0.0)
+        )
+
+        val stockHeavyResult = RetirementSimulator.run(stockHeavy)
+        val bondOnlyResult = RetirementSimulator.run(bondOnly)
+
+        assertTrue(stockHeavyResult.medianEndingBalance > bondOnlyResult.medianEndingBalance)
+        assertTrue(stockHeavyResult.provenance.assumptionFingerprint != bondOnlyResult.provenance.assumptionFingerprint)
     }
 
     @Test
@@ -126,6 +167,46 @@ class RetirementSimulatorTest {
 
         assertEquals(1.0, result.successProbability, 0.0001)
         assertTrue(result.notFailedByAge.last().age > scenario.household.targetEndAge)
+    }
+
+    @Test
+    fun marriedSpousalBenefitCanReducePortfolioFailureRisk() {
+        val single = sampleScenario().copy(
+            household = HouseholdProfile(currentAge = 67, retirementAge = 67, targetEndAge = 68),
+            accounts = AccountBalances(pretax = 0.0, roth = 0.0, taxable = 0.0, cash = 0.0),
+            spending = SpendingPlan(
+                annualBaseSpending = 44_000.0,
+                generalInflationMean = 0.0,
+                generalInflationStdDev = 0.0,
+                spendingPathModel = SpendingPathModel.Flat,
+                lowPortfolioSpendingReduction = 0.0
+            ),
+            healthcare = HealthcarePlan(preMedicareMonthlyPremium = 0.0, includeMedicarePremiums = false),
+            socialSecurity = SocialSecurityPlan(
+                annualBenefitAt67 = 40_000.0,
+                claimAge = 67,
+                spouseClaimAge = 67
+            ),
+            market = MarketAssumptions(
+                preRetirementMeanReturn = 0.0,
+                preRetirementStdDev = 0.0,
+                stockMeanReturn = 0.0,
+                stockStdDev = 0.0,
+                bondMeanReturn = 0.0,
+                bondStdDev = 0.0
+            ),
+            withdrawalStrategy = WithdrawalStrategy(useCashReserveDuringDrawdowns = false),
+            numberOfSimulations = 1
+        )
+        val married = single.copy(
+            household = single.household.copy(
+                filingStatus = FilingStatus.Married,
+                spouseCurrentAge = 67
+            )
+        )
+
+        assertEquals(0.0, RetirementSimulator.run(single).successProbability, 0.0001)
+        assertEquals(1.0, RetirementSimulator.run(married).successProbability, 0.0001)
     }
 
     @Test
@@ -232,26 +313,26 @@ class RetirementSimulatorTest {
     }
 
     @Test
-    fun longTermCareReplacesNormalSpendingWhileActive() {
-        val normalNeed = RetirementSimulator.monthlyRetirementNeed(
+    fun longTermCareOnlyReplacesBaseSpendingWhenAllLivingPeopleAreInCare() {
+        val oneSpouseInCareNeed = RetirementSimulator.monthlyRetirementNeed(
             monthlySpending = 5_000.0,
             mortgageCost = 1_500.0,
             rentCost = 1_200.0,
             healthcareCost = 300.0,
             longTermCareCost = 8_000.0,
-            inLongTermCare = false
+            replaceBaseSpendingWithLongTermCare = false
         )
-        val careNeed = RetirementSimulator.monthlyRetirementNeed(
+        val allLivingPeopleInCareNeed = RetirementSimulator.monthlyRetirementNeed(
             monthlySpending = 5_000.0,
-            mortgageCost = 1_500.0,
-            rentCost = 1_200.0,
+            mortgageCost = 0.0,
+            rentCost = 0.0,
             healthcareCost = 300.0,
-            longTermCareCost = 8_000.0,
-            inLongTermCare = true
+            longTermCareCost = 16_000.0,
+            replaceBaseSpendingWithLongTermCare = true
         )
 
-        assertEquals(8_000.0, normalNeed, 0.01)
-        assertEquals(8_300.0, careNeed, 0.01)
+        assertEquals(16_000.0, oneSpouseInCareNeed, 0.01)
+        assertEquals(16_300.0, allLivingPeopleInCareNeed, 0.01)
     }
 
     @Test
@@ -282,6 +363,38 @@ class RetirementSimulatorTest {
 
         assertEquals(1.0, RetirementSimulator.run(withoutRent).successProbability, 0.0001)
         assertTrue(RetirementSimulator.run(withRent).successProbability < 1.0)
+    }
+
+    @Test
+    fun mortgageMonthsLeftAffectRemainingPaymentDuration() {
+        val fiveMonthsLeft = sampleScenario().copy(
+            household = HouseholdProfile(currentAge = 40, retirementAge = 40, targetEndAge = 41),
+            accounts = AccountBalances(pretax = 0.0, roth = 0.0, taxable = 0.0, cash = 6_000.0),
+            spending = SpendingPlan(
+                annualBaseSpending = 0.0,
+                generalInflationMean = 0.0,
+                generalInflationStdDev = 0.0
+            ),
+            mortgage = MortgagePlan(monthlyPayment = 1_000.0, yearsLeft = 0, monthsLeft = 5),
+            healthcare = HealthcarePlan(preMedicareMonthlyPremium = 0.0, includeMedicarePremiums = false),
+            socialSecurity = SocialSecurityPlan(annualBenefitAt67 = 0.0, claimAge = 67),
+            market = MarketAssumptions(
+                preRetirementMeanReturn = 0.0,
+                preRetirementStdDev = 0.0,
+                stockMeanReturn = 0.0,
+                stockStdDev = 0.0,
+                bondMeanReturn = 0.0,
+                bondStdDev = 0.0
+            ),
+            withdrawalStrategy = WithdrawalStrategy(useCashReserveDuringDrawdowns = false),
+            numberOfSimulations = 1
+        )
+        val sixMonthsLeft = fiveMonthsLeft.copy(
+            mortgage = fiveMonthsLeft.mortgage.copy(monthsLeft = 6)
+        )
+
+        assertEquals(1.0, RetirementSimulator.run(fiveMonthsLeft).successProbability, 0.0001)
+        assertEquals(0.0, RetirementSimulator.run(sixMonthsLeft).successProbability, 0.0001)
     }
 
     @Test

@@ -9,6 +9,7 @@ Current behavior:
 - Monthly pre-retirement growth.
 - Monthly retirement withdrawals and cashflows.
 - Stock and bond returns sampled from normal distributions.
+- Post-retirement stock/bond allocation selected from a tunable invested-assets-to-annual-spending ladder.
 - Inflation sampled from normal distribution with a floor.
 - Federal tax estimate using 2024 brackets.
 - Social Security claiming adjustment.

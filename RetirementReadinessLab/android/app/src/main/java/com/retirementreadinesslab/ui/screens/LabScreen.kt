@@ -21,11 +21,18 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Toll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -37,11 +44,14 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.retirementreadinesslab.model.PostRetirementAllocationStrategy
+import com.retirementreadinesslab.model.PostRetirementAllocationTier
 import com.retirementreadinesslab.simulation.LabComparisonAnalysis
 import com.retirementreadinesslab.simulation.LabComparisonType
 import com.retirementreadinesslab.simulation.LabSweepAnalysis
 import com.retirementreadinesslab.simulation.LabSweepRowAnalysis
 import com.retirementreadinesslab.simulation.LabSweepType
+import com.retirementreadinesslab.simulation.PostRetirementAllocationOptimization
 import com.retirementreadinesslab.simulation.RetirementDecisionEstimate
 import com.retirementreadinesslab.simulation.ScenarioLabAnalyzer
 import com.retirementreadinesslab.state.RetirementLabState
@@ -53,6 +63,9 @@ import com.retirementreadinesslab.ui.theme.LabMutedText
 import com.retirementreadinesslab.ui.theme.LabPrimary
 import com.retirementreadinesslab.ui.theme.LabRisk
 import com.retirementreadinesslab.ui.theme.LabSuccess
+import kotlin.math.roundToInt
+
+private const val SHOW_POST_RETIREMENT_ALLOCATION_LAB = false
 
 @Composable
 fun LabScreen(state: RetirementLabState) {
@@ -89,6 +102,21 @@ fun LabScreen(state: RetirementLabState) {
         if (isPending) {
             item {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+        }
+
+        if (SHOW_POST_RETIREMENT_ALLOCATION_LAB) {
+            item {
+                PostRetirementAllocationCard(
+                    allocation = state.selectedScenario.postRetirementAllocation,
+                    optimization = state.selectedPostRetirementAllocationOptimization,
+                    isOptimizing = state.isOptimizingPostRetirementAllocation,
+                    onAllocationChange = state::updateSelectedPostRetirementAllocation,
+                    onOptimize = state::optimizeSelectedPostRetirementAllocation,
+                    onRestoreDefaults = {
+                        state.updateSelectedPostRetirementAllocation(PostRetirementAllocationStrategy())
+                    }
+                )
             }
         }
 
@@ -147,6 +175,158 @@ fun LabScreen(state: RetirementLabState) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun PostRetirementAllocationCard(
+    allocation: PostRetirementAllocationStrategy,
+    optimization: PostRetirementAllocationOptimization?,
+    isOptimizing: Boolean,
+    onAllocationChange: (PostRetirementAllocationStrategy) -> Unit,
+    onOptimize: (PostRetirementAllocationStrategy) -> Unit,
+    onRestoreDefaults: () -> Unit
+) {
+    var draft by remember(allocation) { mutableStateOf(allocation) }
+
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "Post-retirement investment ratios",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    "Stock and bond mix by invested assets divided by annual spending.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LabMutedText
+                )
+            }
+
+            PostRetirementAllocationTier.entries.forEach { tier ->
+                AllocationSliderRow(
+                    tier = tier,
+                    stockAllocation = draft.stockAllocationFor(tier),
+                    onStockAllocationChange = { value ->
+                        draft = draft.withStockAllocation(tier, value)
+                    },
+                    onStockAllocationFinished = {
+                        onAllocationChange(draft)
+                    }
+                )
+            }
+
+            if (isOptimizing) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            } else if (optimization != null) {
+                AllocationOptimizationSummary(optimization)
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        draft = PostRetirementAllocationStrategy()
+                        onRestoreDefaults()
+                    },
+                    enabled = !isOptimizing,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("restore-post-retirement-allocation-defaults")
+                ) {
+                    Text("Restore Defaults")
+                }
+                Button(
+                    onClick = { onOptimize(draft) },
+                    enabled = !isOptimizing,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("optimize-post-retirement-allocation")
+                ) {
+                    Text(if (isOptimizing) "Testing..." else "Find Best Ratios")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AllocationOptimizationSummary(optimization: PostRetirementAllocationOptimization) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f), RoundedCornerShape(8.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            "Best quick estimate: ${optimization.recommendedReadiness.asPercent()} readiness (${signedPercent(optimization.readinessDelta)}).",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold
+        )
+        Text(
+            "Tested ${optimization.testedAllocations} mixes with ${optimization.simulationCount} simulations each.",
+            style = MaterialTheme.typography.bodySmall,
+            color = LabMutedText
+        )
+        Text(
+            "Median ending balance: ${optimization.recommendedMedianEndingBalance.asCompactCurrency()}",
+            style = MaterialTheme.typography.bodySmall,
+            color = LabMutedText
+        )
+    }
+}
+
+@Composable
+private fun AllocationSliderRow(
+    tier: PostRetirementAllocationTier,
+    stockAllocation: Double,
+    onStockAllocationChange: (Double) -> Unit,
+    onStockAllocationFinished: () -> Unit
+) {
+    val stockPercent = stockAllocation.coerceIn(0.0, 1.0)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                tier.label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                allocationLabel(stockPercent),
+                style = MaterialTheme.typography.labelMedium,
+                color = LabMutedText
+            )
+        }
+        Slider(
+            value = stockPercent.toFloat(),
+            onValueChange = { value ->
+                onStockAllocationChange(((value * 20f).roundToInt() / 20.0).coerceIn(0.0, 1.0))
+            },
+            onValueChangeFinished = onStockAllocationFinished,
+            valueRange = 0f..1f,
+            steps = 19,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("allocation-slider-${tier.name.accessibilityTagSuffix()}")
+                .semantics {
+                    contentDescription = "${tier.label} stock allocation: ${allocationLabel(stockPercent)}"
+                }
+        )
     }
 }
 
@@ -304,6 +484,12 @@ private fun deltaColor(delta: Double): Color {
 private fun signedPercent(value: Double): String {
     val sign = if (value >= 0.0) "+" else ""
     return "$sign${value.asPercent()}"
+}
+
+private fun allocationLabel(stockAllocation: Double): String {
+    val stockPercent = stockAllocation.coerceIn(0.0, 1.0)
+    val bondPercent = 1.0 - stockPercent
+    return "${stockPercent.asPercent()} stocks / ${bondPercent.asPercent()} bonds"
 }
 
 private fun String.accessibilityTagSuffix(): String {

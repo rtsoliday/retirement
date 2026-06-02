@@ -17,12 +17,14 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.retirementreadinesslab.data.ScenarioJson
 import com.retirementreadinesslab.data.ScenarioRepository
 import com.retirementreadinesslab.model.BudgetProfile
+import com.retirementreadinesslab.model.PostRetirementAllocationStrategy
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.SimulationResult
 import com.retirementreadinesslab.model.sampleScenarios
 import com.retirementreadinesslab.model.validate
 import com.retirementreadinesslab.simulation.RetirementDecisionEstimate
 import com.retirementreadinesslab.simulation.RetirementSimulator
+import com.retirementreadinesslab.simulation.PostRetirementAllocationOptimization
 import com.retirementreadinesslab.simulation.ScenarioLabAnalysis
 import com.retirementreadinesslab.simulation.ScenarioLabAnalyzer
 import kotlinx.coroutines.CoroutineScope
@@ -41,8 +43,10 @@ class RetirementLabState(
     }
     private val results = mutableStateMapOf<String, SimulationResult>()
     private val labAnalyses = mutableStateMapOf<String, ScenarioLabAnalysis>()
+    private val allocationOptimizations = mutableStateMapOf<String, PostRetirementAllocationOptimization>()
     private var scenarioRunId = 0L
     private var labAnalysisRunId = 0L
+    private var allocationOptimizationRunId = 0L
 
     var selectedScenarioId by mutableStateOf(scenarios.first().id)
         private set
@@ -54,6 +58,9 @@ class RetirementLabState(
         private set
 
     var isAnalyzingLab by mutableStateOf(false)
+        private set
+
+    var isOptimizingPostRetirementAllocation by mutableStateOf(false)
         private set
 
     var storageMessage by mutableStateOf<String?>(null)
@@ -77,6 +84,9 @@ class RetirementLabState(
     val selectedDecisionEstimate: RetirementDecisionEstimate?
         get() = selectedLabAnalysis?.decisionEstimate
 
+    val selectedPostRetirementAllocationOptimization: PostRetirementAllocationOptimization?
+        get() = allocationOptimizations[selectedScenarioId]
+
     suspend fun loadPersistedState() {
         isLoading = true
         storageMessage = null
@@ -88,6 +98,7 @@ class RetirementLabState(
             hasCompletedFirstLaunch = stored.hasCompletedFirstLaunch
             results.clear()
             labAnalyses.clear()
+            allocationOptimizations.clear()
             runScenarioAsync(selectedScenarioId)
             runLabAnalysisAsync(selectedScenarioId)
         }.onFailure {
@@ -123,6 +134,61 @@ class RetirementLabState(
         }
     }
 
+    fun updateSelectedPostRetirementAllocation(allocation: PostRetirementAllocationStrategy) {
+        val index = scenarios.indexOfFirst { it.id == selectedScenarioId }
+        if (index >= 0) {
+            val current = scenarios[index]
+            val updated = current.copy(postRetirementAllocation = allocation)
+            scenarios[index] = updated
+            results.remove(updated.id)
+            allocationOptimizations.remove(updated.id)
+            lastRunMessage = "Investment ratios saved. Run a stress test to update readiness."
+            persist()
+        }
+    }
+
+    fun optimizeSelectedPostRetirementAllocation(startingAllocation: PostRetirementAllocationStrategy) {
+        val index = scenarios.indexOfFirst { it.id == selectedScenarioId }
+        if (index < 0) return
+
+        val startingScenario = scenarios[index].copy(postRetirementAllocation = startingAllocation)
+        scenarios[index] = startingScenario
+        results.remove(startingScenario.id)
+        allocationOptimizations.remove(startingScenario.id)
+        lastRunMessage = "Testing investment ratios..."
+        persist()
+
+        val requestId = ++allocationOptimizationRunId
+        isOptimizingPostRetirementAllocation = true
+        scope.launch {
+            val run = runCatching {
+                withContext(Dispatchers.Default) {
+                    ScenarioLabAnalyzer.optimizePostRetirementAllocation(startingScenario)
+                }
+            }
+            run.onSuccess { optimization ->
+                val currentIndex = scenarios.indexOfFirst { it.id == startingScenario.id }
+                val current = scenarios.getOrNull(currentIndex)
+                val unchangedDuringRun = current?.postRetirementAllocation == startingAllocation
+                if (current != null && unchangedDuringRun && requestId == allocationOptimizationRunId) {
+                    val updated = current.copy(postRetirementAllocation = optimization.recommendedAllocation)
+                    scenarios[currentIndex] = updated
+                    results.remove(updated.id)
+                    allocationOptimizations[updated.id] = optimization
+                    lastRunMessage = buildAllocationOptimizationMessage(optimization)
+                    persist()
+                }
+            }.onFailure {
+                if (requestId == allocationOptimizationRunId) {
+                    storageMessage = "Investment ratio test failed: ${it.message ?: "unknown error"}"
+                }
+            }
+            if (requestId == allocationOptimizationRunId) {
+                isOptimizingPostRetirementAllocation = false
+            }
+        }
+    }
+
     fun saveSelectedBudget(budget: BudgetProfile) {
         val index = scenarios.indexOfFirst { it.id == selectedScenarioId }
         if (index >= 0) {
@@ -153,6 +219,7 @@ class RetirementLabState(
         selectedScenarioId = scenarios.first().id
         results.clear()
         labAnalyses.clear()
+        allocationOptimizations.clear()
         storageMessage = "Local saved data deleted. Sample data is loaded."
         runScenarioAsync(selectedScenarioId)
         runLabAnalysisAsync(selectedScenarioId)
@@ -186,6 +253,7 @@ class RetirementLabState(
         selectedScenarioId = scenarios.first().id
         results.clear()
         labAnalyses.clear()
+        allocationOptimizations.clear()
         runScenarioAsync(selectedScenarioId)
         runLabAnalysisAsync(selectedScenarioId)
         storageMessage = "Imported ${scenarios.size} scenario${if (scenarios.size == 1) "" else "s"}."
@@ -254,6 +322,12 @@ class RetirementLabState(
     private fun buildRunMessage(scenario: RetirementScenario, result: SimulationResult): String {
         val pct = String.format(Locale.US, "%.0f%%", result.successProbability * 100.0)
         return "Stress test complete: $pct readiness at retirement age ${scenario.household.retirementAge}."
+    }
+
+    private fun buildAllocationOptimizationMessage(optimization: PostRetirementAllocationOptimization): String {
+        val best = String.format(Locale.US, "%.0f%%", optimization.recommendedReadiness * 100.0)
+        val delta = String.format(Locale.US, "%+.0f", optimization.readinessDelta * 100.0)
+        return "Investment ratio test complete: best quick estimate $best readiness ($delta pts)."
     }
 
     private fun persist() {

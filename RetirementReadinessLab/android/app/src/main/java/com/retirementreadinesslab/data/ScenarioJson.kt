@@ -3,6 +3,11 @@ package com.retirementreadinesslab.data
 import com.retirementreadinesslab.model.AccountBalances
 import com.retirementreadinesslab.model.BudgetLineItem
 import com.retirementreadinesslab.model.BudgetProfile
+import com.retirementreadinesslab.model.DEFAULT_GENERAL_INFLATION_MEAN
+import com.retirementreadinesslab.model.DEFAULT_GENERAL_INFLATION_STD_DEV
+import com.retirementreadinesslab.model.DEFAULT_HEALTHCARE_INFLATION_MEAN
+import com.retirementreadinesslab.model.DEFAULT_HEALTHCARE_INFLATION_STD_DEV
+import com.retirementreadinesslab.model.DEFAULT_PRE_MEDICARE_MONTHLY_PREMIUM
 import com.retirementreadinesslab.model.DEFAULT_PROJECTION_END_AGE
 import com.retirementreadinesslab.model.FilingStatus
 import com.retirementreadinesslab.model.Gender
@@ -14,6 +19,7 @@ import com.retirementreadinesslab.model.LongTermCareAssumption
 import com.retirementreadinesslab.model.MarketAssumptions
 import com.retirementreadinesslab.model.MonthlyBudget
 import com.retirementreadinesslab.model.MortgagePlan
+import com.retirementreadinesslab.model.PostRetirementAllocationStrategy
 import com.retirementreadinesslab.model.RentPlan
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.RothConversionStrategy
@@ -67,6 +73,7 @@ object ScenarioJson {
             .put("mortgage", JSONObject()
                 .put("monthlyPayment", scenario.mortgage.monthlyPayment)
                 .put("yearsLeft", scenario.mortgage.yearsLeft)
+                .put("monthsLeft", scenario.mortgage.monthsLeft)
                 .put("currentBalance", scenario.mortgage.currentBalance))
             .put("rent", JSONObject()
                 .put("monthlyRent", scenario.rent.monthlyRent))
@@ -79,7 +86,8 @@ object ScenarioJson {
                 .put("includeMedicarePremiums", scenario.healthcare.includeMedicarePremiums))
             .put("socialSecurity", JSONObject()
                 .put("annualBenefitAt67", scenario.socialSecurity.annualBenefitAt67)
-                .put("claimAge", scenario.socialSecurity.claimAge))
+                .put("claimAge", scenario.socialSecurity.claimAge)
+                .put("spouseClaimAge", scenario.socialSecurity.spouseClaimAge))
             .put("guaranteedIncome", JSONObject()
                 .put("annualIncome", scenario.guaranteedIncome.annualIncome)
                 .put("startAge", scenario.guaranteedIncome.startAge)
@@ -92,6 +100,7 @@ object ScenarioJson {
                 .put("stockStdDev", scenario.market.stockStdDev)
                 .put("bondMeanReturn", scenario.market.bondMeanReturn)
                 .put("bondStdDev", scenario.market.bondStdDev))
+            .put("postRetirementAllocation", encodePostRetirementAllocation(scenario.postRetirementAllocation))
             .put("rothConversion", JSONObject()
                 .put("enabled", scenario.rothConversion.enabled)
                 .put("marginalRateCap", scenario.rothConversion.marginalRateCap))
@@ -118,6 +127,7 @@ object ScenarioJson {
         val socialSecurity = json.getJSONObject("socialSecurity")
         val guaranteedIncome = json.optJSONObject("guaranteedIncome") ?: JSONObject()
         val market = json.optJSONObject("market") ?: JSONObject()
+        val postRetirementAllocation = json.optJSONObject("postRetirementAllocation") ?: JSONObject()
         val rothConversion = json.optJSONObject("rothConversion") ?: JSONObject()
         val withdrawalStrategy = json.optJSONObject("withdrawalStrategy") ?: JSONObject()
         val longTermCare = json.optJSONObject("longTermCare") ?: JSONObject()
@@ -141,8 +151,8 @@ object ScenarioJson {
             ),
             spending = SpendingPlan(
                 annualBaseSpending = spending.optDouble("annualBaseSpending", 0.0),
-                generalInflationMean = spending.optDouble("generalInflationMean", 0.033),
-                generalInflationStdDev = spending.optDouble("generalInflationStdDev", 0.04),
+                generalInflationMean = spending.optDouble("generalInflationMean", DEFAULT_GENERAL_INFLATION_MEAN),
+                generalInflationStdDev = spending.optDouble("generalInflationStdDev", DEFAULT_GENERAL_INFLATION_STD_DEV),
                 spendingPathModel = enumOrDefault(
                     spending.optString("spendingPathModel"),
                     SpendingPathModel.EmpiricalAgeDecline
@@ -153,6 +163,7 @@ object ScenarioJson {
             mortgage = MortgagePlan(
                 monthlyPayment = mortgage.optDouble("monthlyPayment", 0.0),
                 yearsLeft = mortgage.optInt("yearsLeft", 0),
+                monthsLeft = mortgage.optInt("monthsLeft", 0),
                 currentBalance = mortgage.optDouble("currentBalance", 0.0)
             ),
             rent = RentPlan(
@@ -162,14 +173,24 @@ object ScenarioJson {
                 currentValue = home.optDouble("currentValue", 0.0)
             ),
             healthcare = HealthcarePlan(
-                preMedicareMonthlyPremium = healthcare.optDouble("preMedicareMonthlyPremium", 650.0),
-                healthcareInflationMean = healthcare.optDouble("healthcareInflationMean", 0.055),
-                healthcareInflationStdDev = healthcare.optDouble("healthcareInflationStdDev", 0.02),
-                includeMedicarePremiums = healthcare.optBoolean("includeMedicarePremiums", true)
+                preMedicareMonthlyPremium = healthcare.optDouble(
+                    "preMedicareMonthlyPremium",
+                    DEFAULT_PRE_MEDICARE_MONTHLY_PREMIUM
+                ),
+                healthcareInflationMean = healthcare.optDouble(
+                    "healthcareInflationMean",
+                    DEFAULT_HEALTHCARE_INFLATION_MEAN
+                ),
+                healthcareInflationStdDev = healthcare.optDouble(
+                    "healthcareInflationStdDev",
+                    DEFAULT_HEALTHCARE_INFLATION_STD_DEV
+                ),
+                includeMedicarePremiums = true
             ),
             socialSecurity = SocialSecurityPlan(
                 annualBenefitAt67 = socialSecurity.optDouble("annualBenefitAt67", 0.0),
-                claimAge = socialSecurity.optInt("claimAge", 67)
+                claimAge = socialSecurity.optInt("claimAge", 67),
+                spouseClaimAge = socialSecurity.optInt("spouseClaimAge", 67)
             ),
             guaranteedIncome = GuaranteedIncomePlan(
                 annualIncome = guaranteedIncome.optDouble("annualIncome", 0.0),
@@ -178,13 +199,14 @@ object ScenarioJson {
                 survivorPercent = guaranteedIncome.optDouble("survivorPercent", 1.0)
             ),
             market = MarketAssumptions(
-                preRetirementMeanReturn = market.optDouble("preRetirementMeanReturn", 0.08),
-                preRetirementStdDev = market.optDouble("preRetirementStdDev", 0.16),
-                stockMeanReturn = market.optDouble("stockMeanReturn", 0.08),
-                stockStdDev = market.optDouble("stockStdDev", 0.18),
+                preRetirementMeanReturn = market.optDouble("preRetirementMeanReturn", 0.133),
+                preRetirementStdDev = market.optDouble("preRetirementStdDev", 0.162),
+                stockMeanReturn = market.optDouble("stockMeanReturn", 0.133),
+                stockStdDev = market.optDouble("stockStdDev", 0.162),
                 bondMeanReturn = market.optDouble("bondMeanReturn", 0.03),
                 bondStdDev = market.optDouble("bondStdDev", 0.06)
             ),
+            postRetirementAllocation = decodePostRetirementAllocation(postRetirementAllocation),
             rothConversion = RothConversionStrategy(
                 enabled = rothConversion.optBoolean("enabled", false),
                 marginalRateCap = rothConversion.optDouble("marginalRateCap", 0.22)
@@ -205,6 +227,28 @@ object ScenarioJson {
 
     private inline fun <reified T : Enum<T>> enumOrDefault(value: String, default: T): T {
         return enumValues<T>().firstOrNull { it.name == value } ?: default
+    }
+
+    private fun encodePostRetirementAllocation(allocation: PostRetirementAllocationStrategy): JSONObject {
+        return JSONObject()
+            .put("stockUnder30x", allocation.stockUnder30x)
+            .put("stock30xTo35x", allocation.stock30xTo35x)
+            .put("stock35xTo40x", allocation.stock35xTo40x)
+            .put("stock40xTo45x", allocation.stock40xTo45x)
+            .put("stock45xTo50x", allocation.stock45xTo50x)
+            .put("stock50xOrMore", allocation.stock50xOrMore)
+    }
+
+    private fun decodePostRetirementAllocation(json: JSONObject): PostRetirementAllocationStrategy {
+        val defaults = PostRetirementAllocationStrategy()
+        return PostRetirementAllocationStrategy(
+            stockUnder30x = json.optDouble("stockUnder30x", defaults.stockUnder30x),
+            stock30xTo35x = json.optDouble("stock30xTo35x", defaults.stock30xTo35x),
+            stock35xTo40x = json.optDouble("stock35xTo40x", defaults.stock35xTo40x),
+            stock40xTo45x = json.optDouble("stock40xTo45x", defaults.stock40xTo45x),
+            stock45xTo50x = json.optDouble("stock45xTo50x", defaults.stock45xTo50x),
+            stock50xOrMore = json.optDouble("stock50xOrMore", defaults.stock50xOrMore)
+        )
     }
 
     private fun encodeBudget(budget: BudgetProfile): JSONObject {

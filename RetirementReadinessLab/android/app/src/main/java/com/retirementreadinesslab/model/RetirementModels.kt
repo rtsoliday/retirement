@@ -55,10 +55,50 @@ data class AccountBalances(
         get() = pretax + roth + taxable + cash
 }
 
+/*
+ * U.S. general household inflation assumption excluding healthcare.
+ *
+ * Use CPI-style inflation, not investment-return inflation.
+ *
+ * Recommended default:
+ *   mean annual inflation      = 0.023   // 2.3%
+ *   annual standard deviation  = 0.016   // 1.6%
+ *
+ * Reasoning:
+ *   - The Federal Reserve's long-run inflation anchor is 2.0% PCE inflation.
+ *   - CPI-style inflation used by households and retirement COLAs tends to be
+ *     modeled a little above that. The 2025 Social Security Trustees Report
+ *     uses 2.4% CPI as its intermediate long-run assumption from 2027 onward.
+ *   - The 30-year TIPS breakeven inflation rate was about 2.25% in Apr 2026,
+ *     which is a market-based long-run inflation signal.
+ *   - Historical CPI-U volatility since the modern low-inflation regime began
+ *     is about 1.5% per year, so 1.6% is a reasonable simulation default.
+ *   - BLS CPI-U relative-importance data for Dec 2025 shows medical care
+ *     at 8.423% of CPI-U and all-items-less-medical-care at 91.577%.
+ *   - Because medical care is a relatively small CPI weight, removing it
+ *     does not materially change the general inflation assumption.
+ *   - Using a rough weighted-average adjustment:
+ *
+ *       non_healthcare =
+ *           (overall_cpi - medical_weight * medical_inflation)
+ *           / (1.0 - medical_weight)
+ *
+ *     If overall CPI = 2.4%, medical weight = 8.423%, and medical-care
+ *     inflation is assumed around 3.5% to 4.0%, then non-healthcare
+ *     inflation is about 2.25% to 2.30%.
+ *
+ *   - Historical BLS/FRED CPI-U "All Items Less Medical Care" data also
+ *     supports this being a small adjustment. Using annual-average values
+ *     from 1995-2024, all-items-less-medical-care inflation averaged about
+ *     2.49% with an annual standard deviation of about 1.63%.
+ */
+const val DEFAULT_GENERAL_INFLATION_MEAN = 0.023
+const val DEFAULT_GENERAL_INFLATION_STD_DEV = 0.016
+
 data class SpendingPlan(
     val annualBaseSpending: Double,
-    val generalInflationMean: Double = 0.033,
-    val generalInflationStdDev: Double = 0.04,
+    val generalInflationMean: Double = DEFAULT_GENERAL_INFLATION_MEAN,
+    val generalInflationStdDev: Double = DEFAULT_GENERAL_INFLATION_STD_DEV,
     val spendingPathModel: SpendingPathModel = SpendingPathModel.EmpiricalAgeDecline,
     val lowPortfolioSpendingReduction: Double = 0.10
 )
@@ -120,8 +160,12 @@ const val MAX_BUDGET_MONTHS_FOR_ESTIMATE = 12
 data class MortgagePlan(
     val monthlyPayment: Double = 0.0,
     val yearsLeft: Int = 0,
+    val monthsLeft: Int = 0,
     val currentBalance: Double = 0.0
-)
+) {
+    val totalMonthsLeft: Int
+        get() = yearsLeft * 12 + monthsLeft
+}
 
 data class RentPlan(
     val monthlyRent: Double = 0.0
@@ -131,16 +175,125 @@ data class HomePlan(
     val currentValue: Double = 0.0
 )
 
+/*
+ * U.S. household healthcare expense inflation assumption.
+ *
+ * Recommended default:
+ *   healthcare_inflation_mean = 0.040   // 4.0% per year
+ *   healthcare_inflation_sd   = 0.018   // 1.8% annual standard deviation
+ *
+ * This is intended for household healthcare expenses in retirement:
+ * Medicare premiums, supplemental premiums, prescription drugs,
+ * deductibles, copays, and other out-of-pocket medical costs.
+ *
+ * It is not a pure CPI medical-care price index. A pure medical-care CPI
+ * assumption would be lower, around 3.2% to 3.4%. Household healthcare
+ * expenses tend to grow faster because they include premium changes,
+ * utilization, plan design, age-related usage, and cost shifting.
+ *
+ * Source logic:
+ *   1. BLS/FRED CPI-U Medical Care is the historical price anchor.
+ *      Series: CPIMEDSL, Consumer Price Index for All Urban Consumers:
+ *      Medical Care in U.S. City Average.
+ *
+ *      Using Dec-to-Dec annual changes for 1995-2024:
+ *        average annual medical CPI inflation ~= 3.3%
+ *        annual standard deviation ~= 1.1%
+ *
+ *   2. CMS National Health Expenditure projections are the forward-looking
+ *      healthcare-cost anchor. CMS projects national health expenditures
+ *      to grow 5.8% per year over 2024-2033, faster than projected GDP
+ *      growth of 4.3%. That total spending measure includes utilization,
+ *      population, coverage, and intensity, so it is too high to use as
+ *      pure household inflation.
+ *
+ *   3. CMS projects out-of-pocket spending growth to settle near 3.9%
+ *      for 2027-2033. CMS also projects private health insurance spending
+ *      growth around 4.3% for 2028-2033, hospital spending around 5.5%,
+ *      physician/clinical services around 5.1%, and prescription drugs
+ *      around 4.7%.
+ *
+ *   4. Therefore, a 4.0% household healthcare inflation mean is a compromise:
+ *        - above pure medical-care CPI, because retirement healthcare
+ *          expenses include premiums and utilization;
+ *        - below total national health spending growth, because total NHE
+ *          includes population/enrollment/intensity effects that should not
+ *          all be applied to one household's expense line.
+ *
+ *   5. The standard deviation is set to 1.8%, higher than the 1.1% historical
+ *      medical CPI volatility, because household healthcare expenses are
+ *      more variable than the aggregate CPI medical-care price index.
+ */
+const val DEFAULT_HEALTHCARE_INFLATION_MEAN = 0.040
+const val DEFAULT_HEALTHCARE_INFLATION_STD_DEV = 0.018
+
+/*
+ * Pre-Medicare health insurance premium assumption.
+ *
+ * Recommended default:
+ *   pre_medicare_monthly_premium_per_adult = 1250.00
+ *
+ * Meaning:
+ *   Gross monthly health insurance premium for one pre-Medicare adult,
+ *   roughly age 60, buying individual ACA Marketplace coverage.
+ *
+ * This is intended to represent the premium only. It does not include:
+ *   - deductibles
+ *   - copays
+ *   - coinsurance
+ *   - prescription out-of-pocket costs
+ *   - dental or vision premiums
+ *   - HSA contributions
+ *
+ * Reasoning:
+ *   - Pre-Medicare retirees generally need non-Medicare coverage until
+ *     age 65, unless covered by an employer, spouse, retiree plan, COBRA,
+ *     Medicaid, or another source.
+ *
+ *   - ACA Marketplace Silver coverage is a reasonable benchmark because
+ *     Silver plans are the benchmark used for ACA premium tax credit
+ *     calculations. KFF's 2026 Marketplace calculator states that the
+ *     Silver premium is the second-lowest-cost Silver plan in the entered
+ *     county and that premiums are based on actual 2026 exchange premiums
+ *     from CMS, state exchanges, insurance departments, and KFF research.
+ *
+ *   - KFF gives a 2026 example of a 60-year-old earning $64,000, above the
+ *     400% FPL subsidy cliff, paying an estimated $14,931/year for the
+ *     annual premium with no tax credit.
+ *
+ *       $14,931 / 12 = $1,244.25/month
+ *
+ *     Rounded for calculator use:
+ *
+ *       pre_medicare_monthly_premium_per_adult = $1,250
+ *
+ *   - Use this as a gross premium before ACA premium tax credits. If the
+ *     calculator models ACA subsidies, apply the subsidy after this premium
+ *     estimate rather than lowering the default premium itself.
+ *
+ *   - For a two-adult household where both adults are under 65:
+ *
+ *       pre_medicare_monthly_premium_household =
+ *           2 * pre_medicare_monthly_premium_per_adult
+ *         = $2,500/month
+ *
+ *   - Premiums vary heavily by age, state, county, tobacco status, income,
+ *     and subsidy eligibility. This default is intentionally a national
+ *     planning approximation.
+ */
+const val DEFAULT_PRE_MEDICARE_MONTHLY_PREMIUM = 1250.0
+
 data class HealthcarePlan(
-    val preMedicareMonthlyPremium: Double = 650.0,
-    val healthcareInflationMean: Double = 0.055,
-    val healthcareInflationStdDev: Double = 0.02,
+    val preMedicareMonthlyPremium: Double = DEFAULT_PRE_MEDICARE_MONTHLY_PREMIUM,
+    val healthcareInflationMean: Double = DEFAULT_HEALTHCARE_INFLATION_MEAN,
+    val healthcareInflationStdDev: Double = DEFAULT_HEALTHCARE_INFLATION_STD_DEV,
     val includeMedicarePremiums: Boolean = true
 )
 
 data class SocialSecurityPlan(
     val annualBenefitAt67: Double,
-    val claimAge: Int = 67
+    val claimAge: Int = 67,
+    val spouseClaimAge: Int = 67
 )
 
 data class GuaranteedIncomePlan(
@@ -151,13 +304,74 @@ data class GuaranteedIncomePlan(
 )
 
 data class MarketAssumptions(
-    val preRetirementMeanReturn: Double = 0.08,
-    val preRetirementStdDev: Double = 0.16,
-    val stockMeanReturn: Double = 0.08,
-    val stockStdDev: Double = 0.18,
+    val preRetirementMeanReturn: Double = 0.133,
+    val preRetirementStdDev: Double = 0.162,
+    val stockMeanReturn: Double = 0.133,
+    val stockStdDev: Double = 0.162,
     val bondMeanReturn: Double = 0.03,
     val bondStdDev: Double = 0.06
 )
+
+enum class PostRetirementAllocationTier(val label: String) {
+    Under30x("Under 30x annual spending"),
+    From30xTo35x("30x to <35x annual spending"),
+    From35xTo40x("35x to <40x annual spending"),
+    From40xTo45x("40x to <45x annual spending"),
+    From45xTo50x("45x to <50x annual spending"),
+    AtLeast50x("50x or more annual spending")
+}
+
+data class PostRetirementAllocationStrategy(
+    val stockUnder30x: Double = 1.00,
+    val stock30xTo35x: Double = 0.90,
+    val stock35xTo40x: Double = 0.80,
+    val stock40xTo45x: Double = 0.70,
+    val stock45xTo50x: Double = 0.60,
+    val stock50xOrMore: Double = 0.50
+) {
+    fun stockAllocationFor(tier: PostRetirementAllocationTier): Double {
+        return when (tier) {
+            PostRetirementAllocationTier.Under30x -> stockUnder30x
+            PostRetirementAllocationTier.From30xTo35x -> stock30xTo35x
+            PostRetirementAllocationTier.From35xTo40x -> stock35xTo40x
+            PostRetirementAllocationTier.From40xTo45x -> stock40xTo45x
+            PostRetirementAllocationTier.From45xTo50x -> stock45xTo50x
+            PostRetirementAllocationTier.AtLeast50x -> stock50xOrMore
+        }
+    }
+
+    fun withStockAllocation(
+        tier: PostRetirementAllocationTier,
+        stockAllocation: Double
+    ): PostRetirementAllocationStrategy {
+        val value = stockAllocation.coerceIn(0.0, 1.0)
+        return when (tier) {
+            PostRetirementAllocationTier.Under30x -> copy(stockUnder30x = value)
+            PostRetirementAllocationTier.From30xTo35x -> copy(stock30xTo35x = value)
+            PostRetirementAllocationTier.From35xTo40x -> copy(stock35xTo40x = value)
+            PostRetirementAllocationTier.From40xTo45x -> copy(stock40xTo45x = value)
+            PostRetirementAllocationTier.From45xTo50x -> copy(stock45xTo50x = value)
+            PostRetirementAllocationTier.AtLeast50x -> copy(stock50xOrMore = value)
+        }
+    }
+
+    fun stockAllocation(investedBalance: Double, annualSpending: Double): Double {
+        if (annualSpending <= 0.0) return stock50xOrMore
+        val ratio = investedBalance / annualSpending
+        return when {
+            ratio < 30.0 -> stockUnder30x
+            ratio < 35.0 -> stock30xTo35x
+            ratio < 40.0 -> stock35xTo40x
+            ratio < 45.0 -> stock40xTo45x
+            ratio < 50.0 -> stock45xTo50x
+            else -> stock50xOrMore
+        }
+    }
+
+    fun stockAllocations(): List<Double> {
+        return PostRetirementAllocationTier.entries.map { stockAllocationFor(it) }
+    }
+}
 
 data class RothConversionStrategy(
     val enabled: Boolean = false,
@@ -189,6 +403,7 @@ data class RetirementScenario(
     val socialSecurity: SocialSecurityPlan,
     val guaranteedIncome: GuaranteedIncomePlan = GuaranteedIncomePlan(),
     val market: MarketAssumptions = MarketAssumptions(),
+    val postRetirementAllocation: PostRetirementAllocationStrategy = PostRetirementAllocationStrategy(),
     val rothConversion: RothConversionStrategy = RothConversionStrategy(),
     val withdrawalStrategy: WithdrawalStrategy = WithdrawalStrategy(),
     val longTermCare: LongTermCareAssumption = LongTermCareAssumption(),
@@ -283,21 +498,32 @@ fun RetirementScenario.validate(): List<String> {
     if (socialSecurity.claimAge !in 62..70) {
         errors += "Social Security claim age must be between 62 and 70."
     }
+    if (socialSecurity.spouseClaimAge !in 60..70) {
+        errors += "Spouse Social Security benefit claim age must be between 60 and 70."
+    }
     if (accounts.pretax < 0 || accounts.roth < 0 || accounts.taxable < 0 || accounts.cash < 0) {
         errors += "Account balances cannot be negative."
     }
     if (spending.annualBaseSpending < 0) errors += "Annual spending cannot be negative."
-    if (spending.generalInflationStdDev < 0) errors += "General inflation swing cannot be negative."
+    if (spending.generalInflationStdDev < 0) errors += "General inflation std dev cannot be negative."
     if (spending.lowPortfolioSpendingReduction !in 0.0..1.0) {
         errors += "Spending reduction must be between 0% and 100%."
     }
-    if (mortgage.monthlyPayment < 0 || mortgage.yearsLeft < 0 || mortgage.currentBalance < 0) {
-        errors += "Mortgage payment, years left, and balance cannot be negative."
+    if (
+        mortgage.monthlyPayment < 0 ||
+        mortgage.yearsLeft < 0 ||
+        mortgage.monthsLeft < 0 ||
+        mortgage.currentBalance < 0
+    ) {
+        errors += "Mortgage payment, years left, months left, and balance cannot be negative."
+    }
+    if (mortgage.monthsLeft !in 0..11) {
+        errors += "Mortgage months left must be between 0 and 11."
     }
     if (rent.monthlyRent < 0) errors += "Rent cannot be negative."
     if (home.currentValue < 0) errors += "Home value cannot be negative."
     if (healthcare.preMedicareMonthlyPremium < 0) errors += "Healthcare premium cannot be negative."
-    if (healthcare.healthcareInflationStdDev < 0) errors += "Healthcare inflation swing cannot be negative."
+    if (healthcare.healthcareInflationStdDev < 0) errors += "Healthcare inflation std dev cannot be negative."
     if (socialSecurity.annualBenefitAt67 < 0) errors += "Social Security estimate cannot be negative."
     if (guaranteedIncome.annualIncome < 0) errors += "Guaranteed income cannot be negative."
     if (guaranteedIncome.startAge < 0) errors += "Guaranteed income start age cannot be negative."
@@ -309,7 +535,10 @@ fun RetirementScenario.validate(): List<String> {
         market.stockStdDev < 0 ||
         market.bondStdDev < 0
     ) {
-        errors += "Market return swing cannot be negative."
+        errors += "Market return std dev cannot be negative."
+    }
+    if (postRetirementAllocation.stockAllocations().any { it !in 0.0..1.0 }) {
+        errors += "Post-retirement investment ratios must be between 0% and 100% stocks."
     }
     if (rothConversion.enabled && !supportedRothBracketCaps.any { kotlin.math.abs(it - rothConversion.marginalRateCap) < 0.0001 }) {
         errors += "Roth conversion bracket cap must match a supported federal tax bracket."
@@ -351,10 +580,10 @@ fun RetirementScenario.warnings(): List<ScenarioWarning> {
             severity = ScenarioWarningSeverity.Note
         )
     }
-    if (market.stockMeanReturn > 0.10 || market.preRetirementMeanReturn > 0.10) {
+    if (market.stockMeanReturn > 0.145 || market.preRetirementMeanReturn > 0.145) {
         warnings += ScenarioWarning(
             title = "High return assumption",
-            detail = "Expected stock or pre-retirement returns above 10% may make readiness look stronger than a conservative model."
+            detail = "Expected stock or current-portfolio returns above 14.5% may make readiness look stronger than a conservative model."
         )
     }
     if (household.retirementAge < 65 && healthcare.preMedicareMonthlyPremium <= 0.0) {
@@ -384,20 +613,20 @@ fun RetirementScenario.warnings(): List<ScenarioWarning> {
             severity = ScenarioWarningSeverity.Note
         )
     }
-    if (mortgage.yearsLeft > 0 && mortgage.yearsLeft > yearsToRetirement + retirementHorizon) {
+    if (mortgage.totalMonthsLeft > 0 && mortgage.totalMonthsLeft > (yearsToRetirement + retirementHorizon) * 12) {
         warnings += ScenarioWarning(
             title = "Mortgage extends beyond horizon",
-            detail = "Mortgage years left exceeds the internal mortality projection cap."
+            detail = "Mortgage time left exceeds the internal mortality projection cap."
         )
     }
-    if ((mortgage.monthlyPayment > 0.0 || mortgage.yearsLeft > 0) && home.currentValue <= 0.0) {
+    if ((mortgage.monthlyPayment > 0.0 || mortgage.totalMonthsLeft > 0) && home.currentValue <= 0.0) {
         warnings += ScenarioWarning(
             title = "Home value not entered",
             detail = "Enter current home value if the home could be sold later to fund senior apartment rent.",
             severity = ScenarioWarningSeverity.Note
         )
     }
-    if ((mortgage.monthlyPayment > 0.0 || mortgage.yearsLeft > 0) && mortgage.currentBalance <= 0.0) {
+    if ((mortgage.monthlyPayment > 0.0 || mortgage.totalMonthsLeft > 0) && mortgage.currentBalance <= 0.0) {
         warnings += ScenarioWarning(
             title = "Mortgage balance not entered",
             detail = "Enter the current mortgage balance so a forced home sale uses net home equity instead of gross home value.",
