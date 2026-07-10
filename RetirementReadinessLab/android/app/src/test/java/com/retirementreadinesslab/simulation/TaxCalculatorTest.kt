@@ -46,4 +46,35 @@ class TaxCalculatorTest {
 
         assertEquals(0.0, gross, 0.01)
     }
+
+    @Test
+    fun rothConversionFillsOnlyRemainingBracketHeadroom() {
+        val plan = TaxCalculator.rothConversionPlan(
+            pretaxBalance = 100_000.0,
+            currentTaxableIncome = 20_000.0,
+            rateCap = 0.12,
+            filingStatus = FilingStatus.Single
+        )
+
+        assertEquals(27_150.0, plan.conversionAmount, 0.01)
+        assertEquals(
+            TaxCalculator.taxLiability(47_150.0, FilingStatus.Single) -
+                TaxCalculator.taxLiability(20_000.0, FilingStatus.Single),
+            plan.additionalTax,
+            0.01
+        )
+    }
+
+    @Test
+    fun topBracketRothConversionIsNotSilentlyDisabled() {
+        val plan = TaxCalculator.rothConversionPlan(
+            pretaxBalance = 80_000.0,
+            currentTaxableIncome = 50_000.0,
+            rateCap = 0.37,
+            filingStatus = FilingStatus.Single
+        )
+
+        assertEquals(80_000.0, plan.conversionAmount, 0.01)
+        assertTrue(plan.additionalTax > 0.0)
+    }
 }

@@ -17,9 +17,10 @@ Current behavior:
 - SSA Trustees Alt2 2025 annual death probabilities selected by gender, with an internal projection cap at age 119.
 - Medicare Parts B/D premium estimate after age 65, including modeled 2024 IRMAA tiers indexed by the Medicare inflation multiplier.
 - Pre-Medicare healthcare estimate.
-- Optional long-term care shock that replaces normal spending while active.
-- Optional Roth conversion up to a selected marginal bracket.
+- Optional long-term care shock that replaces normal spending while active and follows healthcare inflation.
+- Optional Roth conversion that fills the remaining headroom in a selected marginal bracket using modeled annual taxable income.
 - Optional cash reserve use during market drawdowns.
+- Independent deterministic random streams per simulation so scenario comparisons are not shifted by earlier path failures.
 - Success probability, ending balance percentiles, and failure age summary.
 - Plain-language result interpretation for dashboard, detail view, and reports.
 

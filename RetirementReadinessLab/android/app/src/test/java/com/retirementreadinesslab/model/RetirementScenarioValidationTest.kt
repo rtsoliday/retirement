@@ -58,6 +58,48 @@ class RetirementScenarioValidationTest {
     }
 
     @Test
+    fun rejectsNonFiniteAndNegativeImportedBudgetAmounts() {
+        val scenario = sampleBaseScenario().copy(
+            accounts = sampleBaseScenario().accounts.copy(cash = Double.NaN),
+            budget = BudgetProfile(
+                annualPropertyTaxes = -1.0,
+                monthlyBudgets = listOf(
+                    MonthlyBudget(
+                        month = "2026-06",
+                        cashAndAtmWithdrawals = -25.0
+                    )
+                )
+            )
+        )
+
+        val errors = scenario.validate()
+
+        assertTrue(errors.any { it.contains("finite") })
+        assertTrue(errors.any { it.contains("Budget amounts") })
+    }
+
+    @Test
+    fun rejectsImportedPercentagesOutsideUiSupportedRanges() {
+        val scenario = sampleBaseScenario().copy(
+            spending = sampleBaseScenario().spending.copy(generalInflationMean = 0.50),
+            healthcare = sampleBaseScenario().healthcare.copy(healthcareInflationMean = 0.50),
+            guaranteedIncome = sampleBaseScenario().guaranteedIncome.copy(annualIncrease = 0.50),
+            market = sampleBaseScenario().market.copy(stockMeanReturn = 0.50),
+            withdrawalStrategy = sampleBaseScenario().withdrawalStrategy.copy(drawdownTrigger = 0.50),
+            numberOfSimulations = 10_001
+        )
+
+        val errors = scenario.validate()
+
+        assertTrue(errors.any { it.contains("General inflation assumptions") })
+        assertTrue(errors.any { it.contains("Healthcare inflation assumptions") })
+        assertTrue(errors.any { it.contains("Guaranteed income annual increase") })
+        assertTrue(errors.any { it.contains("Market return assumptions") })
+        assertTrue(errors.any { it.contains("drawdown trigger") })
+        assertTrue(errors.any { it.contains("10,000") })
+    }
+
+    @Test
     fun warningsFlagSuspiciousButAllowedAssumptions() {
         val scenario = sampleBaseScenario().copy(
             household = sampleBaseScenario().household.copy(retirementAge = 48),

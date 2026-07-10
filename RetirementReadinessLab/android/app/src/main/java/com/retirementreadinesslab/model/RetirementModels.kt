@@ -481,6 +481,48 @@ data class SimulationResult(
 
 fun RetirementScenario.validate(): List<String> {
     val errors = mutableListOf<String>()
+    val numericAssumptions = listOf(
+        accounts.pretax,
+        accounts.roth,
+        accounts.taxable,
+        accounts.cash,
+        spending.annualBaseSpending,
+        spending.generalInflationMean,
+        spending.generalInflationStdDev,
+        spending.lowPortfolioSpendingReduction,
+        budget.annualPropertyTaxes,
+        budget.annualHomeInsurance,
+        budget.annualAutoInsurance,
+        mortgage.monthlyPayment,
+        mortgage.currentBalance,
+        rent.monthlyRent,
+        home.currentValue,
+        healthcare.preMedicareMonthlyPremium,
+        healthcare.healthcareInflationMean,
+        healthcare.healthcareInflationStdDev,
+        socialSecurity.annualBenefitAt67,
+        guaranteedIncome.annualIncome,
+        guaranteedIncome.annualIncrease,
+        guaranteedIncome.survivorPercent,
+        market.preRetirementMeanReturn,
+        market.preRetirementStdDev,
+        market.stockMeanReturn,
+        market.stockStdDev,
+        market.bondMeanReturn,
+        market.bondStdDev,
+        *postRetirementAllocation.stockAllocations().toTypedArray(),
+        rothConversion.marginalRateCap,
+        withdrawalStrategy.drawdownTrigger,
+        longTermCare.annualCost,
+        *budget.monthlyBudgets.flatMap { month ->
+            month.checkingSavingsBills.map { it.monthlyAmount } +
+                month.creditCardBills.map { it.monthlyAmount } +
+                month.cashAndAtmWithdrawals
+        }.toTypedArray()
+    )
+    if (numericAssumptions.any { !it.isFinite() }) {
+        errors += "Financial and percentage assumptions must be finite numbers."
+    }
     if (household.currentAge <= 0) errors += "Current age must be positive."
     if (household.retirementAge < household.currentAge) {
         errors += "Retirement age must be greater than or equal to current age."
@@ -506,8 +548,23 @@ fun RetirementScenario.validate(): List<String> {
     }
     if (spending.annualBaseSpending < 0) errors += "Annual spending cannot be negative."
     if (spending.generalInflationStdDev < 0) errors += "General inflation std dev cannot be negative."
+    if (spending.generalInflationMean !in -0.02..0.15 || spending.generalInflationStdDev !in 0.0..0.30) {
+        errors += "General inflation assumptions are outside the supported range."
+    }
     if (spending.lowPortfolioSpendingReduction !in 0.0..1.0) {
         errors += "Spending reduction must be between 0% and 100%."
+    }
+    if (
+        budget.annualPropertyTaxes < 0 ||
+        budget.annualHomeInsurance < 0 ||
+        budget.annualAutoInsurance < 0 ||
+        budget.monthlyBudgets.any { month ->
+            month.cashAndAtmWithdrawals < 0 ||
+                month.checkingSavingsBills.any { it.monthlyAmount < 0 } ||
+                month.creditCardBills.any { it.monthlyAmount < 0 }
+        }
+    ) {
+        errors += "Budget amounts cannot be negative."
     }
     if (
         mortgage.monthlyPayment < 0 ||
@@ -524,9 +581,15 @@ fun RetirementScenario.validate(): List<String> {
     if (home.currentValue < 0) errors += "Home value cannot be negative."
     if (healthcare.preMedicareMonthlyPremium < 0) errors += "Healthcare premium cannot be negative."
     if (healthcare.healthcareInflationStdDev < 0) errors += "Healthcare inflation std dev cannot be negative."
+    if (healthcare.healthcareInflationMean !in 0.0..0.20 || healthcare.healthcareInflationStdDev !in 0.0..0.30) {
+        errors += "Healthcare inflation assumptions are outside the supported range."
+    }
     if (socialSecurity.annualBenefitAt67 < 0) errors += "Social Security estimate cannot be negative."
     if (guaranteedIncome.annualIncome < 0) errors += "Guaranteed income cannot be negative."
     if (guaranteedIncome.startAge < 0) errors += "Guaranteed income start age cannot be negative."
+    if (guaranteedIncome.annualIncrease !in -0.02..0.15) {
+        errors += "Guaranteed income annual increase is outside the supported range."
+    }
     if (guaranteedIncome.survivorPercent !in 0.0..1.0) {
         errors += "Guaranteed income survivor benefit must be between 0% and 100%."
     }
@@ -537,6 +600,16 @@ fun RetirementScenario.validate(): List<String> {
     ) {
         errors += "Market return std dev cannot be negative."
     }
+    if (
+        market.preRetirementMeanReturn !in -0.20..0.25 ||
+        market.preRetirementStdDev !in 0.0..0.60 ||
+        market.stockMeanReturn !in -0.20..0.25 ||
+        market.stockStdDev !in 0.0..0.60 ||
+        market.bondMeanReturn !in -0.20..0.20 ||
+        market.bondStdDev !in 0.0..0.40
+    ) {
+        errors += "Market return assumptions are outside the supported range."
+    }
     if (postRetirementAllocation.stockAllocations().any { it !in 0.0..1.0 }) {
         errors += "Post-retirement investment ratios must be between 0% and 100% stocks."
     }
@@ -545,7 +618,11 @@ fun RetirementScenario.validate(): List<String> {
     }
     if (longTermCare.annualCost < 0) errors += "Long-term care cost cannot be negative."
     if (longTermCare.averageDurationYears < 1) errors += "Long-term care duration must be at least one year."
+    if (withdrawalStrategy.drawdownTrigger !in -0.50..0.25) {
+        errors += "Cash reserve drawdown trigger is outside the supported range."
+    }
     if (numberOfSimulations < 1) errors += "Simulation count must be positive."
+    if (numberOfSimulations > 10_000) errors += "Simulation count cannot exceed 10,000."
     return errors
 }
 
@@ -586,10 +663,13 @@ fun RetirementScenario.warnings(): List<ScenarioWarning> {
             detail = "Expected stock or current-portfolio returns above 14.5% may make readiness look stronger than a conservative model."
         )
     }
-    if (household.retirementAge < 65 && healthcare.preMedicareMonthlyPremium <= 0.0) {
+    val spouseAgeAtRetirement = household.spouseCurrentAge + yearsToRetirement
+    val hasPreMedicareAdult = household.retirementAge < 65 ||
+        (household.filingStatus == FilingStatus.Married && spouseAgeAtRetirement < 65)
+    if (hasPreMedicareAdult && healthcare.preMedicareMonthlyPremium <= 0.0) {
         warnings += ScenarioWarning(
             title = "Missing pre-Medicare healthcare premium",
-            detail = "Retiring before 65 without a healthcare premium can materially understate spending."
+            detail = "A household member is under 65 at retirement, so a zero healthcare premium can materially understate spending."
         )
     }
     if (!healthcare.includeMedicarePremiums) {

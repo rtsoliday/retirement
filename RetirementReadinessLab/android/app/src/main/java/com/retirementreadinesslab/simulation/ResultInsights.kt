@@ -3,6 +3,7 @@ package com.retirementreadinesslab.simulation
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.RiskLevel
 import com.retirementreadinesslab.model.SimulationResult
+import com.retirementreadinesslab.model.FilingStatus
 import java.text.NumberFormat
 import java.util.Locale
 
@@ -62,7 +63,15 @@ object ResultInsights {
     }
 
     private fun healthcareBridge(scenario: RetirementScenario): String {
-        val preMedicareYears = (65 - scenario.household.retirementAge).coerceAtLeast(0)
+        val yearsToRetirement = scenario.household.retirementAge - scenario.household.currentAge
+        val spouseAgeAtRetirement = scenario.household.spouseCurrentAge + yearsToRetirement
+        val primaryPreMedicareYears = (65 - scenario.household.retirementAge).coerceAtLeast(0)
+        val spousePreMedicareYears = if (scenario.household.filingStatus == FilingStatus.Married) {
+            (65 - spouseAgeAtRetirement).coerceAtLeast(0)
+        } else {
+            0
+        }
+        val preMedicareYears = maxOf(primaryPreMedicareYears, spousePreMedicareYears)
         return when {
             preMedicareYears > 0 -> {
                 "The plan bridges $preMedicareYears pre-Medicare years with " +

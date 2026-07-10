@@ -1,6 +1,7 @@
 package com.retirementreadinesslab.simulation
 
 import com.retirementreadinesslab.model.AccountBalances
+import com.retirementreadinesslab.model.BudgetProfile
 import com.retirementreadinesslab.model.DEFAULT_PROJECTION_END_AGE
 import com.retirementreadinesslab.model.FilingStatus
 import com.retirementreadinesslab.model.Gender
@@ -10,6 +11,7 @@ import com.retirementreadinesslab.model.HomePlan
 import com.retirementreadinesslab.model.HouseholdProfile
 import com.retirementreadinesslab.model.MarketAssumptions
 import com.retirementreadinesslab.model.MortgagePlan
+import com.retirementreadinesslab.model.LongTermCareAssumption
 import com.retirementreadinesslab.model.PostRetirementAllocationStrategy
 import com.retirementreadinesslab.model.RentPlan
 import com.retirementreadinesslab.model.RetirementScenario
@@ -32,7 +34,7 @@ class RetirementSimulatorTest {
 
         assertEquals(first.successProbability, second.successProbability, 0.0001)
         assertEquals(first.medianEndingBalance, second.medianEndingBalance, 0.01)
-        assertEquals("2026.06-allocation-lab", first.provenance.engineVersion)
+        assertEquals("2026.07-logic-audit", first.provenance.engineVersion)
         assertEquals("Monthly cashflow model with annual result bands", first.provenance.engineCadence)
         assertEquals("2024 federal brackets", first.provenance.taxTableVersion)
         assertEquals(
@@ -210,6 +212,55 @@ class RetirementSimulatorTest {
     }
 
     @Test
+    fun spouseEarlyClaimSettingDoesNotReduceBenefitBeforeWorkerCanClaim() {
+        val base = sampleScenario().copy(
+            household = HouseholdProfile(
+                currentAge = 67,
+                retirementAge = 67,
+                targetEndAge = 71,
+                filingStatus = FilingStatus.Married,
+                gender = Gender.Male,
+                spouseCurrentAge = 67
+            ),
+            accounts = AccountBalances(pretax = 0.0, roth = 500_000.0, taxable = 0.0, cash = 0.0),
+            spending = SpendingPlan(
+                annualBaseSpending = 70_000.0,
+                generalInflationMean = 0.0,
+                generalInflationStdDev = 0.0,
+                spendingPathModel = SpendingPathModel.Flat,
+                lowPortfolioSpendingReduction = 0.0
+            ),
+            healthcare = HealthcarePlan(preMedicareMonthlyPremium = 0.0, includeMedicarePremiums = false),
+            socialSecurity = SocialSecurityPlan(
+                annualBenefitAt67 = 40_000.0,
+                claimAge = 70,
+                spouseClaimAge = 60
+            ),
+            market = MarketAssumptions(
+                preRetirementMeanReturn = 0.0,
+                preRetirementStdDev = 0.0,
+                stockMeanReturn = 0.0,
+                stockStdDev = 0.0,
+                bondMeanReturn = 0.0,
+                bondStdDev = 0.0
+            ),
+            withdrawalStrategy = WithdrawalStrategy(useCashReserveDuringDrawdowns = false),
+            longTermCare = LongTermCareAssumption(enabled = false),
+            numberOfSimulations = 1,
+            seed = 1234L
+        )
+        val claimAtSeventy = base.copy(
+            socialSecurity = base.socialSecurity.copy(spouseClaimAge = 70)
+        )
+
+        val earlySettingResult = RetirementSimulator.run(base)
+        val ageSeventyResult = RetirementSimulator.run(claimAtSeventy)
+
+        assertEquals(ageSeventyResult.successProbability, earlySettingResult.successProbability, 0.0001)
+        assertEquals(ageSeventyResult.medianEndingBalance, earlySettingResult.medianEndingBalance, 0.01)
+    }
+
+    @Test
     fun resultIncludesSimulationPathChartData() {
         val scenario = sampleScenario()
         val result = RetirementSimulator.run(scenario)
@@ -333,6 +384,94 @@ class RetirementSimulatorTest {
 
         assertEquals(16_000.0, oneSpouseInCareNeed, 0.01)
         assertEquals(16_300.0, allLivingPeopleInCareNeed, 0.01)
+    }
+
+    @Test
+    fun longTermCareCostUsesHealthcareInflationAndCoveredPeople() {
+        val monthlyCost = RetirementSimulator.monthlyLongTermCareCost(
+            annualCost = 100_000.0,
+            healthcareInflationMultiplier = 1.50,
+            coveredPeople = 2
+        )
+
+        assertEquals(25_000.0, monthlyCost, 0.01)
+    }
+
+    @Test
+    fun irmaaFallbackUsesEstimatedTaxableIncomeInsteadOfAddingFullBenefitsToSpending() {
+        val annualNeed = 60_000.0
+        val annualSocialSecurity = 40_000.0
+        val portfolioWithdrawal = TaxCalculator.grossWithdrawalForNetNeed(
+            netNeed = annualNeed,
+            annualSocialSecurity = annualSocialSecurity,
+            filingStatus = FilingStatus.Single
+        )
+        val expected = portfolioWithdrawal + TaxCalculator.taxableSocialSecurity(
+            otherIncome = portfolioWithdrawal,
+            annualSocialSecurity = annualSocialSecurity,
+            filingStatus = FilingStatus.Single
+        )
+
+        val estimate = RetirementSimulator.estimatedAnnualMedicareIncome(
+            annualNetNeed = annualNeed,
+            annualSocialSecurity = annualSocialSecurity,
+            annualOtherTaxableIncome = 0.0,
+            filingStatus = FilingStatus.Single
+        )
+
+        assertEquals(expected, estimate, 0.01)
+        assertTrue(estimate < annualNeed + annualSocialSecurity)
+    }
+
+    @Test
+    fun mortalityEventAtAnAgeStillProcessesThatYearOfRetirement() {
+        val initialCash = 100_000.0
+        val result = RetirementSimulator.run(
+            sampleScenario().copy(
+                household = HouseholdProfile(currentAge = 119, retirementAge = 119, targetEndAge = 120),
+                accounts = AccountBalances(pretax = 0.0, roth = 0.0, taxable = 0.0, cash = initialCash),
+                spending = SpendingPlan(
+                    annualBaseSpending = 12_000.0,
+                    generalInflationMean = 0.0,
+                    generalInflationStdDev = 0.0,
+                    spendingPathModel = SpendingPathModel.Flat,
+                    lowPortfolioSpendingReduction = 0.0
+                ),
+                healthcare = HealthcarePlan(preMedicareMonthlyPremium = 0.0, includeMedicarePremiums = false),
+                socialSecurity = SocialSecurityPlan(annualBenefitAt67 = 0.0, claimAge = 67),
+                market = MarketAssumptions(
+                    preRetirementMeanReturn = 0.0,
+                    preRetirementStdDev = 0.0,
+                    stockMeanReturn = 0.0,
+                    stockStdDev = 0.0,
+                    bondMeanReturn = 0.0,
+                    bondStdDev = 0.0
+                ),
+                withdrawalStrategy = WithdrawalStrategy(useCashReserveDuringDrawdowns = false),
+                longTermCare = LongTermCareAssumption(enabled = false),
+                numberOfSimulations = 1,
+                seed = 1234L
+            )
+        )
+
+        assertTrue(result.medianEndingBalance < initialCash)
+    }
+
+    @Test
+    fun calculationFingerprintChangesWhenBudgetHousingAssumptionsChange() {
+        val scenario = sampleScenario().copy(
+            spending = SpendingPlan(annualBaseSpending = 0.0),
+            healthcare = HealthcarePlan(preMedicareMonthlyPremium = 0.0, includeMedicarePremiums = false),
+            numberOfSimulations = 1
+        )
+        val updatedBudget = scenario.copy(
+            budget = BudgetProfile(annualPropertyTaxes = 5_000.0, annualHomeInsurance = 2_000.0)
+        )
+
+        val originalFingerprint = RetirementSimulator.run(scenario).provenance.assumptionFingerprint
+        val updatedFingerprint = RetirementSimulator.run(updatedBudget).provenance.assumptionFingerprint
+
+        assertTrue(originalFingerprint != updatedFingerprint)
     }
 
     @Test
