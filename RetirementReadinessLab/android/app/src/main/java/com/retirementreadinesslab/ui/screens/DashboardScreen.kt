@@ -1,9 +1,7 @@
 package com.retirementreadinesslab.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -22,32 +20,37 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.retirementreadinesslab.model.FundingThreshold
+import com.retirementreadinesslab.model.forFeatureAccess
 import com.retirementreadinesslab.model.warnings
 import com.retirementreadinesslab.simulation.ResultInsights
 import com.retirementreadinesslab.state.RetirementLabState
 import com.retirementreadinesslab.ui.asCompactCurrency
 import com.retirementreadinesslab.ui.asPercent
+import com.retirementreadinesslab.ui.findActivity
 import com.retirementreadinesslab.ui.components.MetricCard
 import com.retirementreadinesslab.ui.components.PortfolioSurvivalChart
+import com.retirementreadinesslab.ui.components.ProLockedCard
 import com.retirementreadinesslab.ui.components.ReadinessGauge
-import com.retirementreadinesslab.ui.components.RiskPill
+import com.retirementreadinesslab.ui.components.RiskScanRow
 import com.retirementreadinesslab.ui.components.ScenarioWarningCard
 import com.retirementreadinesslab.ui.components.SectionHeader
 import com.retirementreadinesslab.ui.components.SimulationPathsChart
 import com.retirementreadinesslab.ui.theme.LabMutedText
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DashboardScreen(
     state: RetirementLabState,
     onViewResults: () -> Unit
 ) {
-    val scenario = state.selectedScenario
+    val activity = LocalContext.current.findActivity()
+    val scenario = state.selectedScenario.forFeatureAccess(state.featureAccess)
     val result = state.selectedResult
-    val decisionEstimate = state.selectedDecisionEstimate
+    val decisionEstimate = if (state.isProUnlocked) state.selectedDecisionEstimate else null
     val warnings = scenario.warnings()
 
     LazyColumn(
@@ -70,6 +73,19 @@ fun DashboardScreen(
         }
 
         state.lastRunMessage?.let { message ->
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))) {
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
+        }
+
+        state.storageMessage?.let { message ->
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))) {
                     Text(
@@ -127,6 +143,13 @@ fun DashboardScreen(
         }
 
         if (result != null) {
+            val fundingThreshold = result.fundingThreshold
+            if (fundingThreshold != null) {
+                item {
+                    FundingThresholdCard(threshold = fundingThreshold)
+                }
+            }
+
             item {
                 PortfolioSurvivalChart(points = result.notFailedByAge)
             }
@@ -171,29 +194,45 @@ fun DashboardScreen(
                 }
             }
 
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                    MetricCard(
-                        title = "Earliest age",
-                        value = decisionEstimate?.earliestRetirementAge?.toString()
-                            ?: if (state.isAnalyzingLab) "Finding..." else "N/A",
-                        detail = decisionEstimate?.earliestRetirementReadiness?.let {
-                            "${it.asPercent()} quick readiness"
-                        } ?: decisionEstimate?.let {
-                            "${it.targetReadiness.asPercent()} not found by age 70"
-                        } ?: "Quick target estimate",
-                        icon = Icons.Filled.Schedule,
-                        modifier = Modifier.weight(1f)
-                    )
-                    MetricCard(
-                        title = "Safe spending",
-                        value = decisionEstimate?.safeAnnualSpending?.asCompactCurrency()
-                            ?: if (state.isAnalyzingLab) "Finding..." else "N/A",
-                        detail = decisionEstimate?.safeSpendingReadiness?.let {
-                            "${it.asPercent()} quick readiness"
-                        } ?: "Target not found",
-                        icon = Icons.AutoMirrored.Filled.TrendingUp,
-                        modifier = Modifier.weight(1f)
+            if (state.isProUnlocked) {
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                        MetricCard(
+                            title = "Earliest age",
+                            value = decisionEstimate?.earliestRetirementAge?.toString()
+                                ?: if (state.isAnalyzingLab) "Finding..." else "N/A",
+                            detail = decisionEstimate?.earliestRetirementReadiness?.let {
+                                "${it.asPercent()} quick readiness"
+                            } ?: decisionEstimate?.let {
+                                "${it.targetReadiness.asPercent()} not found by age 70"
+                            } ?: "Quick target estimate",
+                            icon = Icons.Filled.Schedule,
+                            modifier = Modifier.weight(1f)
+                        )
+                        MetricCard(
+                            title = "Safe spending",
+                            value = decisionEstimate?.safeAnnualSpending?.asCompactCurrency()
+                                ?: if (state.isAnalyzingLab) "Finding..." else "N/A",
+                            detail = decisionEstimate?.safeSpendingReadiness?.let {
+                                "${it.asPercent()} quick readiness"
+                            } ?: "Target not found",
+                            icon = Icons.AutoMirrored.Filled.TrendingUp,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            } else {
+                item {
+                    ProLockedCard(
+                        title = "Target finders are Pro",
+                        detail = "Unlock Pro to estimate earliest retirement age and safe annual spending from the active plan.",
+                        actionLabel = if (state.isPurchasingPro) "Opening Google Play..." else "Unlock Pro",
+                        actionEnabled = state.supportsUserPurchases && !state.isPurchasingPro,
+                        onAction = if (state.supportsUserPurchases) {
+                            { state.purchasePro(activity) }
+                        } else {
+                            null
+                        }
                     )
                 }
             }
@@ -221,13 +260,31 @@ fun DashboardScreen(
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("Risk scan", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            RiskPill("Market", result.riskBreakdown.market)
-                            RiskPill("Longevity", result.riskBreakdown.longevity)
-                            RiskPill("Healthcare", result.riskBreakdown.healthcare)
-                            RiskPill("Taxes", result.riskBreakdown.taxes)
-                            RiskPill("Spending", result.riskBreakdown.spending)
-                        }
+                        RiskScanRow(
+                            label = "Market",
+                            level = result.riskBreakdown.market,
+                            description = "Sequence-of-returns pressure based on the modeled success probability."
+                        )
+                        RiskScanRow(
+                            label = "Longevity",
+                            level = result.riskBreakdown.longevity,
+                            description = "Retirement horizon pressure from the selected retirement age."
+                        )
+                        RiskScanRow(
+                            label = "Healthcare",
+                            level = result.riskBreakdown.healthcare,
+                            description = "Pre-Medicare premium burden compared with annual spending, plus enabled long-term care exposure."
+                        )
+                        RiskScanRow(
+                            label = "Taxes",
+                            level = result.riskBreakdown.taxes,
+                            description = "Taxable withdrawal pressure from the share of assets held in pretax accounts."
+                        )
+                        RiskScanRow(
+                            label = "Spending",
+                            level = result.riskBreakdown.spending,
+                            description = "Annual base spending compared with total portfolio and cash assets."
+                        )
                     }
                 }
             }
@@ -243,6 +300,41 @@ fun DashboardScreen(
                     color = LabMutedText
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun FundingThresholdCard(
+    threshold: FundingThreshold
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                androidx.compose.material3.Icon(
+                    Icons.Filled.Savings,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    "Reasonable funding goal",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Text(
+                threshold.balance.asCompactCurrency(),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                "95% predicted success if funds hit this level at retirement age.",
+                style = MaterialTheme.typography.bodySmall,
+                color = LabMutedText
+            )
         }
     }
 }

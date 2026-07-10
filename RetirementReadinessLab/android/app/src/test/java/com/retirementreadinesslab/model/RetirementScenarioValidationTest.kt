@@ -58,6 +58,23 @@ class RetirementScenarioValidationTest {
     }
 
     @Test
+    fun withdrawalStrategyDefaultsFollowRetirementAge() {
+        val age54 = WithdrawalStrategy.defaultsForRetirementAge(54)
+        val age58 = WithdrawalStrategy.defaultsForRetirementAge(58)
+        val age60 = WithdrawalStrategy.defaultsForRetirementAge(60)
+
+        assertTrue(age54.applyEarlyWithdrawalPenalty)
+        assertTrue(!age54.ruleOf55Eligible)
+        assertTrue(!age54.seppEligible)
+        assertTrue(age58.applyEarlyWithdrawalPenalty)
+        assertTrue(age58.ruleOf55Eligible)
+        assertTrue(!age58.seppEligible)
+        assertTrue(!age60.applyEarlyWithdrawalPenalty)
+        assertTrue(!age60.ruleOf55Eligible)
+        assertTrue(!age60.seppEligible)
+    }
+
+    @Test
     fun warningsFlagSuspiciousButAllowedAssumptions() {
         val scenario = sampleBaseScenario().copy(
             household = sampleBaseScenario().household.copy(retirementAge = 48),

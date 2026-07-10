@@ -991,16 +991,8 @@ private fun ChartLegendItem(color: Color, label: String) {
 
 @Composable
 fun RiskPill(label: String, level: RiskLevel) {
-    val color = when (level) {
-        RiskLevel.Healthy -> LabSuccess
-        RiskLevel.Watch -> LabCaution
-        RiskLevel.AtRisk -> LabRisk
-    }
-    val text = when (level) {
-        RiskLevel.Healthy -> "Healthy"
-        RiskLevel.Watch -> "Watch"
-        RiskLevel.AtRisk -> "At risk"
-    }
+    val color = level.color()
+    val text = level.label()
     Row(
         modifier = Modifier
             .background(color.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
@@ -1015,6 +1007,51 @@ fun RiskPill(label: String, level: RiskLevel) {
         )
         Text("$label: $text", style = MaterialTheme.typography.labelMedium, color = color)
     }
+}
+
+@Composable
+fun RiskScanRow(label: String, level: RiskLevel, description: String) {
+    val color = level.color()
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(top = 5.dp)
+                .size(8.dp)
+                .background(color, RoundedCornerShape(8.dp))
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(level.label(), style = MaterialTheme.typography.labelMedium, color = color)
+            }
+            Text(description, style = MaterialTheme.typography.bodySmall, color = LabMutedText)
+        }
+    }
+}
+
+private fun RiskLevel.color(): Color = when (this) {
+    RiskLevel.Healthy -> LabSuccess
+    RiskLevel.Watch -> LabCaution
+    RiskLevel.AtRisk -> LabRisk
+}
+
+private fun RiskLevel.label(): String = when (this) {
+    RiskLevel.Healthy -> "Healthy"
+    RiskLevel.Watch -> "Watch"
+    RiskLevel.AtRisk -> "At risk"
 }
 
 @Composable

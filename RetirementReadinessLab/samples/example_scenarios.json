@@ -3,7 +3,7 @@
     "id": "sample-base",
     "name": "Base plan",
     "currentAge": 50,
-    "retirementAge": 58,
+    "retirementAge": 67,
     "annualSpending": 75000,
     "pretaxBalance": 800000,
     "rothBalance": 100000,

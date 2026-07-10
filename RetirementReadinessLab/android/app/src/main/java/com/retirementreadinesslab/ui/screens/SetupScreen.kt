@@ -13,9 +13,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -31,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -43,7 +47,9 @@ import com.retirementreadinesslab.model.DEFAULT_HEALTHCARE_INFLATION_MEAN
 import com.retirementreadinesslab.model.DEFAULT_HEALTHCARE_INFLATION_STD_DEV
 import com.retirementreadinesslab.model.DEFAULT_PRE_MEDICARE_MONTHLY_PREMIUM
 import com.retirementreadinesslab.model.DEFAULT_PROJECTION_END_AGE
+import com.retirementreadinesslab.model.FeatureAccess
 import com.retirementreadinesslab.model.FilingStatus
+import com.retirementreadinesslab.model.FREE_SIMULATION_LIMIT
 import com.retirementreadinesslab.model.Gender
 import com.retirementreadinesslab.model.GuaranteedIncomePlan
 import com.retirementreadinesslab.model.HealthcarePlan
@@ -52,42 +58,56 @@ import com.retirementreadinesslab.model.HouseholdProfile
 import com.retirementreadinesslab.model.LongTermCareAssumption
 import com.retirementreadinesslab.model.MarketAssumptions
 import com.retirementreadinesslab.model.MortgagePlan
+import com.retirementreadinesslab.model.PENALTY_FREE_WITHDRAWAL_AGE_MONTHS
 import com.retirementreadinesslab.model.PostRetirementAllocationStrategy
 import com.retirementreadinesslab.model.PostRetirementAllocationTier
+import com.retirementreadinesslab.model.PRO_SIMULATION_LIMIT
 import com.retirementreadinesslab.model.RentPlan
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.RothConversionStrategy
+import com.retirementreadinesslab.model.RULE_OF_55_MINIMUM_RETIREMENT_AGE
 import com.retirementreadinesslab.model.SocialSecurityPlan
 import com.retirementreadinesslab.model.SpendingPlan
 import com.retirementreadinesslab.model.SpendingPathModel
 import com.retirementreadinesslab.model.WithdrawalStrategy
+import com.retirementreadinesslab.model.forFeatureAccess
 import com.retirementreadinesslab.model.validate
 import com.retirementreadinesslab.model.warnings
 import com.retirementreadinesslab.simulation.MedicarePremiums
+import com.retirementreadinesslab.simulation.RetirementSimulator
 import com.retirementreadinesslab.simulation.SocialSecurity
 import com.retirementreadinesslab.state.RetirementLabState
 import com.retirementreadinesslab.ui.asCurrency
+import com.retirementreadinesslab.ui.findActivity
 import com.retirementreadinesslab.ui.components.KeyValueRow
+import com.retirementreadinesslab.ui.components.ProLockedInlineNotice
 import com.retirementreadinesslab.ui.components.ScenarioWarningCard
 import com.retirementreadinesslab.ui.components.SectionHeader
 import com.retirementreadinesslab.ui.theme.LabMutedText
 import java.util.Locale
 import kotlin.math.roundToInt
 
+private const val SHOW_CASH_RESERVE_DRAWDOWN_SETTINGS = false
+
 @Composable
 fun SetupScreen(
     state: RetirementLabState,
     onRunCurrentSetup: () -> Unit = {}
 ) {
+    val activity = LocalContext.current.findActivity()
     val scenario = state.selectedScenario
-    var form by remember(scenario) { mutableStateOf(EditableAssumptions.from(scenario)) }
-    var validationMessage by remember(scenario) { mutableStateOf<String?>(null) }
-    val savedForm = EditableAssumptions.from(scenario)
+    val featureAccess = state.featureAccess
+    val visibleScenario = scenario.forFeatureAccess(featureAccess)
+    val isProUnlocked = featureAccess.isProUnlocked
+    var form by remember(scenario, featureAccess) { mutableStateOf(EditableAssumptions.from(visibleScenario)) }
+    var validationMessage by remember(scenario, featureAccess) { mutableStateOf<String?>(null) }
+    var promoCodeText by remember { mutableStateOf("") }
+    val savedForm = EditableAssumptions.from(visibleScenario)
     val hasUnsavedChanges = form != savedForm
-    val warnings = scenario.warnings()
+    val warnings = visibleScenario.warnings()
 
     val runCurrentSetup = {
-        val parsed = form.toScenario(scenario)
+        val parsed = form.toScenario(scenario, featureAccess)
         if (parsed.error != null) {
             validationMessage = parsed.error
         } else {
@@ -115,6 +135,77 @@ fun SetupScreen(
             if (state.isRunning) {
                 item {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
+
+            if (!isProUnlocked && state.supportsUserPurchases) {
+                item {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))) {
+                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(
+                                "Pro unlock",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                "Unlock advanced assumptions, Scenario Lab, higher simulation counts, and report sharing.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = LabMutedText
+                            )
+                            Text(
+                                "For Google review access, enter an official Google Play promo code for Pro Unlock. After redeeming it in Google Play, return here and tap Restore Purchase.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = LabMutedText
+                            )
+                            Button(
+                                onClick = { state.purchasePro(activity) },
+                                enabled = !state.isPurchasingPro,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("setup-unlock-pro-button")
+                            ) {
+                                Icon(Icons.Filled.LockOpen, contentDescription = null)
+                                Text(if (state.isPurchasingPro) "Opening Google Play..." else "Unlock Pro")
+                            }
+                            OutlinedButton(
+                                onClick = state::restoreProPurchase,
+                                enabled = !state.isRestoringPro,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("setup-restore-pro-purchase-button")
+                            ) {
+                                Icon(Icons.Filled.LockOpen, contentDescription = null)
+                                Text(if (state.isRestoringPro) "Checking Google Play..." else "Restore Purchase")
+                            }
+                            OutlinedTextField(
+                                value = promoCodeText,
+                                onValueChange = { promoCodeText = it },
+                                label = { Text("Google Play promo code") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("setup-pro-promo-code-input")
+                            )
+                            OutlinedButton(
+                                onClick = { state.unlockProWithPromoCode(activity, promoCodeText) },
+                                enabled = promoCodeText.isNotBlank(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("setup-unlock-pro-with-promo-code-button")
+                            ) {
+                                Icon(Icons.Filled.LockOpen, contentDescription = null)
+                                Text("Redeem Google Play Promo Code")
+                            }
+                            state.storageMessage?.let { message ->
+                                Text(
+                                    message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -148,7 +239,13 @@ fun SetupScreen(
                     ) {
                         form = form.copy(currentAge = it)
                     }
-                    NumberField("Retirement age", form.retirementAge) { form = form.copy(retirementAge = it) }
+                    NumberField("Retirement age", form.retirementAge) {
+                        form = if (isProUnlocked) {
+                            form.withRetirementAgeDefaults(it)
+                        } else {
+                            form.copy(retirementAge = it)
+                        }
+                    }
                     ChoiceGroup(
                         title = "Filing status",
                         options = FilingStatus.entries.toList(),
@@ -193,14 +290,24 @@ fun SetupScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = LabMutedText
                     )
-                    PercentField("Max spending cut", form.lowPortfolioSpendingReduction) {
+                    PercentField(
+                        label = "Max spending cut",
+                        value = form.lowPortfolioSpendingReduction,
+                        enabled = isProUnlocked
+                    ) {
                         form = form.copy(lowPortfolioSpendingReduction = it)
                     }
                     Text(
-                        text = "Applied when portfolio balance falls below 50% of the balance at retirement.",
+                        text = "Applied if portfolio balance falls below 50% of the balance at retirement.",
                         style = MaterialTheme.typography.bodySmall,
                         color = LabMutedText
                     )
+                    if (!isProUnlocked) {
+                        ProLockedInlineNotice(
+                            title = "Adaptive spending is Pro",
+                            detail = "Free runs use fixed spending. Pro unlocks modeled spending cuts when the portfolio is under pressure."
+                        )
+                    }
                     ChoiceGroup(
                         title = "Spending path",
                         options = SpendingPathModel.entries.toList(),
@@ -243,7 +350,7 @@ fun SetupScreen(
                         form = form.copy(mortgagePayment = it)
                     }
                     Text(
-                        text = "Enter principal and interest only. Do not include escrow for property taxes or homeowners insurance; enter those in Budget.",
+                        text = "Enter principal and interest only. Do not include escrow for property taxes or homeowners insurance; enter those in the Budget page.",
                         style = MaterialTheme.typography.bodySmall,
                         color = LabMutedText
                     )
@@ -276,7 +383,7 @@ fun SetupScreen(
                         form = form.copy(preMedicareMonthlyPremium = it)
                     }
                     Text(
-                        text = "Based on a typical ACA Marketplace Silver coverage plan for one pre-Medicare adult.",
+                        text = "Monthly premium per pre-Medicare adult for years before age 65. Default is based on a typical ACA Marketplace Silver plan; married households apply this amount to each spouse while that spouse is under 65.",
                         style = MaterialTheme.typography.bodySmall,
                         color = LabMutedText
                     )
@@ -293,11 +400,13 @@ fun SetupScreen(
                         title = "Healthcare inflation",
                         averageValue = form.healthcareInflationMean,
                         swingValue = form.healthcareInflationStdDev,
+                        enabled = isProUnlocked,
                         onAverageChange = { form = form.copy(healthcareInflationMean = it) },
                         onSwingChange = { form = form.copy(healthcareInflationStdDev = it) }
                     )
                     RestoreDefaultsButton(
                         testTag = "restore-healthcare-inflation-defaults",
+                        enabled = isProUnlocked,
                         onClick = {
                             form = form.copy(
                                 healthcareInflationMean = DEFAULT_HEALTHCARE_INFLATION_MEAN.percentInputText(),
@@ -305,15 +414,30 @@ fun SetupScreen(
                             )
                         }
                     )
+                    if (!isProUnlocked) {
+                        ProLockedInlineNotice(
+                            title = "Healthcare stress assumptions are Pro",
+                            detail = "Free runs use default healthcare inflation. Pro unlocks custom healthcare inflation and long-term care stress settings."
+                        )
+                    }
                     AssumptionToggleRow(
                         title = "Long-term care shock",
                         checked = form.longTermCareEnabled,
+                        enabled = isProUnlocked,
                         onCheckedChange = { form = form.copy(longTermCareEnabled = it) }
                     )
-                    MoneyField("Long-term care annual cost", form.longTermCareAnnualCost) {
+                    MoneyField(
+                        label = "Long-term care annual cost",
+                        value = form.longTermCareAnnualCost,
+                        enabled = isProUnlocked
+                    ) {
                         form = form.copy(longTermCareAnnualCost = it)
                     }
-                    NumberField("Long-term care duration years", form.longTermCareDurationYears) {
+                    NumberField(
+                        label = "Long-term care duration years",
+                        value = form.longTermCareDurationYears,
+                        enabled = isProUnlocked
+                    ) {
                         form = form.copy(longTermCareDurationYears = it)
                     }
                 }
@@ -383,11 +507,23 @@ fun SetupScreen(
                         }
                     )
                     PostRetirementAllocationSliders(
-                        allocation = form.postRetirementAllocation,
+                        allocation = if (isProUnlocked) {
+                            form.postRetirementAllocation
+                        } else {
+                            PostRetirementAllocationStrategy()
+                        },
+                        enabled = isProUnlocked,
                         onAllocationChange = { form = form.copy(postRetirementAllocation = it) }
                     )
+                    if (!isProUnlocked) {
+                        ProLockedInlineNotice(
+                            title = "Investment ratio customization is Pro",
+                            detail = "Free uses the default post-retirement stock and bond ratios."
+                        )
+                    }
                     RestoreDefaultsButton(
                         testTag = "restore-setup-post-retirement-allocation-defaults",
+                        enabled = isProUnlocked,
                         onClick = {
                             form = form.copy(postRetirementAllocation = PostRetirementAllocationStrategy())
                         }
@@ -447,23 +583,62 @@ fun SetupScreen(
                 AssumptionCard("Tax and drawdown strategy") {
                     AssumptionToggleRow(
                         title = "Roth conversion lab",
-                        checked = form.rothConversionEnabled,
+                        checked = isProUnlocked && form.rothConversionEnabled,
+                        enabled = isProUnlocked,
                         onCheckedChange = { form = form.copy(rothConversionEnabled = it) }
                     )
                     ChoiceGroup(
                         title = "Roth marginal bracket cap",
                         options = TAX_BRACKET_CAPS,
                         selected = form.rothBracketCap,
+                        enabled = isProUnlocked,
                         label = { it.percentOptionLabel() },
                         onSelected = { form = form.copy(rothBracketCap = it) }
                     )
                     AssumptionToggleRow(
-                        title = "Use cash reserve during drawdowns",
-                        checked = form.useCashReserveDuringDrawdowns,
-                        onCheckedChange = { form = form.copy(useCashReserveDuringDrawdowns = it) }
+                        title = "Apply 10% early withdrawal tax",
+                        checked = isProUnlocked && form.applyEarlyWithdrawalPenalty,
+                        enabled = isProUnlocked,
+                        onCheckedChange = { form = form.copy(applyEarlyWithdrawalPenalty = it) }
                     )
-                    PercentField("Drawdown trigger", form.drawdownTrigger) {
-                        form = form.copy(drawdownTrigger = it)
+                    AssumptionToggleRow(
+                        title = "Rule of 55 eligible",
+                        checked = isProUnlocked && form.ruleOf55Eligible,
+                        enabled = isProUnlocked,
+                        onCheckedChange = { form = form.copy(ruleOf55Eligible = it) }
+                    )
+                    AssumptionToggleRow(
+                        title = "72(t) / SEPP eligible",
+                        checked = isProUnlocked && form.seppEligible,
+                        enabled = isProUnlocked,
+                        onCheckedChange = { form = form.copy(seppEligible = it) }
+                    )
+                    if (!isProUnlocked) {
+                        KeyValueRow(
+                            "Free early withdrawal tax",
+                            automaticEarlyWithdrawalPenaltyLabel(form.retirementAge)
+                        )
+                    }
+                    Text(
+                        text = "The early withdrawal tax applies to modeled pre-tax withdrawals before age 59 1/2. Rule of 55 only applies to qualifying employer-plan distributions after separation in or after the year you turn 55. SEPP uses a fixed amortization payment from modeled pre-tax assets.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LabMutedText
+                    )
+                    if (!isProUnlocked) {
+                        ProLockedInlineNotice(
+                            title = "Advanced tax strategy is Pro",
+                            detail = "Free runs use basic early-withdrawal defaults. Pro unlocks Roth conversion, Rule of 55, and 72(t) / SEPP assumptions."
+                        )
+                    }
+                    if (SHOW_CASH_RESERVE_DRAWDOWN_SETTINGS) {
+                        AssumptionToggleRow(
+                            title = "Use cash reserve during drawdowns",
+                            checked = form.useCashReserveDuringDrawdowns,
+                            onCheckedChange = { form = form.copy(useCashReserveDuringDrawdowns = it) }
+                        )
+                        PercentField("Drawdown trigger", form.drawdownTrigger) {
+                            form = form.copy(drawdownTrigger = it)
+                        }
                     }
                 }
             }
@@ -473,6 +648,15 @@ fun SetupScreen(
                 NumberField("Number of simulations", form.numberOfSimulations) {
                     form = form.copy(numberOfSimulations = it)
                 }
+                Text(
+                    text = if (isProUnlocked) {
+                        "Pro supports up to $PRO_SIMULATION_LIMIT simulations."
+                    } else {
+                        "Free is limited to $FREE_SIMULATION_LIMIT simulations. Pro unlocks up to $PRO_SIMULATION_LIMIT simulations."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LabMutedText
+                )
                 NumberField("Random seed", form.seed) { form = form.copy(seed = it) }
                 KeyValueRow("Federal tax table", "2024 brackets")
                 KeyValueRow("Medicare model", MedicarePremiums.PREMIUM_TABLE_VERSION)
@@ -541,11 +725,17 @@ private fun AssumptionCard(title: String, content: @Composable ColumnScope.() ->
 }
 
 @Composable
-private fun MoneyField(label: String, value: String, onValueChange: (String) -> Unit) {
+private fun MoneyField(
+    label: String,
+    value: String,
+    enabled: Boolean = true,
+    onValueChange: (String) -> Unit
+) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         label = { Text(label) },
+        enabled = enabled,
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         modifier = Modifier.fillMaxWidth()
@@ -557,12 +747,14 @@ private fun NumberField(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     onValueChange: (String) -> Unit
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         label = { Text(label) },
+        enabled = enabled,
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         modifier = modifier.fillMaxWidth()
@@ -574,12 +766,14 @@ private fun PercentField(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     onValueChange: (String) -> Unit
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         label = { Text("$label (%)") },
+        enabled = enabled,
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
         modifier = modifier.fillMaxWidth()
@@ -591,6 +785,7 @@ private fun RatePairFields(
     title: String,
     averageValue: String,
     swingValue: String,
+    enabled: Boolean = true,
     onAverageChange: (String) -> Unit,
     onSwingChange: (String) -> Unit
 ) {
@@ -604,12 +799,14 @@ private fun RatePairFields(
                 label = "Average",
                 value = averageValue,
                 modifier = Modifier.weight(1f),
+                enabled = enabled,
                 onValueChange = onAverageChange
             )
             PercentField(
                 label = "Std Dev",
                 value = swingValue,
                 modifier = Modifier.weight(1f),
+                enabled = enabled,
                 onValueChange = onSwingChange
             )
         }
@@ -620,6 +817,7 @@ private fun RatePairFields(
 private fun RestoreDefaultsButton(
     label: String = "Restore Defaults",
     testTag: String,
+    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
     Row(
@@ -628,6 +826,7 @@ private fun RestoreDefaultsButton(
     ) {
         OutlinedButton(
             onClick = onClick,
+            enabled = enabled,
             modifier = Modifier.testTag(testTag)
         ) {
             Text(label)
@@ -638,6 +837,7 @@ private fun RestoreDefaultsButton(
 @Composable
 private fun PostRetirementAllocationSliders(
     allocation: PostRetirementAllocationStrategy,
+    enabled: Boolean = true,
     onAllocationChange: (PostRetirementAllocationStrategy) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -655,6 +855,7 @@ private fun PostRetirementAllocationSliders(
             SetupAllocationSliderRow(
                 tier = tier,
                 stockAllocation = allocation.stockAllocationFor(tier),
+                enabled = enabled,
                 onStockAllocationChange = { value ->
                     onAllocationChange(allocation.withStockAllocation(tier, value))
                 }
@@ -667,6 +868,7 @@ private fun PostRetirementAllocationSliders(
 private fun SetupAllocationSliderRow(
     tier: PostRetirementAllocationTier,
     stockAllocation: Double,
+    enabled: Boolean = true,
     onStockAllocationChange: (Double) -> Unit
 ) {
     val stockPercent = stockAllocation.coerceIn(0.0, 1.0)
@@ -693,6 +895,7 @@ private fun SetupAllocationSliderRow(
             onValueChange = { value ->
                 onStockAllocationChange(((value * 20f).roundToInt() / 20.0).coerceIn(0.0, 1.0))
             },
+            enabled = enabled,
             valueRange = 0f..1f,
             steps = 19,
             modifier = Modifier
@@ -744,6 +947,7 @@ private fun AccountFieldHelp(text: String) {
 private fun AssumptionToggleRow(
     title: String,
     checked: Boolean,
+    enabled: Boolean = true,
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
@@ -752,7 +956,7 @@ private fun AssumptionToggleRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(checked = checked, enabled = enabled, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -762,6 +966,7 @@ private fun <T> ChoiceGroup(
     title: String,
     options: List<T>,
     selected: T,
+    enabled: Boolean = true,
     label: (T) -> String,
     onSelected: (T) -> Unit
 ) {
@@ -775,11 +980,11 @@ private fun <T> ChoiceGroup(
             options.forEach { option ->
                 val text = label(option)
                 if (option == selected) {
-                    Button(onClick = { onSelected(option) }) {
+                    Button(onClick = { onSelected(option) }, enabled = enabled) {
                         Text(text)
                     }
                 } else {
-                    OutlinedButton(onClick = { onSelected(option) }) {
+                    OutlinedButton(onClick = { onSelected(option) }, enabled = enabled) {
                         Text(text)
                     }
                 }
@@ -828,6 +1033,9 @@ private data class EditableAssumptions(
     val postRetirementAllocation: PostRetirementAllocationStrategy,
     val rothConversionEnabled: Boolean,
     val rothBracketCap: Double,
+    val applyEarlyWithdrawalPenalty: Boolean,
+    val ruleOf55Eligible: Boolean,
+    val seppEligible: Boolean,
     val useCashReserveDuringDrawdowns: Boolean,
     val drawdownTrigger: String,
     val longTermCareEnabled: Boolean,
@@ -836,7 +1044,7 @@ private data class EditableAssumptions(
     val numberOfSimulations: String,
     val seed: String
 ) {
-    fun toScenario(base: RetirementScenario): ParsedAssumptions {
+    fun toScenario(base: RetirementScenario, featureAccess: FeatureAccess): ParsedAssumptions {
         val currentAge = currentAge.toIntOrNull()
         val retirementAge = retirementAge.toIntOrNull()
         val spouseCurrentAge = spouseCurrentAge.toIntOrNull()
@@ -916,7 +1124,7 @@ private data class EditableAssumptions(
             requirePercent("Drawdown trigger", drawdownTrigger, -0.50, 0.25),
             requireMoney("Long-term care annual cost", longTermCareAnnualCost),
             requireInt("Long-term care duration years", longTermCareDurationYears, 1, 10),
-            requireInt("Number of simulations", numberOfSimulations, 100, 10_000),
+            requireSimulationCount(numberOfSimulations, featureAccess),
             if (seed == null) "Random seed must be a whole number." else null
         ).firstOrNull()
 
@@ -983,8 +1191,11 @@ private data class EditableAssumptions(
                 marginalRateCap = rothBracketCap
             ),
             withdrawalStrategy = WithdrawalStrategy(
-                useCashReserveDuringDrawdowns = useCashReserveDuringDrawdowns,
-                drawdownTrigger = drawdownTrigger!!
+                useCashReserveDuringDrawdowns = SHOW_CASH_RESERVE_DRAWDOWN_SETTINGS && useCashReserveDuringDrawdowns,
+                drawdownTrigger = drawdownTrigger!!,
+                applyEarlyWithdrawalPenalty = applyEarlyWithdrawalPenalty,
+                ruleOf55Eligible = ruleOf55Eligible,
+                seppEligible = seppEligible
             ),
             longTermCare = LongTermCareAssumption(
                 enabled = longTermCareEnabled,
@@ -993,7 +1204,7 @@ private data class EditableAssumptions(
             ),
             numberOfSimulations = numberOfSimulations!!,
             seed = seed!!
-        )
+        ).forFeatureAccess(featureAccess)
 
         val modelError = updated.validate().firstOrNull()
         return if (modelError != null) {
@@ -1001,6 +1212,55 @@ private data class EditableAssumptions(
         } else {
             ParsedAssumptions(scenario = updated)
         }
+    }
+
+    fun withRetirementAgeDefaults(value: String): EditableAssumptions {
+        val retirementAge = value.toIntOrNull() ?: return copy(retirementAge = value)
+        val defaults = WithdrawalStrategy.defaultsForRetirementAge(retirementAge)
+        return copy(
+            retirementAge = value,
+            applyEarlyWithdrawalPenalty = defaults.applyEarlyWithdrawalPenalty,
+            ruleOf55Eligible = defaults.ruleOf55Eligible,
+            seppEligible = defaultSeppEligible(retirementAge)
+        )
+    }
+
+    private fun defaultSeppEligible(retirementAge: Int): Boolean {
+        if (retirementAge >= RULE_OF_55_MINIMUM_RETIREMENT_AGE) return false
+        if (retirementAge * 12 >= PENALTY_FREE_WITHDRAWAL_AGE_MONTHS) return false
+
+        val pretaxBalance = parseMoney(pretax) ?: return false
+        if (pretaxBalance <= 0.0) return false
+
+        val annualBridgeNeed = estimatedAnnualBridgeNeed(retirementAge)
+        if (annualBridgeNeed <= 0.0) return false
+
+        val bridgeMonths = (PENALTY_FREE_WITHDRAWAL_AGE_MONTHS - retirementAge * 12).coerceAtLeast(0)
+        val bridgeNeed = annualBridgeNeed * bridgeMonths.toDouble() / 12.0
+        val nonPenaltyBridgeAssets =
+            (parseMoney(cash) ?: 0.0) +
+                (parseMoney(taxable) ?: 0.0) +
+                (parseMoney(roth) ?: 0.0)
+        if (bridgeNeed <= nonPenaltyBridgeAssets) return false
+
+        return RetirementSimulator.seppFixedAmortizationAnnualPayment(
+            accountBalance = pretaxBalance,
+            age = retirementAge
+        ) > 0.0
+    }
+
+    private fun estimatedAnnualBridgeNeed(retirementAge: Int): Double {
+        val spending = parseMoney(annualSpending) ?: return 0.0
+        val healthcare = (parseMoney(preMedicareMonthlyPremium) ?: 0.0) * 12.0
+        val mortgage = (parseMoney(mortgagePayment) ?: 0.0) * 12.0
+        val rent = (parseMoney(monthlyRent) ?: 0.0) * 12.0
+        val guaranteedIncomeStart = guaranteedIncomeStartAge.toIntOrNull() ?: Int.MAX_VALUE
+        val guaranteed = if (guaranteedIncomeStart <= retirementAge) {
+            parseMoney(guaranteedAnnualIncome) ?: 0.0
+        } else {
+            0.0
+        }
+        return (spending + healthcare + mortgage + rent - guaranteed).coerceAtLeast(0.0)
     }
 
     companion object {
@@ -1045,7 +1305,11 @@ private data class EditableAssumptions(
                 postRetirementAllocation = scenario.postRetirementAllocation,
                 rothConversionEnabled = scenario.rothConversion.enabled,
                 rothBracketCap = closestTaxCap(scenario.rothConversion.marginalRateCap),
-                useCashReserveDuringDrawdowns = scenario.withdrawalStrategy.useCashReserveDuringDrawdowns,
+                applyEarlyWithdrawalPenalty = scenario.withdrawalStrategy.applyEarlyWithdrawalPenalty,
+                ruleOf55Eligible = scenario.withdrawalStrategy.ruleOf55Eligible,
+                seppEligible = scenario.withdrawalStrategy.seppEligible,
+                useCashReserveDuringDrawdowns = SHOW_CASH_RESERVE_DRAWDOWN_SETTINGS &&
+                    scenario.withdrawalStrategy.useCashReserveDuringDrawdowns,
                 drawdownTrigger = scenario.withdrawalStrategy.drawdownTrigger.percentInputText(),
                 longTermCareEnabled = scenario.longTermCare.enabled,
                 longTermCareAnnualCost = scenario.longTermCare.annualCost.wholeDollarText(),
@@ -1088,7 +1352,7 @@ private fun String.accessibilityTagSuffix(): String {
 private fun spendingPathHelpText(model: SpendingPathModel): String {
     return when (model) {
         SpendingPathModel.Flat -> "Base spending rises with general inflation and does not decline in real terms."
-        SpendingPathModel.EmpiricalAgeDecline -> "Base spending follows an empirical age decline after 65, then flattens at 85. Mortgage, rent, healthcare, and long-term care remain separate."
+        SpendingPathModel.EmpiricalAgeDecline -> "Base spending rises with general inflation and follows an empirical age decline after 65, then flattens at 85. Mortgage, rent, healthcare, and long-term care remain separate."
     }
 }
 
@@ -1096,6 +1360,16 @@ private fun socialSecurityFullRetirementAgeText(currentAgeText: String, fallback
     val currentAge = currentAgeText.toIntOrNull() ?: fallbackCurrentAge
     val birthYear = SocialSecurity.primaryBirthYear(currentAge)
     return "${SocialSecurity.fullRetirementAgeText(birthYear)} for birth year $birthYear"
+}
+
+private fun automaticEarlyWithdrawalPenaltyLabel(retirementAgeText: String): String {
+    val retirementAge = retirementAgeText.toIntOrNull()
+        ?: return "Applied automatically before age 59 1/2"
+    return if (retirementAge * 12 < PENALTY_FREE_WITHDRAWAL_AGE_MONTHS) {
+        "Applied automatically before age 59 1/2"
+    } else {
+        "Not applied at this retirement age"
+    }
 }
 
 private fun parseMoney(value: String): Double? {
@@ -1120,6 +1394,17 @@ private fun requireMoney(label: String, value: Double?): String? {
 
 private fun requireInt(label: String, value: Int?, min: Int, max: Int): String? {
     return if (value == null || value !in min..max) "$label must be between $min and $max." else null
+}
+
+private fun requireSimulationCount(value: Int?, featureAccess: FeatureAccess): String? {
+    val max = featureAccess.maxSimulationCount
+    if (value != null && value in 100..max) return null
+    val base = "Number of simulations must be between 100 and $max."
+    return if (featureAccess.isProUnlocked) {
+        base
+    } else {
+        "$base Upgrade to Pro for up to $PRO_SIMULATION_LIMIT simulations."
+    }
 }
 
 private fun requirePercent(label: String, value: Double?, min: Double, max: Double): String? {

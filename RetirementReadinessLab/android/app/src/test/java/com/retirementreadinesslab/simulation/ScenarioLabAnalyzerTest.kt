@@ -3,8 +3,11 @@ package com.retirementreadinesslab.simulation
 import com.retirementreadinesslab.model.AccountBalances
 import com.retirementreadinesslab.model.HealthcarePlan
 import com.retirementreadinesslab.model.HouseholdProfile
+import com.retirementreadinesslab.model.LongTermCareAssumption
 import com.retirementreadinesslab.model.MarketAssumptions
+import com.retirementreadinesslab.model.MortgagePlan
 import com.retirementreadinesslab.model.PostRetirementAllocationStrategy
+import com.retirementreadinesslab.model.RothConversionStrategy
 import com.retirementreadinesslab.model.SocialSecurityPlan
 import com.retirementreadinesslab.model.SpendingPathModel
 import com.retirementreadinesslab.model.SpendingPlan
@@ -28,11 +31,41 @@ class ScenarioLabAnalyzerTest {
         assertEquals(scenario.id, analysis.scenarioId)
         assertEquals(3, analysis.sweeps.size)
         assertTrue(analysis.sweeps.all { it.rows.isNotEmpty() })
-        assertEquals(8, analysis.comparisons.size)
+        assertEquals(5, analysis.comparisons.size)
+        assertTrue(analysis.comparisons.any { it.type == LabComparisonType.RothConversion })
+        assertTrue(analysis.comparisons.any { it.type == LabComparisonType.LongTermCare })
         assertTrue(analysis.comparisons.any { it.type == LabComparisonType.HealthcareInflation })
         assertTrue(analysis.comparisons.any { it.type == LabComparisonType.MarketDownturn })
         assertTrue(analysis.comparisons.any { it.type == LabComparisonType.MortgagePayoff })
         assertTrue(analysis.decisionEstimate.simulationCount >= 50)
+    }
+
+    @Test
+    fun strategyComparisonsFlipAlreadySelectedOptions() {
+        val scenario = sampleBaseScenario().copy(
+            rothConversion = RothConversionStrategy(enabled = true, marginalRateCap = 0.22),
+            longTermCare = LongTermCareAssumption(enabled = true),
+            mortgage = MortgagePlan(monthlyPayment = 0.0, yearsLeft = 0, monthsLeft = 0)
+        )
+
+        val analysis = ScenarioLabAnalyzer.analyze(
+            scenario = scenario,
+            quickSimulations = 50,
+            targetEstimateSimulations = 50
+        )
+
+        assertEquals(
+            "Disable Roth conversions",
+            analysis.comparisons.first { it.type == LabComparisonType.RothConversion }.title
+        )
+        assertEquals(
+            "Remove long-term care risk",
+            analysis.comparisons.first { it.type == LabComparisonType.LongTermCare }.title
+        )
+        assertEquals(
+            "Add mortgage payment",
+            analysis.comparisons.first { it.type == LabComparisonType.MortgagePayoff }.title
+        )
     }
 
     @Test

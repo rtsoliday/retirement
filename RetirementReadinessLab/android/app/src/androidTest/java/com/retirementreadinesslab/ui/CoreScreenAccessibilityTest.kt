@@ -17,6 +17,8 @@ import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.test.platform.app.InstrumentationRegistry
 import com.retirementreadinesslab.data.ScenarioRepository
+import com.retirementreadinesslab.entitlements.ProEntitlement
+import com.retirementreadinesslab.entitlements.ProEntitlementProvider
 import com.retirementreadinesslab.model.sampleScenarios
 import com.retirementreadinesslab.state.RetirementLabState
 import com.retirementreadinesslab.ui.screens.BudgetScreen
@@ -107,7 +109,7 @@ class CoreScreenAccessibilityTest {
     }
 
     @Test
-    fun reportsExposePrivacyExportImportAndDeleteConfirmation() {
+    fun reportsExposePrivacyExportAndDeleteConfirmation() {
         compose.setContent {
             RetirementReadinessLabTheme {
                 ReportsScreen(state = testState())
@@ -117,14 +119,8 @@ class CoreScreenAccessibilityTest {
         compose.onNodeWithTag("reports-screen").assertIsDisplayed()
         compose.onNodeWithText("Privacy and disclosures").assertIsDisplayed()
         compose.onNodeWithTag("share-pdf-report-button").assertHasClickAction()
+        compose.onNodeWithTag("view-pdf-report-button").assertHasClickAction()
         compose.onNodeWithTag("share-text-report-button").assertHasClickAction()
-        compose.onNodeWithTag("share-scenario-backup-button").assertHasClickAction()
-
-        scrollScreenToTag("reports-screen", "json-backup-input")
-        compose.onNodeWithTag("json-backup-input").performTextInput("not json")
-        scrollScreenToTag("reports-screen", "import-backup-button")
-        compose.onNodeWithTag("import-backup-button").assertHasClickAction().performClick()
-        compose.onNodeWithText("Backup format could not be read. Paste the full JSON backup text.").assertIsDisplayed()
 
         scrollScreenToTag("reports-screen", "delete-local-data-button")
         compose.onNodeWithTag("delete-local-data-button").assertHasClickAction().performClick()
@@ -192,6 +188,7 @@ class CoreScreenAccessibilityTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         return RetirementLabState(
             repository = ScenarioRepository(context),
+            entitlementProvider = TestProEntitlementProvider,
             scope = CoroutineScope(Dispatchers.Main),
             initialScenarios = sampleScenarios().map { scenario ->
                 scenario.copy(numberOfSimulations = 75)
@@ -205,5 +202,21 @@ class CoreScreenAccessibilityTest {
 
     private fun scrollScreenToTag(screenTag: String, targetTag: String) {
         compose.onNodeWithTag(screenTag).performScrollToNode(hasTestTag(targetTag))
+    }
+
+    private object TestProEntitlementProvider : ProEntitlementProvider {
+        override val providerName: String = "Test"
+        override val allowsDeveloperOverrides: Boolean = false
+
+        override suspend fun currentEntitlement(storedLocalUnlock: Boolean): ProEntitlement {
+            return ProEntitlement(isProUnlocked = true)
+        }
+
+        override suspend fun setDeveloperOverride(
+            isProUnlocked: Boolean,
+            storedLocalUnlock: Boolean
+        ): ProEntitlement {
+            return ProEntitlement(isProUnlocked = isProUnlocked)
+        }
     }
 }

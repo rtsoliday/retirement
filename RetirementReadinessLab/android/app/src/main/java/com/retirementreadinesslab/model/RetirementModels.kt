@@ -378,10 +378,29 @@ data class RothConversionStrategy(
     val marginalRateCap: Double = 0.22
 )
 
+const val EARLY_WITHDRAWAL_PENALTY_RATE = 0.10
+const val RULE_OF_55_MINIMUM_RETIREMENT_AGE = 55
+const val PENALTY_FREE_WITHDRAWAL_AGE_MONTHS = 59 * 12 + 6
+const val SEPP_MINIMUM_PAYMENT_MONTHS = 5 * 12
+const val SEPP_DEFAULT_INTEREST_RATE = 0.05
+
 data class WithdrawalStrategy(
-    val useCashReserveDuringDrawdowns: Boolean = true,
-    val drawdownTrigger: Double = -0.01
-)
+    val useCashReserveDuringDrawdowns: Boolean = false,
+    val drawdownTrigger: Double = -0.01,
+    val applyEarlyWithdrawalPenalty: Boolean = false,
+    val ruleOf55Eligible: Boolean = false,
+    val seppEligible: Boolean = false
+) {
+    companion object {
+        fun defaultsForRetirementAge(retirementAge: Int): WithdrawalStrategy {
+            return WithdrawalStrategy(
+                applyEarlyWithdrawalPenalty = retirementAge * 12 < PENALTY_FREE_WITHDRAWAL_AGE_MONTHS,
+                ruleOf55Eligible = retirementAge in RULE_OF_55_MINIMUM_RETIREMENT_AGE..59,
+                seppEligible = false
+            )
+        }
+    }
+}
 
 data class LongTermCareAssumption(
     val enabled: Boolean = false,
@@ -436,6 +455,14 @@ data class PortfolioSurvivalPoint(
     val aliveShare: Double
 )
 
+data class FundingThreshold(
+    val balance: Double,
+    val targetReadiness: Double,
+    val observedReadiness: Double,
+    val includedSimulationCount: Int,
+    val totalSimulationCount: Int
+)
+
 data class FailureAgeBucket(
     val label: String,
     val count: Int,
@@ -474,6 +501,7 @@ data class SimulationResult(
     val notFailedByAge: List<PortfolioSurvivalPoint>,
     val pathPoints: List<SimulationPathPoint>,
     val meanPath: List<SimulationMeanPoint>,
+    val fundingThreshold: FundingThreshold?,
     val riskBreakdown: RiskBreakdown,
     val provenance: CalculationProvenance,
     val generatedAtEpochMillis: Long

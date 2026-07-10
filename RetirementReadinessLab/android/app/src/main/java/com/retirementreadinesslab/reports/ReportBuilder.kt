@@ -135,6 +135,9 @@ object ReportBuilder {
             }
             appendLine("- Roth conversions: ${if (scenario.rothConversion.enabled) "Enabled" else "Disabled"}")
             appendLine("- Roth conversion bracket cap: ${scenario.rothConversion.marginalRateCap.percent()}")
+            appendLine("- 10% early withdrawal tax: ${if (scenario.withdrawalStrategy.applyEarlyWithdrawalPenalty) "Included before age 59 1/2" else "Excluded"}")
+            appendLine("- Rule of 55 assumption: ${if (scenario.withdrawalStrategy.ruleOf55Eligible) "Eligible employer-plan withdrawals" else "Not applied"}")
+            appendLine("- 72(t) / SEPP assumption: ${if (scenario.withdrawalStrategy.seppEligible) "Fixed amortization schedule from pre-tax balance" else "Not applied"}")
             appendLine("- Cash reserve drawdown: ${if (scenario.withdrawalStrategy.useCashReserveDuringDrawdowns) "Enabled" else "Disabled"}")
             appendLine("- Drawdown trigger: ${scenario.withdrawalStrategy.drawdownTrigger.percent()}")
             appendLine("- Long-term care risk: ${if (scenario.longTermCare.enabled) "Enabled" else "Disabled"}")

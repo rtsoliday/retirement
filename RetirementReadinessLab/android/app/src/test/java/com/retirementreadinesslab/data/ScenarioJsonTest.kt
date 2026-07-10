@@ -12,9 +12,11 @@ import com.retirementreadinesslab.model.MonthlyBudget
 import com.retirementreadinesslab.model.PostRetirementAllocationStrategy
 import com.retirementreadinesslab.model.RentPlan
 import com.retirementreadinesslab.model.SpendingPathModel
+import com.retirementreadinesslab.model.WithdrawalStrategy
 import com.retirementreadinesslab.model.sampleBaseScenario
 import org.json.JSONArray
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -46,6 +48,13 @@ class ScenarioJsonTest {
                 stock40xTo45x = 0.65,
                 stock45xTo50x = 0.55,
                 stock50xOrMore = 0.45
+            ),
+            withdrawalStrategy = WithdrawalStrategy(
+                useCashReserveDuringDrawdowns = false,
+                drawdownTrigger = -0.02,
+                applyEarlyWithdrawalPenalty = true,
+                ruleOf55Eligible = true,
+                seppEligible = true
             ),
             budget = BudgetProfile(
                 annualPropertyTaxes = 4_800.0,
@@ -83,6 +92,10 @@ class ScenarioJsonTest {
         assertEquals(0.65, decoded.first().postRetirementAllocation.stock40xTo45x, 0.01)
         assertEquals(0.55, decoded.first().postRetirementAllocation.stock45xTo50x, 0.01)
         assertEquals(0.45, decoded.first().postRetirementAllocation.stock50xOrMore, 0.01)
+        assertEquals(-0.02, decoded.first().withdrawalStrategy.drawdownTrigger, 0.001)
+        assertTrue(decoded.first().withdrawalStrategy.applyEarlyWithdrawalPenalty)
+        assertTrue(decoded.first().withdrawalStrategy.ruleOf55Eligible)
+        assertTrue(decoded.first().withdrawalStrategy.seppEligible)
         assertEquals(scenario.socialSecurity.claimAge, decoded.first().socialSecurity.claimAge)
         assertEquals(66, decoded.first().socialSecurity.spouseClaimAge)
         assertEquals(18_000.0, decoded.first().guaranteedIncome.annualIncome, 0.01)
@@ -133,6 +146,9 @@ class ScenarioJsonTest {
             getJSONObject(0).remove("rent")
             getJSONObject(0).remove("home")
             getJSONObject(0).remove("postRetirementAllocation")
+            getJSONObject(0).getJSONObject("withdrawalStrategy").remove("applyEarlyWithdrawalPenalty")
+            getJSONObject(0).getJSONObject("withdrawalStrategy").remove("ruleOf55Eligible")
+            getJSONObject(0).getJSONObject("withdrawalStrategy").remove("seppEligible")
         }.toString()
 
         val decoded = ScenarioJson.decodeScenarios(raw)
@@ -152,5 +168,8 @@ class ScenarioJsonTest {
         assertEquals(0.0, decoded.first().rent.monthlyRent, 0.01)
         assertEquals(0.0, decoded.first().home.currentValue, 0.01)
         assertEquals(PostRetirementAllocationStrategy(), decoded.first().postRetirementAllocation)
+        assertFalse(decoded.first().withdrawalStrategy.applyEarlyWithdrawalPenalty)
+        assertFalse(decoded.first().withdrawalStrategy.ruleOf55Eligible)
+        assertFalse(decoded.first().withdrawalStrategy.seppEligible)
     }
 }

@@ -8,13 +8,13 @@ Retirement Readiness Lab
 
 ## Short Description
 
-Private retirement stress tests, scenario comparisons, and planning reports.
+Private retirement stress tests, decision comparisons, and planning reports.
 
 ## Full Description
 
 Retirement Readiness Lab helps you test retirement decisions before you rely on them.
 
-Build a local retirement scenario, run an on-device Monte Carlo readiness estimate, and compare the choices that can materially change the result: retirement age, annual spending, Social Security timing, Roth conversions, healthcare inflation, market downturns, mortgage payoff, cash reserves, and long-term care risk.
+Build a local retirement plan, run an on-device Monte Carlo readiness estimate, and compare the choices that can materially change the result: retirement age, annual spending, Social Security timing, Roth conversions, healthcare inflation, market downturns, mortgage payoff, and long-term care risk.
 
 The app is built for people who want more than a simple savings calculator but do not want to maintain a spreadsheet.
 
@@ -22,13 +22,13 @@ Key features:
 
 - Guided setup for household, savings, spending, healthcare, mortgage, and Social Security assumptions.
 - Retirement readiness dashboard with success probability, balance ranges, and risk readouts.
-- Scenario comparison for alternate retirement ages, spending levels, and claiming strategies.
+- Scenario Lab comparisons for alternate retirement ages, spending levels, claiming strategies, and stress assumptions.
 - Lab tools for retirement age, spending, Social Security, Roth conversion, healthcare, long-term care, market downturn, and mortgage payoff tests.
 - Results detail with portfolio range chart, failure timing, risk breakdown, and calculation provenance.
-- Local reports, PDF export, text report sharing, CSV comparison export, and JSON scenario backup.
+- Local report preview, with PDF and text report sharing available through the one-time Pro unlock.
 - Local-first privacy model with no account requirement for the MVP.
 
-Retirement Readiness Lab provides educational estimates based on user-entered assumptions. It is not financial, tax, legal, or investment advice. Results are not guarantees and should be reviewed with qualified professionals before making retirement decisions.
+Retirement Readiness Lab provides educational estimates based on user-entered assumptions. It is not financial, tax, legal, or investment advice. Results are not guarantees and should be reviewed with qualified professionals before making retirement decisions. Some advanced scenario lab, report sharing, and high-simulation features require the one-time Pro unlock.
 
 ## Screenshot Set
 
@@ -37,7 +37,7 @@ Recommended first screenshot sequence:
 1. Dashboard readiness score and portfolio range.
 2. Guided setup with retirement age and spending controls.
 3. Lab tools showing decision comparisons.
-4. Scenario comparison screen with multiple plans.
+4. Scenario Lab screen with locked or unlocked Pro decision tools.
 5. Results detail with calculation provenance.
 6. Reports screen with privacy and export controls.
 
@@ -93,7 +93,7 @@ Avoid:
 Prefer:
 
 - "Educational estimate."
-- "Scenario comparison."
+- "Decision comparison."
 - "Stress test."
 - "User-entered assumptions."
 - "Not advice."

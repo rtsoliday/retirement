@@ -34,12 +34,12 @@ If you uninstall the app, clear app storage, or use the in-app Delete Local Data
 
 The app creates exports only after you choose a share or backup action.
 
-Exports may include sensitive financial planning assumptions. Export options may include:
+Exports may include sensitive financial planning assumptions. First-release export options may include:
 
 - PDF reports.
 - Plain-text reports.
-- CSV scenario comparisons.
-- JSON scenario backups.
+
+JSON backup/import and CSV comparison exports are not visible in the first release.
 
 Once you share or save an exported file outside the app, that file is controlled by the destination app, service, storage provider, or person you share it with.
 

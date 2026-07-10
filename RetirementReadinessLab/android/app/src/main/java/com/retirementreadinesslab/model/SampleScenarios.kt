@@ -10,7 +10,7 @@ fun sampleBaseScenario(): RetirementScenario {
         name = "Base plan",
         household = HouseholdProfile(
             currentAge = 50,
-            retirementAge = 58,
+            retirementAge = 67,
             filingStatus = FilingStatus.Single,
             gender = Gender.Male
         ),
@@ -33,7 +33,9 @@ fun sampleBaseScenario(): RetirementScenario {
             bondStdDev = 0.06
         ),
         rothConversion = RothConversionStrategy(enabled = false),
-        withdrawalStrategy = WithdrawalStrategy(useCashReserveDuringDrawdowns = true),
+        withdrawalStrategy = WithdrawalStrategy
+            .defaultsForRetirementAge(67)
+            .copy(useCashReserveDuringDrawdowns = false),
         longTermCare = LongTermCareAssumption(enabled = true),
         numberOfSimulations = 1_500
     )

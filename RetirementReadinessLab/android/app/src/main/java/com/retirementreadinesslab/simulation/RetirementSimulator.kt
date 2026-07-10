@@ -1,19 +1,26 @@
 package com.retirementreadinesslab.simulation
 
 import com.retirementreadinesslab.model.CalculationProvenance
+import com.retirementreadinesslab.model.EARLY_WITHDRAWAL_PENALTY_RATE
 import com.retirementreadinesslab.model.OutcomeBand
 import com.retirementreadinesslab.model.FailureAgeBucket
 import com.retirementreadinesslab.model.FilingStatus
+import com.retirementreadinesslab.model.FundingThreshold
 import com.retirementreadinesslab.model.Gender
+import com.retirementreadinesslab.model.PENALTY_FREE_WITHDRAWAL_AGE_MONTHS
 import com.retirementreadinesslab.model.PortfolioSurvivalPoint
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.RiskBreakdown
 import com.retirementreadinesslab.model.RiskLevel
+import com.retirementreadinesslab.model.RULE_OF_55_MINIMUM_RETIREMENT_AGE
 import com.retirementreadinesslab.model.SENIOR_APARTMENT_MONTHLY_RENT_2026
+import com.retirementreadinesslab.model.SEPP_DEFAULT_INTEREST_RATE
+import com.retirementreadinesslab.model.SEPP_MINIMUM_PAYMENT_MONTHS
 import com.retirementreadinesslab.model.SimulationMeanPoint
 import com.retirementreadinesslab.model.SimulationPathPoint
 import com.retirementreadinesslab.model.SimulationResult
 import com.retirementreadinesslab.model.SpendingPathModel
+import com.retirementreadinesslab.model.WithdrawalStrategy
 import com.retirementreadinesslab.model.validate
 import java.util.Locale
 import java.util.Random
@@ -24,12 +31,15 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 object RetirementSimulator {
-    private const val ENGINE_VERSION = "2026.06-allocation-lab"
+    private const val ENGINE_VERSION = "2026.06-sepp"
     private const val ENGINE_CADENCE = "Monthly cashflow model with annual result bands"
     private const val TAX_TABLE_VERSION = "2024 federal brackets"
     private val MORTALITY_MODEL_VERSION = MortalityTables.TABLE_VERSION
     private const val MONTHS_PER_YEAR = 12
     private const val MAX_PATH_SCATTER_POINTS = 30_000
+    private const val BALANCE_EPSILON = 0.01
+    private const val FUNDING_THRESHOLD_TARGET_READINESS = 0.95
+    private const val FUNDING_THRESHOLD_WINDOW_SIZE = 60
     private val MONTHLY_CASH_RETURN = monthlyEquivalent(0.02)
 
     // Hurd and Rohwedder (2023), "Spending trajectories after age 65: variation by initial wealth",
@@ -100,6 +110,7 @@ object RetirementSimulator {
             notFailedByAge = buildNotFailedByAge(scenario, paths),
             pathPoints = buildPathPoints(paths),
             meanPath = buildMeanPath(paths),
+            fundingThreshold = buildFundingThreshold(paths),
             riskBreakdown = buildRiskBreakdown(scenario, successProbability),
             provenance = buildProvenance(scenario),
             generatedAtEpochMillis = System.currentTimeMillis()
@@ -173,6 +184,85 @@ object RetirementSimulator {
             }
         }
         return points
+    }
+
+    private fun buildFundingThreshold(paths: List<ScenarioPath>): FundingThreshold? {
+        return fundingThresholdFromCurrentRun(
+            paths.mapNotNull { path ->
+                val retirementStartBalance = path.chartBalances.firstOrNull() ?: return@mapNotNull null
+                retirementStartBalance to path.succeeded
+            }
+        )
+    }
+
+    internal fun fundingThresholdFromCurrentRun(
+        retirementStartOutcomes: List<Pair<Double, Boolean>>,
+        targetReadiness: Double = FUNDING_THRESHOLD_TARGET_READINESS
+    ): FundingThreshold? {
+        if (targetReadiness <= 0.0 || targetReadiness > 1.0) return null
+        val sortedOutcomes = retirementStartOutcomes
+            .filter { (balance, _) -> balance.isFinite() && balance >= 0.0 }
+            .sortedByDescending { (balance, _) -> balance }
+        if (sortedOutcomes.isEmpty()) return null
+
+        val windowSize = FUNDING_THRESHOLD_WINDOW_SIZE
+        if (sortedOutcomes.size < windowSize) return null
+        val failureLimit = fundingThresholdFailureLimit(windowSize, targetReadiness)
+        val firstWindowSuccessCount = sortedOutcomes
+            .take(windowSize)
+            .count { (_, succeeded) -> succeeded }
+        if (firstWindowSuccessCount < windowSize - failureLimit) return null
+
+        val window = mutableListOf<Pair<Double, Boolean>>()
+        var failureCount = 0
+
+        sortedOutcomes.forEach { outcome ->
+            window += outcome
+            if (!outcome.second) failureCount += 1
+            if (window.size > windowSize) {
+                val removed = window.removeAt(0)
+                if (!removed.second) failureCount -= 1
+            }
+            if (window.size == windowSize && fundingThresholdReached(failureCount, failureLimit)) {
+                val medianFailureBalance = medianFailedRetirementStartBalance(window) ?: return null
+                return FundingThreshold(
+                    balance = medianFailureBalance,
+                    targetReadiness = targetReadiness,
+                    observedReadiness = (windowSize - failureCount).toDouble() / windowSize.toDouble(),
+                    includedSimulationCount = windowSize,
+                    totalSimulationCount = sortedOutcomes.size
+                )
+            }
+        }
+        return null
+    }
+
+    private fun fundingThresholdFailureLimit(windowSize: Int, targetReadiness: Double): Int {
+        return (windowSize.toDouble() * (1.0 - targetReadiness))
+            .roundToInt()
+            .coerceIn(0, windowSize)
+    }
+
+    private fun fundingThresholdReached(failureCount: Int, failureLimit: Int): Boolean {
+        return if (failureLimit == 0) {
+            failureCount == 0
+        } else {
+            failureCount >= failureLimit
+        }
+    }
+
+    private fun medianFailedRetirementStartBalance(window: List<Pair<Double, Boolean>>): Double? {
+        val balances = window
+            .filter { (_, succeeded) -> !succeeded }
+            .map { (balance, _) -> balance }
+            .sorted()
+        if (balances.isEmpty()) return null
+        val middle = balances.size / 2
+        return if (balances.size % 2 == 0) {
+            (balances[middle - 1] + balances[middle]) / 2.0
+        } else {
+            balances[middle]
+        }
     }
 
     private fun buildMeanPath(paths: List<ScenarioPath>): List<SimulationMeanPoint> {
@@ -316,6 +406,18 @@ object RetirementSimulator {
         val monthlyStockStdDev = monthlyStdDev(scenario.market.stockStdDev)
         val monthlyBondMean = monthlyEquivalent(scenario.market.bondMeanReturn)
         val monthlyBondStdDev = monthlyStdDev(scenario.market.bondStdDev)
+        val seppEndAgeMonths = max(
+            PENALTY_FREE_WITHDRAWAL_AGE_MONTHS,
+            scenario.household.retirementAge * MONTHS_PER_YEAR + SEPP_MINIMUM_PAYMENT_MONTHS
+        )
+        val annualSeppPayment = if (scenario.withdrawalStrategy.seppEligible) {
+            seppFixedAmortizationAnnualPayment(
+                accountBalance = balances.pretax,
+                age = scenario.household.retirementAge
+            )
+        } else {
+            0.0
+        }
 
         val pathBalances = mutableListOf(balances.total)
         val chartBalances = mutableListOf(balances.total)
@@ -471,17 +573,40 @@ object RetirementSimulator {
             balances.taxable *= 1.0 + portfolioReturn
             balances.cash *= 1.0 + MONTHLY_CASH_RETURN
 
-            val grossWithdrawal = TaxCalculator.grossWithdrawalForNetNeed(
-                netNeed = netNeed * MONTHS_PER_YEAR.toDouble(),
-                annualSocialSecurity = socialSecurity * MONTHS_PER_YEAR.toDouble(),
-                filingStatus = currentFilingStatus,
-                annualOtherTaxableIncome = guaranteedIncome * MONTHS_PER_YEAR.toDouble()
-            ) / MONTHS_PER_YEAR.toDouble()
+            val seppActive = scenario.withdrawalStrategy.seppEligible &&
+                annualSeppPayment > 0.0 &&
+                primaryAgeMonths < seppEndAgeMonths &&
+                balances.pretax > 0.0
+            val seppDistribution = if (seppActive) {
+                val monthlySeppPayment = annualSeppPayment / MONTHS_PER_YEAR.toDouble()
+                val distribution = minOf(balances.pretax, monthlySeppPayment)
+                balances.pretax -= distribution
+                distribution
+            } else {
+                0.0
+            }
+            val annualizedSeppDistribution = seppDistribution * MONTHS_PER_YEAR.toDouble()
+            val annualizedGuaranteedIncome = guaranteedIncome * MONTHS_PER_YEAR.toDouble()
 
-            val portfolioWithdrawal = if (scenario.withdrawalStrategy.useCashReserveDuringDrawdowns &&
+            val useCashReserveForDrawdown = scenario.withdrawalStrategy.useCashReserveDuringDrawdowns &&
                 portfolioReturn < scenario.withdrawalStrategy.drawdownTrigger &&
                 balances.cash > 0.0
-            ) {
+            val withdrawalPlan = planPortfolioWithdrawalForNetNeed(
+                netNeed = annualizedSpending,
+                annualSocialSecurity = socialSecurity * MONTHS_PER_YEAR.toDouble(),
+                filingStatus = currentFilingStatus,
+                annualOtherTaxableIncome = annualizedGuaranteedIncome + annualizedSeppDistribution,
+                balances = balances,
+                useCashFirst = useCashReserveForDrawdown,
+                additionalWithdrawalTaxRate = earlyWithdrawalPenaltyRate(
+                    retirementAge = scenario.household.retirementAge,
+                    primaryAgeMonths = primaryAgeMonths,
+                    withdrawalStrategy = scenario.withdrawalStrategy
+                )
+            )
+            val grossWithdrawal = withdrawalPlan.monthlyGrossWithdrawal
+
+            val portfolioWithdrawal = if (useCashReserveForDrawdown) {
                 val cashDraw = minOf(balances.cash, grossWithdrawal)
                 balances.cash -= cashDraw
                 grossWithdrawal - cashDraw
@@ -489,17 +614,18 @@ object RetirementSimulator {
                 grossWithdrawal
             }.coerceAtLeast(0.0)
             withdrawStandard(portfolioWithdrawal, balances)
+            val monthlyUnspentCash = ((withdrawalPlan.annualNetCash - annualizedSpending) /
+                MONTHS_PER_YEAR.toDouble()).coerceAtLeast(0.0)
+            if (monthlyUnspentCash > BALANCE_EPSILON) {
+                balances.cash += monthlyUnspentCash
+            }
 
-            val annualizedPortfolioWithdrawal = portfolioWithdrawal * MONTHS_PER_YEAR.toDouble()
-            currentAnnualMedicareIncome += portfolioWithdrawal +
+            currentAnnualMedicareIncome += withdrawalPlan.monthlyTaxablePortfolioWithdrawal +
+                seppDistribution +
                 guaranteedIncome +
-                TaxCalculator.taxableSocialSecurity(
-                    otherIncome = annualizedPortfolioWithdrawal + guaranteedIncome * MONTHS_PER_YEAR.toDouble(),
-                    annualSocialSecurity = socialSecurity * MONTHS_PER_YEAR.toDouble(),
-                    filingStatus = currentFilingStatus
-                ) / MONTHS_PER_YEAR.toDouble()
+                withdrawalPlan.annualTaxableSocialSecurity / MONTHS_PER_YEAR.toDouble()
 
-            if (scenario.rothConversion.enabled && monthInYear == 0) {
+            if (scenario.rothConversion.enabled && !seppActive && monthInYear == 0) {
                 val conversionLimit = TaxCalculator.upperBracketLimitForRate(
                     scenario.rothConversion.marginalRateCap,
                     currentFilingStatus
@@ -520,6 +646,7 @@ object RetirementSimulator {
                 remainingMortgageMonths -= 1
             }
 
+            normalizeNearZeroBalance(balances)
             if (balances.total < 0.0 && failureAge == null) {
                 if (!homeSold && monthlyHomeValue > 0.0) {
                     val netHomeEquity = (monthlyHomeValue - remainingMortgageBalance).coerceAtLeast(0.0)
@@ -592,6 +719,96 @@ object RetirementSimulator {
         )
     }
 
+    private fun normalizeNearZeroBalance(balances: SimBalances) {
+        val total = balances.total
+        if (total < 0.0 && total > -BALANCE_EPSILON) {
+            balances.cash -= total
+        }
+    }
+
+    private fun planPortfolioWithdrawalForNetNeed(
+        netNeed: Double,
+        annualSocialSecurity: Double,
+        filingStatus: FilingStatus,
+        annualOtherTaxableIncome: Double,
+        balances: SimBalances,
+        useCashFirst: Boolean,
+        additionalWithdrawalTaxRate: Double
+    ): PortfolioWithdrawalPlan {
+        val additionalRate = additionalWithdrawalTaxRate.coerceAtLeast(0.0)
+
+        fun estimate(annualGrossWithdrawal: Double): PortfolioWithdrawalPlan {
+            val monthlyGrossWithdrawal = annualGrossWithdrawal / MONTHS_PER_YEAR.toDouble()
+            val monthlyTaxablePortfolioWithdrawal = pretaxDrawForMonthlyWithdrawal(
+                monthlyGrossWithdrawal,
+                balances,
+                useCashFirst
+            )
+            val annualTaxablePortfolioWithdrawal =
+                monthlyTaxablePortfolioWithdrawal * MONTHS_PER_YEAR.toDouble()
+            val annualTaxableSocialSecurity = TaxCalculator.taxableSocialSecurity(
+                otherIncome = annualOtherTaxableIncome + annualTaxablePortfolioWithdrawal,
+                annualSocialSecurity = annualSocialSecurity,
+                filingStatus = filingStatus
+            )
+            val tax = TaxCalculator.taxLiability(
+                taxableIncome = annualOtherTaxableIncome +
+                    annualTaxablePortfolioWithdrawal +
+                    annualTaxableSocialSecurity,
+                filingStatus = filingStatus
+            )
+            val additionalWithdrawalTax = annualTaxablePortfolioWithdrawal * additionalRate
+            val annualNetCash = annualSocialSecurity +
+                annualOtherTaxableIncome +
+                annualGrossWithdrawal -
+                tax -
+                additionalWithdrawalTax
+
+            return PortfolioWithdrawalPlan(
+                monthlyGrossWithdrawal = monthlyGrossWithdrawal,
+                monthlyTaxablePortfolioWithdrawal = monthlyTaxablePortfolioWithdrawal,
+                annualTaxableSocialSecurity = annualTaxableSocialSecurity,
+                annualNetCash = annualNetCash
+            )
+        }
+
+        if (estimate(0.0).annualNetCash >= netNeed) {
+            return estimate(0.0)
+        }
+
+        val neededAfterIncome = (netNeed - annualSocialSecurity - annualOtherTaxableIncome)
+            .coerceAtLeast(0.0)
+        var low = 0.0
+        var high = neededAfterIncome * 1.8 + 10_000.0
+        while (estimate(high).annualNetCash < netNeed) {
+            high *= 2.0
+        }
+
+        repeat(40) {
+            val mid = (low + high) / 2.0
+            if (estimate(mid).annualNetCash >= netNeed) {
+                high = mid
+            } else {
+                low = mid
+            }
+        }
+
+        return estimate(high)
+    }
+
+    private fun pretaxDrawForMonthlyWithdrawal(
+        amount: Double,
+        balances: SimBalances,
+        useCashFirst: Boolean
+    ): Double {
+        val amountAfterCash = if (useCashFirst) {
+            (amount - balances.cash).coerceAtLeast(0.0)
+        } else {
+            amount
+        }
+        return minOf(balances.pretax, amountAfterCash.coerceAtLeast(0.0))
+    }
+
     private fun withdrawStandard(amount: Double, balances: SimBalances) {
         var remaining = amount.coerceAtLeast(0.0)
         remaining = drawFromPretax(balances, remaining)
@@ -651,6 +868,43 @@ object RetirementSimulator {
     ): Double {
         val baseSpending = if (replaceBaseSpendingWithLongTermCare) 0.0 else monthlySpending
         return baseSpending + mortgageCost + rentCost + healthcareCost + longTermCareCost
+    }
+
+    internal fun earlyWithdrawalPenaltyRate(
+        retirementAge: Int,
+        primaryAgeMonths: Int,
+        withdrawalStrategy: WithdrawalStrategy
+    ): Double {
+        if (!withdrawalStrategy.applyEarlyWithdrawalPenalty) return 0.0
+        if (primaryAgeMonths >= PENALTY_FREE_WITHDRAWAL_AGE_MONTHS) return 0.0
+        if (
+            withdrawalStrategy.ruleOf55Eligible &&
+            retirementAge >= RULE_OF_55_MINIMUM_RETIREMENT_AGE
+        ) {
+            return 0.0
+        }
+        return EARLY_WITHDRAWAL_PENALTY_RATE
+    }
+
+    internal fun seppFixedAmortizationAnnualPayment(
+        accountBalance: Double,
+        age: Int,
+        interestRate: Double = SEPP_DEFAULT_INTEREST_RATE
+    ): Double {
+        if (accountBalance <= 0.0) return 0.0
+        val years = singleLifeExpectancy(age) ?: return 0.0
+        if (years <= 0.0) return 0.0
+        val rate = interestRate.coerceAtLeast(0.0)
+        val amortizationFactor = if (rate == 0.0) {
+            years
+        } else {
+            (1.0 - (1.0 + rate).pow(-years)) / rate
+        }
+        return accountBalance / amortizationFactor
+    }
+
+    internal fun singleLifeExpectancy(age: Int): Double? {
+        return SINGLE_LIFE_EXPECTANCY_TABLE.getOrNull(age.coerceAtLeast(0))
     }
 
     private fun monthlySocialSecurityBenefit(
@@ -976,6 +1230,9 @@ object RetirementSimulator {
             scenario.rothConversion.marginalRateCap.fingerprintNumber(),
             scenario.withdrawalStrategy.useCashReserveDuringDrawdowns.toString(),
             scenario.withdrawalStrategy.drawdownTrigger.fingerprintNumber(),
+            scenario.withdrawalStrategy.applyEarlyWithdrawalPenalty.toString(),
+            scenario.withdrawalStrategy.ruleOf55Eligible.toString(),
+            scenario.withdrawalStrategy.seppEligible.toString(),
             scenario.longTermCare.enabled.toString(),
             scenario.longTermCare.annualCost.fingerprintNumber(),
             scenario.longTermCare.averageDurationYears.toString(),
@@ -1002,6 +1259,13 @@ object RetirementSimulator {
         val chartBalances: List<Double>
     )
 
+    private data class PortfolioWithdrawalPlan(
+        val monthlyGrossWithdrawal: Double,
+        val monthlyTaxablePortfolioWithdrawal: Double,
+        val annualTaxableSocialSecurity: Double,
+        val annualNetCash: Double
+    )
+
     private data class SimBalances(
         var pretax: Double,
         var roth: Double,
@@ -1014,4 +1278,20 @@ object RetirementSimulator {
         val total: Double
             get() = invested + cash
     }
+
+    private val SINGLE_LIFE_EXPECTANCY_TABLE = doubleArrayOf(
+        84.6, 83.7, 82.8, 81.8, 80.8, 79.8, 78.8, 77.9, 76.9, 75.9,
+        74.9, 73.9, 72.9, 71.9, 70.9, 69.9, 69.0, 68.0, 67.0, 66.0,
+        65.0, 64.1, 63.1, 62.1, 61.1, 60.2, 59.2, 58.2, 57.3, 56.3,
+        55.3, 54.4, 53.4, 52.5, 51.5, 50.5, 49.6, 48.6, 47.7, 46.7,
+        45.7, 44.8, 43.8, 42.9, 41.9, 41.0, 40.0, 39.0, 38.1, 37.1,
+        36.2, 35.3, 34.3, 33.4, 32.5, 31.6, 30.6, 29.8, 28.9, 28.0,
+        27.1, 26.2, 25.4, 24.5, 23.7, 22.9, 22.0, 21.2, 20.4, 19.6,
+        18.8, 18.0, 17.2, 16.4, 15.6, 14.8, 14.1, 13.3, 12.6, 11.9,
+        11.2, 10.5, 9.9, 9.3, 8.7, 8.1, 7.6, 7.1, 6.6, 6.1,
+        5.7, 5.3, 4.9, 4.6, 4.3, 4.0, 3.7, 3.4, 3.2, 3.0,
+        2.8, 2.6, 2.5, 2.3, 2.2, 2.1, 2.1, 2.1, 2.0, 2.0,
+        2.0, 2.0, 2.0, 1.9, 1.9, 1.8, 1.8, 1.6, 1.4, 1.1,
+        1.0
+    )
 }

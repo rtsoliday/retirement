@@ -1,7 +1,7 @@
 package com.retirementreadinesslab.simulation
 
 import com.retirementreadinesslab.model.RetirementScenario
-import kotlin.math.roundToInt
+import kotlin.math.floor
 
 data class RetirementDecisionEstimate(
     val targetReadiness: Double,
@@ -57,9 +57,7 @@ object RetirementOptimizer {
 
         for (age in firstAge..lastAge) {
             val result = runQuick(
-                scenario = scenario.copy(
-                    household = scenario.household.copy(retirementAge = age)
-                ),
+                scenario = scenario.withRetirementAgeForAnalysis(age),
                 simulationCount = simulationCount,
                 seedOffset = 10_000L + age
             )
@@ -93,20 +91,23 @@ object RetirementOptimizer {
             250_000.0
         )
         var low = 0.0
-        var lowReadiness = zeroReadiness
         var high = maxOf(scenario.spending.annualBaseSpending * 1.5, 40_000.0)
             .coerceAtMost(maxSearchSpending)
         var highReadiness = readinessFor(high)
 
         while (highReadiness >= targetReadiness && high < maxSearchSpending) {
             low = high
-            lowReadiness = highReadiness
             high = (high * 1.35).coerceAtMost(maxSearchSpending)
             highReadiness = readinessFor(high)
         }
 
         if (highReadiness >= targetReadiness) {
-            return roundToNearest(high, 500.0) to highReadiness
+            return roundedSafeSpending(
+                safeSpending = high,
+                targetReadiness = targetReadiness,
+                increment = 500.0,
+                readinessFor = ::readinessFor
+            )
         }
 
         repeat(11) { index ->
@@ -114,13 +115,17 @@ object RetirementOptimizer {
             val readiness = readinessFor(mid)
             if (readiness >= targetReadiness) {
                 low = mid
-                lowReadiness = readiness
             } else {
                 high = mid
             }
         }
 
-        return roundToNearest(low, 500.0) to lowReadiness
+        return roundedSafeSpending(
+            safeSpending = low,
+            targetReadiness = targetReadiness,
+            increment = 500.0,
+            readinessFor = ::readinessFor
+        )
     }
 
     private fun runQuick(
@@ -134,7 +139,24 @@ object RetirementOptimizer {
         )
     )
 
-    private fun roundToNearest(value: Double, increment: Double): Double {
-        return (value / increment).roundToInt() * increment
+    private fun roundedSafeSpending(
+        safeSpending: Double,
+        targetReadiness: Double,
+        increment: Double,
+        readinessFor: (Double) -> Double
+    ): Pair<Double, Double> {
+        var candidate = roundDownToIncrement(safeSpending, increment)
+        while (candidate > 0.0) {
+            val readiness = readinessFor(candidate)
+            if (readiness >= targetReadiness) {
+                return candidate to readiness
+            }
+            candidate = (candidate - increment).coerceAtLeast(0.0)
+        }
+        return 0.0 to readinessFor(0.0)
+    }
+
+    private fun roundDownToIncrement(value: Double, increment: Double): Double {
+        return floor(value / increment) * increment
     }
 }

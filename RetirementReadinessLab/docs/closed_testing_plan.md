@@ -8,10 +8,10 @@ Validate that beta users can complete the core retirement planning workflow with
 2. Complete setup or use sample plans.
 3. Run a stress test.
 4. Change at least one assumption.
-5. Compare scenarios.
-6. Use a Lab tool.
+5. Confirm Pro-locked Lab tools are visible in Free.
+6. Use a Lab tool in a Pro-unlocked test build.
 7. Review assumptions.
-8. Export or share a report.
+8. Confirm report sharing is Pro-locked in Free.
 9. Delete local data or restore sample plans.
 
 ## Test Group
@@ -49,20 +49,13 @@ Cover at least:
 - Apply changes and confirm Dashboard readiness changes.
 - Confirm running state is visible.
 
-### Scenarios
-
-- Duplicate the selected scenario.
-- Select a different scenario.
-- Run all scenarios.
-- Delete a duplicated scenario.
-- Restore sample plans.
-
 ### Lab
 
-- Review retirement age sweep.
-- Review spending sweep.
-- Review Social Security timing.
-- Review strategy comparison cards.
+- In Free, confirm retirement age, spending, Social Security, and strategy tools are visible but locked.
+- In a Pro-unlocked test build, review retirement age sweep.
+- In a Pro-unlocked test build, review spending sweep.
+- In a Pro-unlocked test build, review Social Security timing.
+- In a Pro-unlocked test build, review strategy comparison cards.
 - Confirm each takeaway is understandable.
 
 ### Assumptions
@@ -74,12 +67,11 @@ Cover at least:
 
 ### Reports
 
-- Share PDF report.
-- Share text report.
-- Share scenario backup.
-- Share comparison CSV.
-- Paste invalid JSON and confirm a calm error state.
-- Delete local data and confirm sample plans reload.
+- In Free, confirm PDF and text report actions are visible but locked.
+- In a Pro-unlocked test build, share PDF report.
+- In a Pro-unlocked test build, share text report.
+- Confirm JSON backup/import and CSV comparison export are not visible.
+- Delete local data and confirm sample data reloads.
 
 ## Feedback Questions
 
@@ -100,7 +92,7 @@ Closed testing is ready to expand when:
 
 - No crash blocks the core workflow.
 - New testers can get a first result in under five minutes.
-- Scenario duplication, comparison, reports, and delete-local-data controls work.
+- Free/Pro locks, report sharing, and delete-local-data controls work.
 - No screen has obvious text overlap at large font settings.
 - Reports include assumptions, provenance, privacy note, and disclaimer.
 - Testers understand the app is educational and not advice.

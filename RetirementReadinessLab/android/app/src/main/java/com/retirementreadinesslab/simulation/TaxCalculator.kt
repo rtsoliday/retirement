@@ -56,8 +56,13 @@ object TaxCalculator {
         netNeed: Double,
         annualSocialSecurity: Double,
         filingStatus: FilingStatus,
-        annualOtherTaxableIncome: Double = 0.0
+        annualOtherTaxableIncome: Double = 0.0,
+        additionalWithdrawalTaxRate: Double = 0.0,
+        additionalWithdrawalTaxableLimit: Double = Double.POSITIVE_INFINITY
     ): Double {
+        val additionalRate = additionalWithdrawalTaxRate.coerceAtLeast(0.0)
+        val additionalTaxableLimit = additionalWithdrawalTaxableLimit.coerceAtLeast(0.0)
+
         fun netCashFrom(withdrawal: Double): Double {
             val taxableSocialSecurity = taxableSocialSecurity(
                 otherIncome = annualOtherTaxableIncome + withdrawal,
@@ -68,7 +73,8 @@ object TaxCalculator {
                 taxableIncome = annualOtherTaxableIncome + withdrawal + taxableSocialSecurity,
                 filingStatus = filingStatus
             )
-            return withdrawal + annualOtherTaxableIncome + annualSocialSecurity - tax
+            val additionalWithdrawalTax = minOf(withdrawal, additionalTaxableLimit) * additionalRate
+            return withdrawal + annualOtherTaxableIncome + annualSocialSecurity - tax - additionalWithdrawalTax
         }
 
         if (netCashFrom(0.0) >= netNeed) return 0.0
@@ -76,6 +82,9 @@ object TaxCalculator {
         val neededAfterGuaranteedIncome = (netNeed - annualSocialSecurity - annualOtherTaxableIncome).coerceAtLeast(0.0)
         var low = 0.0
         var high = neededAfterGuaranteedIncome * 1.8 + 10_000.0
+        while (netCashFrom(high) < netNeed) {
+            high *= 2.0
+        }
 
         repeat(40) {
             val mid = (low + high) / 2.0

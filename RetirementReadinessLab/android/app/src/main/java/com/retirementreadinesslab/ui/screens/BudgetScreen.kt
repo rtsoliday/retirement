@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Button
@@ -32,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.retirementreadinesslab.model.BudgetLineItem
 import com.retirementreadinesslab.model.BudgetProfile
@@ -115,7 +118,7 @@ fun BudgetScreen(state: RetirementLabState) {
                 )
                 CategoryEditor(
                     title = "Monthly bills from checking or savings",
-                    subtitle = "Exclude credit card, mortgage, and rent payments.",
+                    subtitle = "Exclude credit card, mortgage, rent, and insurance payments.",
                     items = selectedMonthBudget.checkingSavingsBills,
                     addButtonTag = "add-checking-bill-button",
                     onItemsChange = { updatedItems ->
@@ -238,23 +241,37 @@ private fun MonthSelector(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        OutlinedButton(onClick = onPrevious, modifier = Modifier.weight(1f)) {
-            Text("Previous")
+        IconButton(
+            onClick = onPrevious,
+            modifier = Modifier
+                .width(48.dp)
+                .testTag("budget-previous-month-button")
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Previous month"
+            )
         }
         Text(
             text = monthLabel(month),
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
             modifier = Modifier
-                .weight(1.3f)
+                .weight(1f)
                 .testTag("budget-month-label")
         )
-        OutlinedButton(
+        IconButton(
             onClick = onNext,
             enabled = canMoveForward,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .width(48.dp)
+                .testTag("budget-next-month-button")
         ) {
-            Text("Next")
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = "Next month"
+            )
         }
     }
 }

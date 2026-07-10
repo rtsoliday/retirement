@@ -17,17 +17,17 @@
 - First launch flow works.
 - Setup can produce a runnable scenario.
 - Dashboard updates after assumptions change.
-- Lab analysis runs without blocking the UI.
-- Scenario duplicate, select, compare, delete, and restore controls work.
-- Reports export PDF, text, CSV, and JSON backup.
-- Import rejects invalid JSON with a calm error.
-- Delete Local Data reloads sample plans.
+- Lab analysis is Pro-gated in Free and runs without blocking the UI in a Pro-unlocked test build.
+- Scenario duplicate, select, compare, delete, and restore controls remain hidden for the first release.
+- Reports show PDF and text report actions as Pro-locked when Pro is not unlocked.
+- JSON backup/import remains hidden for the first release.
+- Delete Local Data reloads sample data without removing Pro entitlement.
 
 ## Simulation Checks
 
 - Unit tests pass.
-- 1,000-simulation performance profile passes.
-- 10,000-simulation manual profile completes on representative hardware.
+- Free 500-simulation runs complete quickly on representative hardware.
+- Pro 10,000-simulation manual profile completes on representative hardware.
 - Calculation provenance appears in Results and reports.
 - Reports include assumption warnings.
 - Monthly cashflow model docs match the app.

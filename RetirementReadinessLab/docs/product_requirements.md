@@ -20,24 +20,36 @@ As a late-career household planner, I want to enter my savings, spending, Social
 
 1. Complete guided setup.
 2. View readiness dashboard.
-3. Adjust a scenario.
-4. Compare scenarios.
-5. Run Lab stress tests.
-6. Review assumptions.
-7. Export a summary.
+3. Adjust the active plan.
+4. Run Lab stress tests.
+5. Review assumptions.
+6. Export a summary in Pro.
+
+Deferred after first release:
+
+- Visible scenario management and scenario comparison.
 
 ## MVP Functional Requirements
 
-- Create a scenario locally.
-- Save multiple scenarios locally.
+- Create one active plan locally.
+- Keep scenario management hidden for the first release.
 - Run Monte Carlo simulation on-device.
 - Show success probability.
 - Show median, pessimistic, and optimistic ending balances.
 - Show failure age estimate when failures occur.
-- Compare at least three scenarios.
-- Run quick Lab tests for retirement age, spending, Social Security, Roth conversion, healthcare, and long-term care.
+- Run quick Lab tests for retirement age, spending, Social Security, Roth conversion, healthcare, and long-term care in Pro.
 - Show all assumptions behind the result.
 - Avoid bank linking and cloud sync.
+
+## First-Release Packaging
+
+- Free download with a one-time Pro unlock.
+- Free runs are capped at 500 simulations.
+- Pro unlocks Scenario Lab, advanced setup controls, higher simulation counts, and PDF/text report sharing.
+- Scenario management and comparison stay hidden for both Free and Pro in the first release.
+- Cash reserve drawdown strategy controls stay hidden for both Free and Pro in the first release.
+- JSON backup/import stays hidden for both Free and Pro in the first release.
+- Other currently hidden feature flags should remain hidden for the first release.
 
 ## Non-Functional Requirements
 

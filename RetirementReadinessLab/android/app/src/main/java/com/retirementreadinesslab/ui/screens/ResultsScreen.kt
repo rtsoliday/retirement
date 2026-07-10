@@ -25,6 +25,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.retirementreadinesslab.model.FailureAgeBucket
+import com.retirementreadinesslab.model.forFeatureAccess
 import com.retirementreadinesslab.simulation.ResultInsights
 import com.retirementreadinesslab.model.SimulationResult
 import com.retirementreadinesslab.state.RetirementLabState
@@ -42,7 +43,7 @@ import com.retirementreadinesslab.ui.theme.LabPrimary
 
 @Composable
 fun ResultsScreen(state: RetirementLabState) {
-    val scenario = state.selectedScenario
+    val scenario = state.selectedScenario.forFeatureAccess(state.featureAccess)
     val result = state.selectedResult
 
     LazyColumn(
@@ -85,7 +86,7 @@ fun ResultsScreen(state: RetirementLabState) {
                 )
                 MetricCard(
                     title = "Median failure",
-                    value = result.medianFailureAge?.toString() ?: "N/A",
+                    value = result.medianFailureAge?.let { "Age $it" } ?: "N/A",
                     detail = "Only failed runs",
                     icon = Icons.Filled.HourglassBottom,
                     modifier = Modifier.weight(1f)

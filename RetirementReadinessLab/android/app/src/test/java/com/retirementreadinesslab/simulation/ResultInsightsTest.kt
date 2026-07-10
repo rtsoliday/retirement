@@ -27,12 +27,13 @@ class ResultInsightsTest {
         assertTrue(insight.title.contains("Durable"))
         assertTrue(insight.summary.contains("Primary modeled pressure"))
         assertTrue(insight.bullets.any { it.contains("Median ending balance") })
-        assertTrue(insight.bullets.any { it.contains("pre-Medicare years") })
+        assertTrue(insight.bullets.any { it.contains("Medicare Parts B/D premiums") })
     }
 
     @Test
     fun stressedScenarioGetsAtRiskInterpretation() {
         val scenario = sampleBaseScenario().copy(
+            accounts = AccountBalances(pretax = 180_000.0, roth = 20_000.0, taxable = 0.0, cash = 15_000.0),
             spending = sampleBaseScenario().spending.copy(annualBaseSpending = 140_000.0),
             numberOfSimulations = 80
         )

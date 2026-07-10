@@ -15,6 +15,7 @@ class ScenarioRepository(private val context: Context) {
     private val scenariosKey = stringPreferencesKey("scenarios_json")
     private val selectedScenarioKey = stringPreferencesKey("selected_scenario_id")
     private val firstLaunchCompleteKey = booleanPreferencesKey("first_launch_complete")
+    private val proUnlockedKey = booleanPreferencesKey("pro_unlocked")
 
     suspend fun loadState(): ScenarioStoreState {
         val preferences = context.scenarioDataStore.data.first()
@@ -30,7 +31,8 @@ class ScenarioRepository(private val context: Context) {
         return ScenarioStoreState(
             scenarios = scenarios,
             selectedScenarioId = selectedId,
-            hasCompletedFirstLaunch = hasCompletedFirstLaunch
+            hasCompletedFirstLaunch = hasCompletedFirstLaunch,
+            isProUnlocked = preferences[proUnlockedKey] ?: false
         )
     }
 
@@ -43,7 +45,11 @@ class ScenarioRepository(private val context: Context) {
 
     suspend fun clearState() {
         context.scenarioDataStore.edit { preferences ->
+            val proUnlocked = preferences[proUnlockedKey] ?: false
             preferences.clear()
+            if (proUnlocked) {
+                preferences[proUnlockedKey] = true
+            }
         }
     }
 
@@ -52,10 +58,17 @@ class ScenarioRepository(private val context: Context) {
             preferences[firstLaunchCompleteKey] = value
         }
     }
+
+    suspend fun setProUnlocked(value: Boolean) {
+        context.scenarioDataStore.edit { preferences ->
+            preferences[proUnlockedKey] = value
+        }
+    }
 }
 
 data class ScenarioStoreState(
     val scenarios: List<RetirementScenario>,
     val selectedScenarioId: String,
-    val hasCompletedFirstLaunch: Boolean
+    val hasCompletedFirstLaunch: Boolean,
+    val isProUnlocked: Boolean
 )

@@ -19,7 +19,7 @@ This folder currently contains:
 - Kotlin domain models and local scenario persistence.
 - A monthly Monte Carlo simulation engine with deterministic seeds and calculation provenance.
 - Jetpack Compose screens for Dashboard, Setup, Scenarios, Lab, Assumptions, Results, Welcome, and Reports.
-- PDF/text/CSV/JSON export paths.
+- PDF/text report export paths, with JSON backup/import hidden for the first release.
 - App icon, splash branding, privacy/disclaimer copy, and release-prep documentation.
 - Unit tests, Compose instrumentation test compilation, and a simulator performance profile.
 

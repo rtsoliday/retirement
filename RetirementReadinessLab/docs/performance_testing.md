@@ -16,7 +16,7 @@ Manual release profile:
 - A 10,000-simulation test is included but ignored by default.
 - Use it before release on representative hardware or an emulator profile that resembles a mid-range Android device.
 - The goal is to confirm the simulator remains responsive when run from background dispatchers and does not change the public result contract.
-- Comparison CSV export runs fresh scenario simulations on a background dispatcher and shows an in-app preparing state before opening the share sheet.
+- CSV comparison export is deferred for the first release.
 
 ## Commands
 
@@ -42,4 +42,4 @@ Performance should be checked again after any change to:
 - Tax gross-up calculations.
 - Lab sweeps or optimizer loops.
 - Result path collection.
-- Scenario comparison batch runs.
+- Scenario Lab sweeps or future scenario comparison batch runs.

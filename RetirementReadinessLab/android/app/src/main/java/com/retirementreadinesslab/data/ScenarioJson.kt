@@ -106,7 +106,10 @@ object ScenarioJson {
                 .put("marginalRateCap", scenario.rothConversion.marginalRateCap))
             .put("withdrawalStrategy", JSONObject()
                 .put("useCashReserveDuringDrawdowns", scenario.withdrawalStrategy.useCashReserveDuringDrawdowns)
-                .put("drawdownTrigger", scenario.withdrawalStrategy.drawdownTrigger))
+                .put("drawdownTrigger", scenario.withdrawalStrategy.drawdownTrigger)
+                .put("applyEarlyWithdrawalPenalty", scenario.withdrawalStrategy.applyEarlyWithdrawalPenalty)
+                .put("ruleOf55Eligible", scenario.withdrawalStrategy.ruleOf55Eligible)
+                .put("seppEligible", scenario.withdrawalStrategy.seppEligible))
             .put("longTermCare", JSONObject()
                 .put("enabled", scenario.longTermCare.enabled)
                 .put("annualCost", scenario.longTermCare.annualCost)
@@ -132,12 +135,15 @@ object ScenarioJson {
         val withdrawalStrategy = json.optJSONObject("withdrawalStrategy") ?: JSONObject()
         val longTermCare = json.optJSONObject("longTermCare") ?: JSONObject()
 
+        val retirementAge = household.optInt("retirementAge", 60)
+        val defaultWithdrawalStrategy = WithdrawalStrategy.defaultsForRetirementAge(retirementAge)
+
         return RetirementScenario(
             id = json.optString("id", "scenario-${System.currentTimeMillis()}"),
             name = json.optString("name", "Saved scenario"),
             household = HouseholdProfile(
                 currentAge = household.optInt("currentAge", 50),
-                retirementAge = household.optInt("retirementAge", 60),
+                retirementAge = retirementAge,
                 targetEndAge = DEFAULT_PROJECTION_END_AGE,
                 filingStatus = enumOrDefault(household.optString("filingStatus"), FilingStatus.Single),
                 gender = enumOrDefault(household.optString("gender"), Gender.Male),
@@ -212,8 +218,20 @@ object ScenarioJson {
                 marginalRateCap = rothConversion.optDouble("marginalRateCap", 0.22)
             ),
             withdrawalStrategy = WithdrawalStrategy(
-                useCashReserveDuringDrawdowns = withdrawalStrategy.optBoolean("useCashReserveDuringDrawdowns", true),
-                drawdownTrigger = withdrawalStrategy.optDouble("drawdownTrigger", -0.01)
+                useCashReserveDuringDrawdowns = false,
+                drawdownTrigger = withdrawalStrategy.optDouble("drawdownTrigger", -0.01),
+                applyEarlyWithdrawalPenalty = withdrawalStrategy.optBoolean(
+                    "applyEarlyWithdrawalPenalty",
+                    defaultWithdrawalStrategy.applyEarlyWithdrawalPenalty
+                ),
+                ruleOf55Eligible = withdrawalStrategy.optBoolean(
+                    "ruleOf55Eligible",
+                    defaultWithdrawalStrategy.ruleOf55Eligible
+                ),
+                seppEligible = withdrawalStrategy.optBoolean(
+                    "seppEligible",
+                    defaultWithdrawalStrategy.seppEligible
+                )
             ),
             longTermCare = LongTermCareAssumption(
                 enabled = longTermCare.optBoolean("enabled", false),

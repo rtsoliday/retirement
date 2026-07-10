@@ -36,6 +36,48 @@ class TaxCalculatorTest {
     }
 
     @Test
+    fun grossWithdrawalIncludesAdditionalWithdrawalTaxRate() {
+        val withoutPenalty = TaxCalculator.grossWithdrawalForNetNeed(
+            netNeed = 75_000.0,
+            annualSocialSecurity = 0.0,
+            filingStatus = FilingStatus.Single
+        )
+        val withPenalty = TaxCalculator.grossWithdrawalForNetNeed(
+            netNeed = 75_000.0,
+            annualSocialSecurity = 0.0,
+            filingStatus = FilingStatus.Single,
+            additionalWithdrawalTaxRate = 0.10
+        )
+
+        assertTrue(withPenalty > withoutPenalty)
+    }
+
+    @Test
+    fun additionalWithdrawalTaxCanBeLimitedToTaxableDistributionAmount() {
+        val withoutPenalty = TaxCalculator.grossWithdrawalForNetNeed(
+            netNeed = 75_000.0,
+            annualSocialSecurity = 0.0,
+            filingStatus = FilingStatus.Single
+        )
+        val withLimitedPenalty = TaxCalculator.grossWithdrawalForNetNeed(
+            netNeed = 75_000.0,
+            annualSocialSecurity = 0.0,
+            filingStatus = FilingStatus.Single,
+            additionalWithdrawalTaxRate = 0.10,
+            additionalWithdrawalTaxableLimit = 1_000.0
+        )
+        val withFullPenalty = TaxCalculator.grossWithdrawalForNetNeed(
+            netNeed = 75_000.0,
+            annualSocialSecurity = 0.0,
+            filingStatus = FilingStatus.Single,
+            additionalWithdrawalTaxRate = 0.10
+        )
+
+        assertTrue(withLimitedPenalty > withoutPenalty)
+        assertTrue(withLimitedPenalty < withFullPenalty)
+    }
+
+    @Test
     fun otherTaxableIncomeCanCoverNetNeedBeforePortfolioWithdrawal() {
         val gross = TaxCalculator.grossWithdrawalForNetNeed(
             netNeed = 10_000.0,

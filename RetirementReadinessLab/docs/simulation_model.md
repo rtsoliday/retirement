@@ -12,6 +12,9 @@ Current behavior:
 - Post-retirement stock/bond allocation selected from a tunable invested-assets-to-annual-spending ladder.
 - Inflation sampled from normal distribution with a floor.
 - Federal tax estimate using 2024 brackets.
+- Optional 10% early withdrawal tax on modeled pre-tax withdrawals before age 59 1/2.
+- Optional Rule of 55 assumption for qualifying employer-plan pre-tax withdrawals after retiring at 55 or later.
+- Optional 72(t) / SEPP fixed amortization schedule from modeled pre-tax assets, using IRS single-life expectancy factors and a 5% interest assumption.
 - Social Security claiming adjustment.
 - Taxable Social Security estimate.
 - SSA Trustees Alt2 2025 annual death probabilities selected by gender, with an internal projection cap at age 119.

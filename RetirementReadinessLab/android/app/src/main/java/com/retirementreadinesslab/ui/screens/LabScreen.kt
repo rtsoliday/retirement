@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -37,12 +38,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.retirementreadinesslab.model.PostRetirementAllocationStrategy
 import com.retirementreadinesslab.model.PostRetirementAllocationTier
@@ -57,6 +60,8 @@ import com.retirementreadinesslab.simulation.ScenarioLabAnalyzer
 import com.retirementreadinesslab.state.RetirementLabState
 import com.retirementreadinesslab.ui.asCompactCurrency
 import com.retirementreadinesslab.ui.asPercent
+import com.retirementreadinesslab.ui.findActivity
+import com.retirementreadinesslab.ui.components.ProLockedCard
 import com.retirementreadinesslab.ui.components.SectionHeader
 import com.retirementreadinesslab.ui.theme.LabCaution
 import com.retirementreadinesslab.ui.theme.LabMutedText
@@ -69,6 +74,7 @@ private const val SHOW_POST_RETIREMENT_ALLOCATION_LAB = false
 
 @Composable
 fun LabScreen(state: RetirementLabState) {
+    val activity = LocalContext.current.findActivity()
     val analysis = state.selectedLabAnalysis
     val isPending = state.isAnalyzingLab && analysis == null
 
@@ -86,6 +92,83 @@ fun LabScreen(state: RetirementLabState) {
             )
         }
 
+        if (!state.isProUnlocked) {
+            state.storageMessage?.let { message ->
+                item {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))) {
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                }
+            }
+            item {
+                ProLockedCard(
+                    title = "Scenario Lab is Pro",
+                    detail = "Unlock Pro to compare retirement age, spending, Social Security, tax, healthcare, market, and mortgage decisions.",
+                    actionLabel = if (state.isPurchasingPro) "Opening Google Play..." else "Unlock Pro",
+                    actionEnabled = state.supportsUserPurchases && !state.isPurchasingPro,
+                    onAction = if (state.supportsUserPurchases) {
+                        { state.purchasePro(activity) }
+                    } else {
+                        null
+                    }
+                )
+            }
+            item {
+                SectionHeader(
+                    title = "Target finders",
+                    subtitle = "Available with Pro."
+                )
+            }
+            item {
+                ProLockedCard(
+                    title = "Earliest retirement age",
+                    detail = "Find the first retirement age that clears the modeled readiness target."
+                )
+            }
+            item {
+                ProLockedCard(
+                    title = "Safe annual spending",
+                    detail = "Estimate the highest annual spending level that clears the modeled readiness target."
+                )
+            }
+            item {
+                SectionHeader(
+                    title = "Decision sweeps",
+                    subtitle = "Available with Pro."
+                )
+            }
+            listOf(
+                "Retirement age sweep" to "Tests earlier and later start dates.",
+                "Spending flexibility" to "Tests small annual spending changes.",
+                "Social Security timing" to "Compares claim age tradeoffs."
+            ).forEach { (title, detail) ->
+                item {
+                    ProLockedCard(title = title, detail = detail)
+                }
+            }
+            item {
+                SectionHeader(
+                    title = "Strategy checks",
+                    subtitle = "Available with Pro."
+                )
+            }
+            listOf(
+                "Roth conversion comparison" to "Tests conversion assumptions against the active plan.",
+                "Long-term care stress" to "Adds or removes a late-life care shock.",
+                "Healthcare inflation stress" to "Tests higher medical cost growth.",
+                "Market downturn stress" to "Tests lower returns and wider swings.",
+                "Mortgage payoff test" to "Compares retirement cash flow with and without mortgage payments."
+            ).forEach { (title, detail) ->
+                item {
+                    ProLockedCard(title = title, detail = detail)
+                }
+            }
+        } else {
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                 Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -174,6 +257,7 @@ fun LabScreen(state: RetirementLabState) {
                     LabComparisonCard(comparison)
                 }
             }
+        }
         }
     }
 }
@@ -367,7 +451,10 @@ private fun LabSweepCard(sweep: LabSweepAnalysis) {
                 }
             }
             sweep.rows.forEach { row ->
-                SweepResultRow(row)
+                SweepResultRow(
+                    row = row,
+                    showBalanceAndFailure = false
+                )
             }
             Text(sweep.takeaway, style = MaterialTheme.typography.bodyMedium, color = LabMutedText)
         }
@@ -375,7 +462,7 @@ private fun LabSweepCard(sweep: LabSweepAnalysis) {
 }
 
 @Composable
-private fun SweepResultRow(row: LabSweepRowAnalysis) {
+private fun SweepResultRow(row: LabSweepRowAnalysis, showBalanceAndFailure: Boolean) {
     val color = readinessColor(row.readiness)
     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Row(
@@ -394,7 +481,9 @@ private fun SweepResultRow(row: LabSweepRowAnalysis) {
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(row.readiness.asPercent(), style = MaterialTheme.typography.labelLarge, color = color, fontWeight = FontWeight.SemiBold)
-                Text(row.medianEndingBalance.asCompactCurrency(), style = MaterialTheme.typography.labelSmall, color = LabMutedText)
+                if (showBalanceAndFailure) {
+                    Text(row.medianEndingBalance.asCompactCurrency(), style = MaterialTheme.typography.labelSmall, color = LabMutedText)
+                }
             }
         }
         Row(
@@ -408,7 +497,11 @@ private fun SweepResultRow(row: LabSweepRowAnalysis) {
                     .height(9.dp)
                     .testTag("lab-sweep-readiness-${row.label.accessibilityTagSuffix()}")
                     .semantics {
-                        contentDescription = "Lab sweep ${row.label}: ${row.readiness.asPercent()} readiness, ${row.failureLabel}"
+                        contentDescription = if (showBalanceAndFailure) {
+                            "Lab sweep ${row.label}: ${row.readiness.asPercent()} readiness, ${row.failureLabel}"
+                        } else {
+                            "Lab sweep ${row.label}: ${row.readiness.asPercent()} readiness"
+                        }
                         progressBarRangeInfo = ProgressBarRangeInfo(
                             current = row.readiness.toFloat().coerceIn(0f, 1f),
                             range = 0f..1f
@@ -423,7 +516,9 @@ private fun SweepResultRow(row: LabSweepRowAnalysis) {
                         .background(color, RoundedCornerShape(8.dp))
                 )
             }
-            Text(row.failureLabel, style = MaterialTheme.typography.labelSmall, color = LabMutedText, modifier = Modifier.width(76.dp))
+            if (showBalanceAndFailure) {
+                Text(row.failureLabel, style = MaterialTheme.typography.labelSmall, color = LabMutedText, modifier = Modifier.width(76.dp))
+            }
         }
     }
 }
@@ -434,17 +529,29 @@ private fun LabComparisonCard(comparison: LabComparisonAnalysis) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Icon(comparison.type.icon(), contentDescription = null, tint = LabPrimary)
-                    Column {
-                        Text(comparison.type.title(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Text(comparison.type.subtitle(), style = MaterialTheme.typography.bodySmall, color = LabMutedText)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(comparison.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(comparison.subtitle, style = MaterialTheme.typography.bodySmall, color = LabMutedText)
                     }
                 }
-                Text(signedPercent(comparison.readinessDelta), style = MaterialTheme.typography.titleMedium, color = deltaColor(comparison.readinessDelta))
+                Text(
+                    signedPercent(comparison.readinessDelta),
+                    modifier = Modifier.widthIn(min = 64.dp),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = deltaColor(comparison.readinessDelta),
+                    textAlign = TextAlign.End,
+                    maxLines = 1,
+                    softWrap = false
+                )
             }
             Text(comparison.takeaway, style = MaterialTheme.typography.bodyMedium, color = LabMutedText)
         }
@@ -522,37 +629,8 @@ private fun LabSweepType.icon(): ImageVector {
     }
 }
 
-private fun LabComparisonType.title(): String {
-    return when (this) {
-        LabComparisonType.RetireLater -> "Retire two years later"
-        LabComparisonType.SpendLess -> "Spend 5% less"
-        LabComparisonType.ClaimLater -> "Claim Social Security at 70"
-        LabComparisonType.RothConversion -> "Enable Roth conversions"
-        LabComparisonType.LongTermCare -> "Add long-term care risk"
-        LabComparisonType.HealthcareInflation -> "Stress healthcare inflation"
-        LabComparisonType.MarketDownturn -> "Stress lower returns"
-        LabComparisonType.MortgagePayoff -> "Remove mortgage payment"
-    }
-}
-
-private fun LabComparisonType.subtitle(): String {
-    return when (this) {
-        LabComparisonType.RetireLater -> "More compounding, fewer drawdown years"
-        LabComparisonType.SpendLess -> "Lower annual base spending"
-        LabComparisonType.ClaimLater -> "Higher benefit, longer bridge period"
-        LabComparisonType.RothConversion -> "Fill the 22% bracket after retirement"
-        LabComparisonType.LongTermCare -> "Late-life care shock"
-        LabComparisonType.HealthcareInflation -> "Higher medical cost growth"
-        LabComparisonType.MarketDownturn -> "Lower expected returns, wider swings"
-        LabComparisonType.MortgagePayoff -> "Tests retirement cash flow without mortgage payments"
-    }
-}
-
 private fun LabComparisonType.icon(): ImageVector {
     return when (this) {
-        LabComparisonType.RetireLater -> Icons.Filled.Schedule
-        LabComparisonType.SpendLess -> Icons.Filled.Savings
-        LabComparisonType.ClaimLater -> Icons.Filled.Security
         LabComparisonType.RothConversion -> Icons.Filled.Toll
         LabComparisonType.LongTermCare -> Icons.Filled.HealthAndSafety
         LabComparisonType.HealthcareInflation -> Icons.Filled.HealthAndSafety

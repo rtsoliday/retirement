@@ -1,5 +1,6 @@
 package com.retirementreadinesslab.state
 
+import android.app.Activity
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -16,10 +17,15 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.retirementreadinesslab.data.ScenarioJson
 import com.retirementreadinesslab.data.ScenarioRepository
+import com.retirementreadinesslab.entitlements.DefaultEntitlementProvider
+import com.retirementreadinesslab.entitlements.ProEntitlement
+import com.retirementreadinesslab.entitlements.ProEntitlementProvider
 import com.retirementreadinesslab.model.BudgetProfile
+import com.retirementreadinesslab.model.FeatureAccess
 import com.retirementreadinesslab.model.PostRetirementAllocationStrategy
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.SimulationResult
+import com.retirementreadinesslab.model.forFeatureAccess
 import com.retirementreadinesslab.model.sampleScenarios
 import com.retirementreadinesslab.model.validate
 import com.retirementreadinesslab.simulation.RetirementDecisionEstimate
@@ -35,6 +41,7 @@ import java.util.Locale
 
 class RetirementLabState(
     private val repository: ScenarioRepository,
+    private val entitlementProvider: ProEntitlementProvider,
     private val scope: CoroutineScope,
     initialScenarios: List<RetirementScenario>
 ) {
@@ -63,6 +70,12 @@ class RetirementLabState(
     var isOptimizingPostRetirementAllocation by mutableStateOf(false)
         private set
 
+    var isPurchasingPro by mutableStateOf(false)
+        private set
+
+    var isRestoringPro by mutableStateOf(false)
+        private set
+
     var storageMessage by mutableStateOf<String?>(null)
         private set
 
@@ -71,6 +84,21 @@ class RetirementLabState(
 
     var hasCompletedFirstLaunch by mutableStateOf(false)
         private set
+
+    var isProUnlocked by mutableStateOf(false)
+        private set
+
+    val featureAccess: FeatureAccess
+        get() = FeatureAccess(isProUnlocked = isProUnlocked)
+
+    val entitlementProviderName: String
+        get() = entitlementProvider.providerName
+
+    val hasDeveloperEntitlementControls: Boolean
+        get() = entitlementProvider.allowsDeveloperOverrides
+
+    val supportsUserPurchases: Boolean
+        get() = entitlementProvider.supportsUserPurchases
 
     val selectedScenario: RetirementScenario
         get() = scenarios.firstOrNull { it.id == selectedScenarioId } ?: scenarios.first()
@@ -96,6 +124,15 @@ class RetirementLabState(
             scenarios.addAll(stored.scenarios)
             selectedScenarioId = stored.selectedScenarioId
             hasCompletedFirstLaunch = stored.hasCompletedFirstLaunch
+            val entitlement = entitlementProvider.currentEntitlement(stored.isProUnlocked)
+            isProUnlocked = entitlement.isProUnlocked
+            if (entitlement.shouldPersist && entitlement.isProUnlocked != stored.isProUnlocked) {
+                runCatching {
+                    repository.setProUnlocked(entitlement.isProUnlocked)
+                }.onFailure {
+                    storageMessage = "Pro unlock could not be saved locally."
+                }
+            }
             results.clear()
             labAnalyses.clear()
             allocationOptimizations.clear()
@@ -148,6 +185,10 @@ class RetirementLabState(
     }
 
     fun optimizeSelectedPostRetirementAllocation(startingAllocation: PostRetirementAllocationStrategy) {
+        if (!isProUnlocked) {
+            storageMessage = "Post-retirement allocation optimization requires Pro."
+            return
+        }
         val index = scenarios.indexOfFirst { it.id == selectedScenarioId }
         if (index < 0) return
 
@@ -265,22 +306,125 @@ class RetirementLabState(
         runScenarioAsync(selectedScenarioId)
     }
 
+    fun applyVerifiedProUnlock() {
+        applyProEntitlement(
+            entitlement = ProEntitlement(
+                isProUnlocked = true,
+                message = "Pro unlock restored."
+            ),
+            persist = true
+        )
+    }
+
+    fun purchasePro(activity: Activity?) {
+        if (activity == null) {
+            storageMessage = "Pro purchase could not start from this screen."
+            return
+        }
+        if (!entitlementProvider.supportsUserPurchases) {
+            storageMessage = "Pro purchase is not available in this build."
+            return
+        }
+        if (isPurchasingPro) return
+
+        isPurchasingPro = true
+        storageMessage = "Opening Google Play purchase..."
+        scope.launch {
+            val entitlement = runCatching {
+                entitlementProvider.purchasePro(
+                    activity = activity,
+                    storedLocalUnlock = isProUnlocked
+                )
+            }.getOrElse {
+                ProEntitlement(
+                    isProUnlocked = isProUnlocked,
+                    message = "Pro purchase failed: ${it.message ?: "unknown error"}",
+                    shouldPersist = false
+                )
+            }
+            applyProEntitlement(entitlement, persist = true)
+            isPurchasingPro = false
+        }
+    }
+
+    fun restoreProPurchase() {
+        if (!entitlementProvider.supportsUserPurchases) {
+            storageMessage = "Restore purchase is not available in this build."
+            return
+        }
+        if (isRestoringPro) return
+
+        isRestoringPro = true
+        storageMessage = "Checking Google Play purchase..."
+        scope.launch {
+            val entitlement = runCatching {
+                entitlementProvider.currentEntitlement(isProUnlocked)
+            }.getOrElse {
+                ProEntitlement(
+                    isProUnlocked = isProUnlocked,
+                    message = "Pro purchase could not be checked: ${it.message ?: "unknown error"}",
+                    shouldPersist = false
+                )
+            }
+            val withMessage = if (entitlement.message == null) {
+                entitlement.copy(
+                    message = if (entitlement.isProUnlocked) {
+                        "Pro purchase restored."
+                    } else {
+                        "No Pro purchase was found for this Google Play account."
+                    }
+                )
+            } else {
+                entitlement
+            }
+            applyProEntitlement(withMessage, persist = true)
+            isRestoringPro = false
+        }
+    }
+
+    fun unlockProWithPromoCode(activity: Activity?, promoCode: String) {
+        if (!entitlementProvider.allowsDeveloperOverrides && !entitlementProvider.supportsUserPurchases) {
+            storageMessage = "Promo code unlock is not available in this build."
+            return
+        }
+        scope.launch {
+            val entitlement = entitlementProvider.redeemPromoCode(
+                activity = activity,
+                promoCode = promoCode,
+                storedLocalUnlock = isProUnlocked
+            )
+            applyProEntitlement(entitlement, persist = true)
+        }
+    }
+
+    fun setDeveloperProUnlocked(isUnlocked: Boolean) {
+        if (!entitlementProvider.allowsDeveloperOverrides) return
+        scope.launch {
+            val entitlement = entitlementProvider.setDeveloperOverride(
+                isProUnlocked = isUnlocked,
+                storedLocalUnlock = isProUnlocked
+            )
+            applyProEntitlement(entitlement, persist = true)
+        }
+    }
+
     private fun runScenarioAsync(id: String) {
         val scenario = scenarios.firstOrNull { it.id == id } ?: return
+        val runnableScenario = scenario.forFeatureAccess(featureAccess)
         val requestId = ++scenarioRunId
         isRunning = true
         lastRunMessage = "Running stress test..."
         scope.launch {
             val run = runCatching {
                 withContext(Dispatchers.Default) {
-                    RetirementSimulator.run(scenario)
+                    RetirementSimulator.run(runnableScenario)
                 }
             }
             run.onSuccess { result ->
                 val stillCurrent = scenarios.firstOrNull { it.id == id } == scenario
                 if (stillCurrent && requestId == scenarioRunId) {
                     results[id] = result
-                    lastRunMessage = buildRunMessage(scenario, result)
+                    lastRunMessage = buildRunMessage(runnableScenario, result)
                 }
             }.onFailure {
                 if (requestId == scenarioRunId) {
@@ -294,13 +438,19 @@ class RetirementLabState(
     }
 
     private fun runLabAnalysisAsync(id: String) {
+        if (!isProUnlocked) {
+            labAnalyses.remove(id)
+            isAnalyzingLab = false
+            return
+        }
         val scenario = scenarios.firstOrNull { it.id == id } ?: return
+        val runnableScenario = scenario.forFeatureAccess(featureAccess)
         val requestId = ++labAnalysisRunId
         isAnalyzingLab = id == selectedScenarioId
         scope.launch {
             val run = runCatching {
                 withContext(Dispatchers.Default) {
-                    ScenarioLabAnalyzer.analyze(scenario)
+                    ScenarioLabAnalyzer.analyze(runnableScenario)
                 }
             }
             run.onSuccess { analysis ->
@@ -330,6 +480,30 @@ class RetirementLabState(
         return "Investment ratio test complete: best quick estimate $best readiness ($delta pts)."
     }
 
+    private fun applyProEntitlement(entitlement: ProEntitlement, persist: Boolean) {
+        val changed = isProUnlocked != entitlement.isProUnlocked
+        isProUnlocked = entitlement.isProUnlocked
+        entitlement.message?.let { storageMessage = it }
+        if (!isProUnlocked) {
+            labAnalyses.clear()
+            allocationOptimizations.clear()
+        }
+        if (changed) {
+            results.remove(selectedScenarioId)
+            runScenarioAsync(selectedScenarioId)
+            runLabAnalysisAsync(selectedScenarioId)
+        }
+        if (persist && entitlement.shouldPersist) {
+            scope.launch {
+                runCatching {
+                    repository.setProUnlocked(entitlement.isProUnlocked)
+                }.onFailure {
+                    storageMessage = "Pro unlock could not be saved locally."
+                }
+            }
+        }
+    }
+
     private fun persist() {
         val snapshot = scenarios.toList()
         val selectedId = selectedScenarioId
@@ -346,6 +520,7 @@ class RetirementLabState(
 private class RetirementLabViewModel(applicationContext: Context) : ViewModel() {
     val state = RetirementLabState(
         repository = ScenarioRepository(applicationContext),
+        entitlementProvider = DefaultEntitlementProvider(applicationContext),
         scope = viewModelScope,
         initialScenarios = sampleScenarios()
     )

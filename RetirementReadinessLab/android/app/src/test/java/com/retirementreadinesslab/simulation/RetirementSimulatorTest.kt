@@ -2,6 +2,7 @@ package com.retirementreadinesslab.simulation
 
 import com.retirementreadinesslab.model.AccountBalances
 import com.retirementreadinesslab.model.DEFAULT_PROJECTION_END_AGE
+import com.retirementreadinesslab.model.EARLY_WITHDRAWAL_PENALTY_RATE
 import com.retirementreadinesslab.model.FilingStatus
 import com.retirementreadinesslab.model.Gender
 import com.retirementreadinesslab.model.GuaranteedIncomePlan
@@ -13,11 +14,13 @@ import com.retirementreadinesslab.model.MortgagePlan
 import com.retirementreadinesslab.model.PostRetirementAllocationStrategy
 import com.retirementreadinesslab.model.RentPlan
 import com.retirementreadinesslab.model.RetirementScenario
+import com.retirementreadinesslab.model.RothConversionStrategy
 import com.retirementreadinesslab.model.SocialSecurityPlan
 import com.retirementreadinesslab.model.SpendingPlan
 import com.retirementreadinesslab.model.SpendingPathModel
 import com.retirementreadinesslab.model.WithdrawalStrategy
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Random
@@ -32,7 +35,7 @@ class RetirementSimulatorTest {
 
         assertEquals(first.successProbability, second.successProbability, 0.0001)
         assertEquals(first.medianEndingBalance, second.medianEndingBalance, 0.01)
-        assertEquals("2026.06-allocation-lab", first.provenance.engineVersion)
+        assertEquals("2026.06-sepp", first.provenance.engineVersion)
         assertEquals("Monthly cashflow model with annual result bands", first.provenance.engineCadence)
         assertEquals("2024 federal brackets", first.provenance.taxTableVersion)
         assertEquals(
@@ -71,6 +74,132 @@ class RetirementSimulatorTest {
         assertTrue(result.failureAgeBuckets.sumOf { it.count } > 0)
         assertTrue(result.notFailedByAge.isNotEmpty())
         assertTrue(result.notFailedByAge.last().notFailedShare < 0.10)
+    }
+
+    @Test
+    fun fundingThresholdUsesMedianFailedBalanceFromFirstFullWindowWhenFailureLimitReachedEarly() {
+        val threshold = RetirementSimulator.fundingThresholdFromCurrentRun(
+            retirementStartOutcomes = (0 until 65).map { index ->
+                (160_000.0 - index * 1_000.0) to (index !in setOf(0, 10, 20))
+            }
+        )
+
+        requireNotNull(threshold)
+        assertEquals(150_000.0, threshold.balance, 0.01)
+        assertEquals(0.95, threshold.observedReadiness, 0.0001)
+        assertEquals(60, threshold.includedSimulationCount)
+        assertEquals(65, threshold.totalSimulationCount)
+    }
+
+    @Test
+    fun fundingThresholdUsesRollingSixtyPointWindow() {
+        val threshold = RetirementSimulator.fundingThresholdFromCurrentRun(
+            retirementStartOutcomes = (0 until 70).map { index ->
+                (200_000.0 - index * 1_000.0) to (index !in setOf(60, 61, 62))
+            }
+        )
+
+        requireNotNull(threshold)
+        assertEquals(139_000.0, threshold.balance, 0.01)
+        assertEquals(0.95, threshold.observedReadiness, 0.0001)
+        assertEquals(60, threshold.includedSimulationCount)
+        assertEquals(70, threshold.totalSimulationCount)
+    }
+
+    @Test
+    fun fundingThresholdReturnsNullWithFewerThanSixtyPaths() {
+        val threshold = RetirementSimulator.fundingThresholdFromCurrentRun(
+            retirementStartOutcomes = (0 until 20).map { index ->
+                (100_000.0 - index * 1_000.0) to (index != 19)
+            }
+        )
+
+        assertNull(threshold)
+    }
+
+    @Test
+    fun fundingThresholdReturnsNullWhenFirstWindowHasFewerThanFiftySevenSuccesses() {
+        val threshold = RetirementSimulator.fundingThresholdFromCurrentRun(
+            retirementStartOutcomes = (0 until 70).map { index ->
+                (200_000.0 - index * 1_000.0) to (index !in setOf(0, 10, 20, 30))
+            }
+        )
+
+        assertNull(threshold)
+    }
+
+    @Test
+    fun fundingThresholdReturnsNullWhenWindowNeverReachesFailureLimit() {
+        val threshold = RetirementSimulator.fundingThresholdFromCurrentRun(
+            retirementStartOutcomes = (0 until 70).map { index ->
+                (100_000.0 - index * 1_000.0) to true
+            }
+        )
+
+        assertNull(threshold)
+    }
+
+    @Test
+    fun fundingThresholdReturnsNullWhenReachedWindowHasNoFailures() {
+        val threshold = RetirementSimulator.fundingThresholdFromCurrentRun(
+            retirementStartOutcomes = listOf(
+                0.0 to true,
+                0.0 to true
+            ),
+            targetReadiness = 1.0
+        )
+
+        assertNull(threshold)
+    }
+
+    @Test
+    fun afterTaxAccountWithdrawalsAreNotGrossedUpAsOrdinaryIncome() {
+        val base = sampleScenario().copy(
+            household = HouseholdProfile(currentAge = 40, retirementAge = 40, targetEndAge = 41),
+            spending = SpendingPlan(
+                annualBaseSpending = 12_000.0,
+                generalInflationMean = 0.0,
+                generalInflationStdDev = 0.0,
+                spendingPathModel = SpendingPathModel.Flat,
+                lowPortfolioSpendingReduction = 0.0
+            ),
+            healthcare = HealthcarePlan(preMedicareMonthlyPremium = 0.0, includeMedicarePremiums = false),
+            socialSecurity = SocialSecurityPlan(annualBenefitAt67 = 0.0, claimAge = 67),
+            guaranteedIncome = GuaranteedIncomePlan(annualIncome = 0.0),
+            market = MarketAssumptions(
+                preRetirementMeanReturn = 0.0,
+                preRetirementStdDev = 0.0,
+                stockMeanReturn = 0.0,
+                stockStdDev = 0.0,
+                bondMeanReturn = 0.0,
+                bondStdDev = 0.0
+            ),
+            withdrawalStrategy = WithdrawalStrategy(
+                applyEarlyWithdrawalPenalty = true,
+                ruleOf55Eligible = false,
+                seppEligible = false
+            ),
+            numberOfSimulations = 1,
+            seed = 7L
+        )
+
+        val roth = RetirementSimulator.run(
+            base.copy(accounts = AccountBalances(pretax = 0.0, roth = 12_000.0, taxable = 0.0, cash = 0.0))
+        )
+        val taxable = RetirementSimulator.run(
+            base.copy(accounts = AccountBalances(pretax = 0.0, roth = 0.0, taxable = 12_000.0, cash = 0.0))
+        )
+        val cash = RetirementSimulator.run(
+            base.copy(accounts = AccountBalances(pretax = 0.0, roth = 0.0, taxable = 0.0, cash = 12_000.0))
+        )
+        val pretax = RetirementSimulator.run(
+            base.copy(accounts = AccountBalances(pretax = 12_000.0, roth = 0.0, taxable = 0.0, cash = 0.0))
+        )
+
+        assertEquals(1.0, roth.successProbability, 0.0001)
+        assertEquals(1.0, taxable.successProbability, 0.0001)
+        assertEquals(1.0, cash.successProbability, 0.0001)
+        assertEquals(0.0, pretax.successProbability, 0.0001)
     }
 
     @Test
@@ -336,6 +465,136 @@ class RetirementSimulatorTest {
     }
 
     @Test
+    fun earlyWithdrawalPenaltyAppliesBeforeAge59AndAHalfUnlessRuleOf55Applies() {
+        val strategy = WithdrawalStrategy(applyEarlyWithdrawalPenalty = true)
+        val ruleOf55Strategy = strategy.copy(ruleOf55Eligible = true)
+
+        assertEquals(
+            EARLY_WITHDRAWAL_PENALTY_RATE,
+            RetirementSimulator.earlyWithdrawalPenaltyRate(
+                retirementAge = 54,
+                primaryAgeMonths = 54 * 12,
+                withdrawalStrategy = strategy
+            ),
+            0.0001
+        )
+        assertEquals(
+            0.0,
+            RetirementSimulator.earlyWithdrawalPenaltyRate(
+                retirementAge = 55,
+                primaryAgeMonths = 55 * 12,
+                withdrawalStrategy = ruleOf55Strategy
+            ),
+            0.0001
+        )
+        assertEquals(
+            0.0,
+            RetirementSimulator.earlyWithdrawalPenaltyRate(
+                retirementAge = 59,
+                primaryAgeMonths = 59 * 12 + 6,
+                withdrawalStrategy = strategy
+            ),
+            0.0001
+        )
+    }
+
+    @Test
+    fun seppFixedAmortizationMatchesIrsExample() {
+        assertEquals(36.2, RetirementSimulator.singleLifeExpectancy(50) ?: 0.0, 0.01)
+
+        val payment = RetirementSimulator.seppFixedAmortizationAnnualPayment(
+            accountBalance = 400_000.0,
+            age = 50,
+            interestRate = 0.04
+        )
+
+        assertEquals(21_102.0, payment, 1.0)
+    }
+
+    @Test
+    fun seppScheduleReducesEarlyWithdrawalPenaltyPressure() {
+        val base = sampleScenario().copy(
+            household = HouseholdProfile(currentAge = 50, retirementAge = 50, targetEndAge = 51),
+            accounts = AccountBalances(pretax = 100_000.0, roth = 0.0, taxable = 0.0, cash = 0.0),
+            spending = SpendingPlan(
+                annualBaseSpending = 12_000.0,
+                generalInflationMean = 0.0,
+                generalInflationStdDev = 0.0,
+                spendingPathModel = SpendingPathModel.Flat,
+                lowPortfolioSpendingReduction = 0.0
+            ),
+            healthcare = HealthcarePlan(preMedicareMonthlyPremium = 0.0, includeMedicarePremiums = false),
+            socialSecurity = SocialSecurityPlan(annualBenefitAt67 = 0.0, claimAge = 67),
+            market = MarketAssumptions(
+                preRetirementMeanReturn = 0.0,
+                preRetirementStdDev = 0.0,
+                stockMeanReturn = 0.0,
+                stockStdDev = 0.0,
+                bondMeanReturn = 0.0,
+                bondStdDev = 0.0
+            ),
+            rothConversion = RothConversionStrategy(enabled = false),
+            withdrawalStrategy = WithdrawalStrategy(
+                applyEarlyWithdrawalPenalty = true,
+                ruleOf55Eligible = false,
+                seppEligible = false
+            ),
+            numberOfSimulations = 1,
+            seed = 40L
+        )
+        val withSepp = base.copy(
+            withdrawalStrategy = base.withdrawalStrategy.copy(seppEligible = true)
+        )
+
+        val withoutSeppResult = RetirementSimulator.run(base)
+        val withSeppResult = RetirementSimulator.run(withSepp)
+
+        assertTrue(withSeppResult.medianEndingBalance > withoutSeppResult.medianEndingBalance)
+    }
+
+    @Test
+    fun seppIncomeAboveSpendingNeedIsRetainedAsCash() {
+        val base = sampleScenario().copy(
+            household = HouseholdProfile(currentAge = 50, retirementAge = 50, targetEndAge = 51),
+            accounts = AccountBalances(pretax = 400_000.0, roth = 0.0, taxable = 0.0, cash = 0.0),
+            spending = SpendingPlan(
+                annualBaseSpending = 1_000.0,
+                generalInflationMean = 0.0,
+                generalInflationStdDev = 0.0,
+                spendingPathModel = SpendingPathModel.Flat,
+                lowPortfolioSpendingReduction = 0.0
+            ),
+            healthcare = HealthcarePlan(preMedicareMonthlyPremium = 0.0, includeMedicarePremiums = false),
+            socialSecurity = SocialSecurityPlan(annualBenefitAt67 = 0.0, claimAge = 67),
+            guaranteedIncome = GuaranteedIncomePlan(annualIncome = 0.0),
+            market = MarketAssumptions(
+                preRetirementMeanReturn = 0.0,
+                preRetirementStdDev = 0.0,
+                stockMeanReturn = 0.0,
+                stockStdDev = 0.0,
+                bondMeanReturn = 0.0,
+                bondStdDev = 0.0
+            ),
+            rothConversion = RothConversionStrategy(enabled = false),
+            withdrawalStrategy = WithdrawalStrategy(
+                applyEarlyWithdrawalPenalty = true,
+                ruleOf55Eligible = false,
+                seppEligible = true
+            ),
+            numberOfSimulations = 1,
+            seed = 41L
+        )
+        val higherSpending = base.copy(
+            spending = base.spending.copy(annualBaseSpending = 20_000.0)
+        )
+
+        val lowSpendingResult = RetirementSimulator.run(base)
+        val higherSpendingResult = RetirementSimulator.run(higherSpending)
+
+        assertTrue(lowSpendingResult.medianEndingBalance > higherSpendingResult.medianEndingBalance + 10_000.0)
+    }
+
+    @Test
     fun rentIsModeledAsSeparateRetirementHousingCost() {
         val withoutRent = sampleScenario().copy(
             household = HouseholdProfile(currentAge = 65, retirementAge = 65, targetEndAge = 80),
@@ -369,7 +628,7 @@ class RetirementSimulatorTest {
     fun mortgageMonthsLeftAffectRemainingPaymentDuration() {
         val fiveMonthsLeft = sampleScenario().copy(
             household = HouseholdProfile(currentAge = 40, retirementAge = 40, targetEndAge = 41),
-            accounts = AccountBalances(pretax = 0.0, roth = 0.0, taxable = 0.0, cash = 6_000.0),
+            accounts = AccountBalances(pretax = 0.0, roth = 0.0, taxable = 0.0, cash = 5_500.0),
             spending = SpendingPlan(
                 annualBaseSpending = 0.0,
                 generalInflationMean = 0.0,

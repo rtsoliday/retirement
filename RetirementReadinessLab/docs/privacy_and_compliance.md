@@ -32,7 +32,8 @@ These values are sensitive financial planning data even if they are manually ent
 ## Implemented In-App Controls
 
 - The Reports screen includes a Privacy and disclosures card.
-- The Reports screen has explicit PDF, text, JSON backup, and CSV share actions.
+- The Reports screen has PDF and text report actions gated behind Pro.
+- JSON backup/import and CSV comparison export remain hidden for the first release.
 - The Reports screen includes a two-step local data deletion flow.
 - Generated text/PDF reports include a privacy note and educational-use disclaimer.
 - Assumptions and Reports use the same centralized disclaimer text from the Android app source.
