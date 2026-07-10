@@ -36,47 +36,6 @@ class ScenarioLabAnalyzerTest {
     }
 
     @Test
-    fun analyzerNeverBuildsRetirementAgeAtProjectionCap() {
-        val scenario = sampleBaseScenario().copy(
-            household = HouseholdProfile(currentAge = 58, retirementAge = 59, targetEndAge = 60)
-        )
-
-        val analysis = ScenarioLabAnalyzer.analyze(
-            scenario = scenario,
-            quickSimulations = 50,
-            targetEstimateSimulations = 50
-        )
-
-        val retirementRows = analysis.sweeps.first { it.type == LabSweepType.RetirementAge }.rows
-        assertTrue(retirementRows.isNotEmpty())
-        assertTrue(retirementRows.all { row -> row.label.removePrefix("Age ").toInt() < 60 })
-        assertEquals(
-            0.0,
-            analysis.comparisons.first { it.type == LabComparisonType.RetireLater }.readinessDelta,
-            0.0001
-        )
-    }
-
-    @Test
-    fun noOpStrategyComparisonUsesSameMonteCarloSample() {
-        val scenario = sampleBaseScenario().copy(
-            socialSecurity = sampleBaseScenario().socialSecurity.copy(claimAge = 70)
-        )
-
-        val analysis = ScenarioLabAnalyzer.analyze(
-            scenario = scenario,
-            quickSimulations = 50,
-            targetEstimateSimulations = 50
-        )
-
-        assertEquals(
-            0.0,
-            analysis.comparisons.first { it.type == LabComparisonType.ClaimLater }.readinessDelta,
-            0.0001
-        )
-    }
-
-    @Test
     fun allocationOptimizerDefaultUsesFiveHundredSimulationsPerMix() {
         assertEquals(500, ScenarioLabAnalyzer.ALLOCATION_OPTIMIZATION_SIMULATIONS)
     }

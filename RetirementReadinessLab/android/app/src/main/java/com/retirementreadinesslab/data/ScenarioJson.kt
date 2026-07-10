@@ -40,15 +40,9 @@ object ScenarioJson {
     fun decodeScenarios(raw: String): List<RetirementScenario> {
         if (raw.isBlank()) return emptyList()
         val array = JSONArray(raw)
-        val fallbackIdPrefix = System.currentTimeMillis()
         return buildList {
             for (index in 0 until array.length()) {
-                add(
-                    decodeScenario(
-                        json = array.getJSONObject(index),
-                        fallbackId = "scenario-$fallbackIdPrefix-$index"
-                    )
-                )
+                add(decodeScenario(array.getJSONObject(index)))
             }
         }
     }
@@ -121,7 +115,7 @@ object ScenarioJson {
             .put("seed", scenario.seed)
     }
 
-    private fun decodeScenario(json: JSONObject, fallbackId: String): RetirementScenario {
+    private fun decodeScenario(json: JSONObject): RetirementScenario {
         val household = json.getJSONObject("household")
         val accounts = json.getJSONObject("accounts")
         val spending = json.getJSONObject("spending")
@@ -139,7 +133,7 @@ object ScenarioJson {
         val longTermCare = json.optJSONObject("longTermCare") ?: JSONObject()
 
         return RetirementScenario(
-            id = json.optString("id").takeIf { it.isNotBlank() } ?: fallbackId,
+            id = json.optString("id", "scenario-${System.currentTimeMillis()}"),
             name = json.optString("name", "Saved scenario"),
             household = HouseholdProfile(
                 currentAge = household.optInt("currentAge", 50),

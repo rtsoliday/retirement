@@ -4,7 +4,6 @@ import com.retirementreadinesslab.model.Gender
 
 object MortalityTables {
     const val TABLE_VERSION = "SSA Trustees Alt2 2025 annual death probabilities"
-    const val MAX_SUPPORTED_AGE = 119
 
     private val male2025 = doubleArrayOf(
         0.005556, 0.000435, 0.000251, 0.000207, 0.000170, 0.000144, 0.000128, 0.000119, 0.000116, 0.000117,

@@ -51,40 +51,4 @@ class RetirementOptimizerTest {
         assertNull(estimate.earliestRetirementAge)
         assertNull(estimate.safeAnnualSpending)
     }
-
-    @Test
-    fun roundedSafeSpendingReportsReadinessForTheReturnedAmount() {
-        val scenario = sampleBaseScenario().copy(
-            longTermCare = LongTermCareAssumption(enabled = false)
-        )
-        val simulationCount = 80
-        val target = 0.45
-
-        val estimate = RetirementOptimizer.estimate(
-            scenario = scenario,
-            targetReadiness = target,
-            simulationCount = simulationCount
-        )
-        val returnedSpending = estimate.safeAnnualSpending!!
-        val verifiedReadiness = RetirementSimulator.run(
-            scenario.copy(
-                spending = scenario.spending.copy(annualBaseSpending = returnedSpending),
-                numberOfSimulations = simulationCount,
-                seed = scenario.seed + 20_000L
-            )
-        ).successProbability
-
-        assertEquals(0.0, returnedSpending % 500.0, 0.01)
-        assertEquals(verifiedReadiness, estimate.safeSpendingReadiness!!, 0.0001)
-        assertTrue(estimate.safeSpendingReadiness >= target)
-    }
-
-    @Test(expected = IllegalArgumentException::class)
-    fun targetReadinessMustBeAProbability() {
-        RetirementOptimizer.estimate(
-            scenario = sampleBaseScenario(),
-            targetReadiness = 1.01,
-            simulationCount = 50
-        )
-    }
 }

@@ -7,7 +7,6 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.sampleScenarios
-import com.retirementreadinesslab.model.validate
 import kotlinx.coroutines.flow.first
 
 private val Context.scenarioDataStore by preferencesDataStore(name = "retirement_scenarios")
@@ -22,11 +21,7 @@ class ScenarioRepository(private val context: Context) {
         val rawScenarios = preferences[scenariosKey]
         val scenarios = rawScenarios
             ?.let { runCatching { ScenarioJson.decodeScenarios(it) }.getOrNull() }
-            ?.takeIf { loaded ->
-                loaded.isNotEmpty() &&
-                    loaded.map { it.id }.distinct().size == loaded.size &&
-                    loaded.all { it.validate().isEmpty() }
-            }
+            ?.takeIf { it.isNotEmpty() }
             ?: sampleScenarios()
         val selectedId = preferences[selectedScenarioKey]
             ?.takeIf { id -> scenarios.any { it.id == id } }

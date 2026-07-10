@@ -127,9 +127,6 @@ class RetirementLabState(
             scenarios[index] = updated
             results.remove(updated.id)
             labAnalyses.remove(updated.id)
-            allocationOptimizations.remove(updated.id)
-            allocationOptimizationRunId += 1
-            isOptimizingPostRetirementAllocation = false
             lastRunMessage = "Changes applied. Running stress test..."
             runScenarioAsync(updated.id)
             runLabAnalysisAsync(updated.id)
@@ -144,10 +141,7 @@ class RetirementLabState(
             val updated = current.copy(postRetirementAllocation = allocation)
             scenarios[index] = updated
             results.remove(updated.id)
-            labAnalyses.remove(updated.id)
             allocationOptimizations.remove(updated.id)
-            allocationOptimizationRunId += 1
-            isOptimizingPostRetirementAllocation = false
             lastRunMessage = "Investment ratios saved. Run a stress test to update readiness."
             persist()
         }
@@ -160,7 +154,6 @@ class RetirementLabState(
         val startingScenario = scenarios[index].copy(postRetirementAllocation = startingAllocation)
         scenarios[index] = startingScenario
         results.remove(startingScenario.id)
-        labAnalyses.remove(startingScenario.id)
         allocationOptimizations.remove(startingScenario.id)
         lastRunMessage = "Testing investment ratios..."
         persist()
@@ -176,12 +169,11 @@ class RetirementLabState(
             run.onSuccess { optimization ->
                 val currentIndex = scenarios.indexOfFirst { it.id == startingScenario.id }
                 val current = scenarios.getOrNull(currentIndex)
-                val unchangedDuringRun = current == startingScenario
+                val unchangedDuringRun = current?.postRetirementAllocation == startingAllocation
                 if (current != null && unchangedDuringRun && requestId == allocationOptimizationRunId) {
                     val updated = current.copy(postRetirementAllocation = optimization.recommendedAllocation)
                     scenarios[currentIndex] = updated
                     results.remove(updated.id)
-                    labAnalyses.remove(updated.id)
                     allocationOptimizations[updated.id] = optimization
                     lastRunMessage = buildAllocationOptimizationMessage(optimization)
                     persist()
@@ -198,9 +190,12 @@ class RetirementLabState(
     }
 
     fun saveSelectedBudget(budget: BudgetProfile) {
-        if (scenarios.any { it.id == selectedScenarioId }) {
-            updateSelected { scenario -> scenario.copy(budget = budget) }
+        val index = scenarios.indexOfFirst { it.id == selectedScenarioId }
+        if (index >= 0) {
+            val current = scenarios[index]
+            scenarios[index] = current.copy(budget = budget)
             storageMessage = "Budget saved."
+            persist()
         }
     }
 
@@ -225,8 +220,6 @@ class RetirementLabState(
         results.clear()
         labAnalyses.clear()
         allocationOptimizations.clear()
-        allocationOptimizationRunId += 1
-        isOptimizingPostRetirementAllocation = false
         storageMessage = "Local saved data deleted. Sample data is loaded."
         runScenarioAsync(selectedScenarioId)
         runLabAnalysisAsync(selectedScenarioId)
@@ -250,14 +243,6 @@ class RetirementLabState(
             return "Backup did not contain any scenarios."
         }
 
-        val duplicateId = imported.groupingBy { it.id }.eachCount()
-            .entries
-            .firstOrNull { it.value > 1 }
-            ?.key
-        if (duplicateId != null) {
-            return "Backup contains duplicate scenario IDs: $duplicateId."
-        }
-
         val invalidScenario = imported.firstOrNull { it.validate().isNotEmpty() }
         if (invalidScenario != null) {
             return "Backup contains an invalid scenario: ${invalidScenario.name}."
@@ -269,8 +254,6 @@ class RetirementLabState(
         results.clear()
         labAnalyses.clear()
         allocationOptimizations.clear()
-        allocationOptimizationRunId += 1
-        isOptimizingPostRetirementAllocation = false
         runScenarioAsync(selectedScenarioId)
         runLabAnalysisAsync(selectedScenarioId)
         storageMessage = "Imported ${scenarios.size} scenario${if (scenarios.size == 1) "" else "s"}."

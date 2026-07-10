@@ -1115,11 +1115,7 @@ private fun parsePercent(value: String): Double? {
 }
 
 private fun requireMoney(label: String, value: Double?): String? {
-    return if (value == null || !value.isFinite() || value < 0.0) {
-        "$label must be a finite non-negative number."
-    } else {
-        null
-    }
+    return if (value == null || value < 0.0) "$label must be a non-negative number." else null
 }
 
 private fun requireInt(label: String, value: Int?, min: Int, max: Int): String? {

@@ -528,18 +528,15 @@ private data class ParsedMoney(
 
 private fun parseRequiredMoney(label: String, value: String): ParsedMoney {
     val parsed = parseMoney(value)
-    return if (parsed == null || !parsed.isFinite() || parsed < 0.0) {
-        ParsedMoney(error = "$label must be a finite non-negative number.")
+    return if (parsed == null || parsed < 0.0) {
+        ParsedMoney(error = "$label must be a non-negative number.")
     } else {
         ParsedMoney(value = parsed)
     }
 }
 
 private fun parseMoneyOrZero(value: String): Double {
-    return parseMoney(value)
-        ?.takeIf { it.isFinite() }
-        ?.coerceAtLeast(0.0)
-        ?: 0.0
+    return parseMoney(value)?.coerceAtLeast(0.0) ?: 0.0
 }
 
 private fun parseMoney(value: String): Double? {

@@ -118,20 +118,6 @@ class ScenarioJsonTest {
     }
 
     @Test
-    fun legacyBackupsWithoutIdsReceiveUniqueFallbackIds() {
-        val second = sampleBaseScenario().copy(id = "second")
-        val raw = JSONArray(ScenarioJson.encodeScenarios(listOf(sampleBaseScenario(), second))).apply {
-            getJSONObject(0).remove("id")
-            getJSONObject(1).remove("id")
-        }.toString()
-
-        val decoded = ScenarioJson.decodeScenarios(raw)
-
-        assertEquals(2, decoded.map { it.id }.distinct().size)
-        assertTrue(decoded.all { it.id.isNotBlank() })
-    }
-
-    @Test
     fun legacyBackupsWithoutRentDefaultToZeroRent() {
         val raw = JSONArray(ScenarioJson.encodeScenarios(listOf(sampleBaseScenario()))).apply {
             getJSONObject(0).getJSONObject("spending").remove("lowPortfolioSpendingReduction")

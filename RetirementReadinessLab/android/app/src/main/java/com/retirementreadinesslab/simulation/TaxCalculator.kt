@@ -2,11 +2,6 @@ package com.retirementreadinesslab.simulation
 
 import com.retirementreadinesslab.model.FilingStatus
 
-internal data class RothConversionPlan(
-    val conversionAmount: Double,
-    val additionalTax: Double
-)
-
 object TaxCalculator {
     private val rates = listOf(0.10, 0.12, 0.22, 0.24, 0.32, 0.35, 0.37)
 
@@ -97,37 +92,6 @@ object TaxCalculator {
         val index = rates.indexOfFirst { kotlin.math.abs(it - rateCap) < 0.0001 }
         if (index < 0) return null
         return bracketsFor(filingStatus).getOrNull(index + 1)
-    }
-
-    internal fun rothConversionPlan(
-        pretaxBalance: Double,
-        currentTaxableIncome: Double,
-        rateCap: Double,
-        filingStatus: FilingStatus
-    ): RothConversionPlan {
-        val availablePretax = pretaxBalance.coerceAtLeast(0.0)
-        if (availablePretax <= 0.0) return RothConversionPlan(0.0, 0.0)
-
-        val rateIndex = rates.indexOfFirst { kotlin.math.abs(it - rateCap) < 0.0001 }
-        if (rateIndex < 0) return RothConversionPlan(0.0, 0.0)
-
-        val taxableIncome = currentTaxableIncome.coerceAtLeast(0.0)
-        val upperLimit = bracketsFor(filingStatus).getOrNull(rateIndex + 1)
-        val conversion = if (upperLimit == null) {
-            availablePretax
-        } else {
-            minOf(availablePretax, (upperLimit - taxableIncome).coerceAtLeast(0.0))
-        }
-        if (conversion <= 0.0) return RothConversionPlan(0.0, 0.0)
-
-        val additionalTax = (
-            taxLiability(taxableIncome + conversion, filingStatus) -
-                taxLiability(taxableIncome, filingStatus)
-        ).coerceAtLeast(0.0)
-        return RothConversionPlan(
-            conversionAmount = conversion,
-            additionalTax = additionalTax
-        )
     }
 
     private fun bracketsFor(filingStatus: FilingStatus): List<Double> {
