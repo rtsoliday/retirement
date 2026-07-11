@@ -15,7 +15,7 @@ Current behavior:
 - Optional 10% early withdrawal tax on modeled pre-tax withdrawals before age 59 1/2.
 - Optional Rule of 55 assumption for qualifying employer-plan pre-tax withdrawals after retiring at 55 or later.
 - Optional 72(t) / SEPP fixed amortization schedule from modeled pre-tax assets, using IRS single-life expectancy factors and a 5% interest assumption.
-- Social Security claiming adjustment.
+- Social Security claiming adjustment, including survivor delayed-retirement credits and the widow(er)'s benefit limit after an early worker claim.
 - Annual Social Security COLA approximation with no nominal benefit reduction in deflation years.
 - Taxable Social Security estimate.
 - SSA Trustees Alt2 2025 annual death probabilities selected by gender, with an internal projection cap at age 119.

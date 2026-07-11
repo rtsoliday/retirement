@@ -31,7 +31,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 object RetirementSimulator {
-    private const val ENGINE_VERSION = "2026.07-logic-audit"
+    private const val ENGINE_VERSION = "2026.07-survivor-rules"
     private const val ENGINE_CADENCE = "Monthly cashflow model with annual result bands"
     private const val TAX_TABLE_VERSION = "Inflation-indexed 2026 federal brackets and standard deduction"
     private val MORTALITY_MODEL_VERSION = MortalityTables.TABLE_VERSION
@@ -368,11 +368,6 @@ object RetirementSimulator {
             primaryBirthYear,
             scenario.socialSecurity.claimAge * MONTHS_PER_YEAR
         )
-        val primarySurvivorBaseFactor = if (primaryDeathAge <= scenario.socialSecurity.claimAge) {
-            1.0
-        } else {
-            primaryBenefitFactor
-        }
         val spouseSpousalClaimAgeMonths = actualSpousalClaimAgeMonths(
             scenario = scenario,
             spouseAgeAtRetirement = spouseAgeAtRetirement
@@ -386,7 +381,10 @@ object RetirementSimulator {
             spouseBirthYear = spouseBirthYear,
             spouseClaimAgeMonths = spouseSpousalClaimAgeMonths
         )
-        val spouseSurvivorBenefitFactor = SocialSecurity.survivorBenefitFactor(
+        val combinedSurvivorBenefitFactor = SocialSecurity.combinedSurvivorBenefitFactor(
+            workerBirthYear = primaryBirthYear,
+            workerClaimAgeMonths = scenario.socialSecurity.claimAge * MONTHS_PER_YEAR,
+            workerDeathAgeMonths = primaryDeathAge * MONTHS_PER_YEAR,
             spouseBirthYear = spouseBirthYear,
             survivorClaimAgeMonths = spouseSurvivorClaimAgeMonths
         )
@@ -529,11 +527,10 @@ object RetirementSimulator {
                 primaryAgeMonths = primaryAgeMonths,
                 spouseAgeMonths = spouseAgeMonths,
                 primaryBenefitFactor = primaryBenefitFactor,
-                primarySurvivorBaseFactor = primarySurvivorBaseFactor,
                 spouseSpousalClaimAgeMonths = spouseSpousalClaimAgeMonths,
                 spouseSpousalBenefitFactor = spouseSpousalBenefitFactor,
                 spouseSurvivorClaimAgeMonths = spouseSurvivorClaimAgeMonths,
-                spouseSurvivorBenefitFactor = spouseSurvivorBenefitFactor,
+                combinedSurvivorBenefitFactor = combinedSurvivorBenefitFactor,
                 inflationMultiplier = socialSecurityInflationMultiplier
             )
             val guaranteedIncome = if (age >= scenario.guaranteedIncome.startAge && alivePeople > 0) {
@@ -976,11 +973,10 @@ object RetirementSimulator {
         primaryAgeMonths: Int,
         spouseAgeMonths: Int,
         primaryBenefitFactor: Double,
-        primarySurvivorBaseFactor: Double,
         spouseSpousalClaimAgeMonths: Int,
         spouseSpousalBenefitFactor: Double,
         spouseSurvivorClaimAgeMonths: Int,
-        spouseSurvivorBenefitFactor: Double,
+        combinedSurvivorBenefitFactor: Double,
         inflationMultiplier: Double
     ): Double {
         val primaryPiaMonthly = scenario.socialSecurity.annualBenefitAt67 /
@@ -1005,8 +1001,7 @@ object RetirementSimulator {
         } else {
             if (spouseAgeMonths >= spouseSurvivorClaimAgeMonths) {
                 monthlyBenefit += primaryPiaMonthly *
-                    primarySurvivorBaseFactor *
-                    spouseSurvivorBenefitFactor
+                    combinedSurvivorBenefitFactor
             }
         }
 

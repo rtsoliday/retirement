@@ -54,7 +54,7 @@ class ReportBuilderTest {
         assertTrue(report.contains("Next useful test:"))
         assertTrue(report.contains("Calculation provenance"))
         assertTrue(report.contains("Assumption fingerprint"))
-        assertTrue(report.contains("2026.07-logic-audit"))
+        assertTrue(report.contains("2026.07-survivor-rules"))
         assertTrue(report.contains("SSA Trustees Alt2 2025 annual death probabilities"))
         assertTrue(report.contains("Privacy note"))
         assertTrue(report.contains("generated locally from user-entered scenario data"))

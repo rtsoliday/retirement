@@ -64,4 +64,56 @@ class SocialSecurityTest {
 
         assertEquals(0.715, factor, 0.001)
     }
+
+    @Test
+    fun earlyWorkerClaimUsesWidowLimitAtSurvivorFra() {
+        val factor = SocialSecurity.combinedSurvivorBenefitFactor(
+            workerBirthYear = 1960,
+            workerClaimAgeMonths = 62 * 12,
+            workerDeathAgeMonths = 75 * 12,
+            spouseBirthYear = 1960,
+            survivorClaimAgeMonths = 67 * 12
+        )
+
+        assertEquals(0.825, factor, 0.001)
+    }
+
+    @Test
+    fun earlySurvivorClaimIsNotReducedAgainByWorkerWidowLimit() {
+        val factor = SocialSecurity.combinedSurvivorBenefitFactor(
+            workerBirthYear = 1960,
+            workerClaimAgeMonths = 62 * 12,
+            workerDeathAgeMonths = 75 * 12,
+            spouseBirthYear = 1960,
+            survivorClaimAgeMonths = 60 * 12
+        )
+
+        assertEquals(0.715, factor, 0.001)
+    }
+
+    @Test
+    fun workerDelayedCreditsEarnedBeforeDeathCarryToSurvivor() {
+        val factor = SocialSecurity.combinedSurvivorBenefitFactor(
+            workerBirthYear = 1960,
+            workerClaimAgeMonths = 70 * 12,
+            workerDeathAgeMonths = 69 * 12,
+            spouseBirthYear = 1960,
+            survivorClaimAgeMonths = 67 * 12
+        )
+
+        assertEquals(1.16, factor, 0.001)
+    }
+
+    @Test
+    fun deathBeforeWorkerFraDoesNotApplyEarlyClaimReduction() {
+        val factor = SocialSecurity.combinedSurvivorBenefitFactor(
+            workerBirthYear = 1960,
+            workerClaimAgeMonths = 70 * 12,
+            workerDeathAgeMonths = 65 * 12,
+            spouseBirthYear = 1960,
+            survivorClaimAgeMonths = 67 * 12
+        )
+
+        assertEquals(1.0, factor, 0.001)
+    }
 }

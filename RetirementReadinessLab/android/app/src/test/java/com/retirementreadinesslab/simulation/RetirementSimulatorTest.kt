@@ -36,7 +36,7 @@ class RetirementSimulatorTest {
 
         assertEquals(first.successProbability, second.successProbability, 0.0001)
         assertEquals(first.medianEndingBalance, second.medianEndingBalance, 0.01)
-        assertEquals("2026.07-logic-audit", first.provenance.engineVersion)
+        assertEquals("2026.07-survivor-rules", first.provenance.engineVersion)
         assertEquals("Monthly cashflow model with annual result bands", first.provenance.engineCadence)
         assertEquals("Inflation-indexed 2026 federal brackets and standard deduction", first.provenance.taxTableVersion)
         assertEquals(

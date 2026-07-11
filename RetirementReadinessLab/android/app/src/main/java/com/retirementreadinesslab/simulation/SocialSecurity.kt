@@ -4,13 +4,14 @@ import kotlin.math.max
 import kotlin.math.min
 
 object SocialSecurity {
-    const val MODEL_VERSION = "SSA retirement, spousal, and survivor rules modeled from 2026 ages"
+    const val MODEL_VERSION = "SSA retirement, spousal, and survivor rules with DRC and widow-limit handling modeled from 2026 ages"
 
     private const val MODEL_YEAR = 2026
     private const val MONTHS_PER_YEAR = 12
     private const val MIN_RETIREMENT_CLAIM_AGE_MONTHS = 62 * MONTHS_PER_YEAR
     private const val MAX_RETIREMENT_CLAIM_AGE_MONTHS = 70 * MONTHS_PER_YEAR
     private const val MIN_SURVIVOR_CLAIM_AGE_MONTHS = 60 * MONTHS_PER_YEAR
+    private const val WIDOW_LIMIT_MINIMUM_PIA_FACTOR = 0.825
 
     // SSA references:
     // - Full retirement age rises by birth year and reaches 67 for people born in 1960 or later.
@@ -127,6 +128,52 @@ object SocialSecurity {
         val progress = (boundedClaimAge - MIN_SURVIVOR_CLAIM_AGE_MONTHS).toDouble() /
             (fullRetirementAgeMonths - MIN_SURVIVOR_CLAIM_AGE_MONTHS).toDouble()
         return 0.715 + progress.coerceIn(0.0, 1.0) * (1.0 - 0.715)
+    }
+
+    /**
+     * Combined survivor factor relative to the deceased worker's PIA.
+     *
+     * A worker who dies before claiming keeps delayed-retirement credits earned through death.
+     * If the worker claimed early, the surviving spouse's age-adjusted benefit is instead capped
+     * by the larger of the worker's reduced benefit or 82.5% of PIA (the RIB-LIM rule).
+     */
+    internal fun combinedSurvivorBenefitFactor(
+        workerBirthYear: Int,
+        workerClaimAgeMonths: Int,
+        workerDeathAgeMonths: Int,
+        spouseBirthYear: Int,
+        survivorClaimAgeMonths: Int
+    ): Double {
+        val survivorAgeFactor = survivorBenefitFactor(
+            spouseBirthYear = spouseBirthYear,
+            survivorClaimAgeMonths = survivorClaimAgeMonths
+        )
+        val workerFullRetirementAgeMonths = fullRetirementAgeMonths(workerBirthYear)
+        val workerClaimedBeforeDeath = workerClaimAgeMonths < workerDeathAgeMonths
+
+        if (workerClaimedBeforeDeath && workerClaimAgeMonths < workerFullRetirementAgeMonths) {
+            val reducedWorkerFactor = retirementBenefitFactor(
+                birthYear = workerBirthYear,
+                claimAgeMonths = workerClaimAgeMonths
+            )
+            val widowLimit = max(WIDOW_LIMIT_MINIMUM_PIA_FACTOR, reducedWorkerFactor)
+            return min(survivorAgeFactor, widowLimit)
+        }
+
+        val delayedCreditThroughMonths = if (workerClaimedBeforeDeath) {
+            workerClaimAgeMonths
+        } else {
+            workerDeathAgeMonths
+        }
+        val deceasedWorkerFactor = if (delayedCreditThroughMonths > workerFullRetirementAgeMonths) {
+            retirementBenefitFactor(
+                birthYear = workerBirthYear,
+                claimAgeMonths = delayedCreditThroughMonths
+            )
+        } else {
+            1.0
+        }
+        return survivorAgeFactor * deceasedWorkerFactor
     }
 
     private fun earlyRetirementReduction(monthsEarly: Int): Double {

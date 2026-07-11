@@ -218,7 +218,12 @@ class RetirementLabState(
                 val currentIndex = scenarios.indexOfFirst { it.id == startingScenario.id }
                 val current = scenarios.getOrNull(currentIndex)
                 val unchangedDuringRun = current == startingScenario
-                if (current != null && unchangedDuringRun && requestId == allocationOptimizationRunId) {
+                if (
+                    isProUnlocked &&
+                    current != null &&
+                    unchangedDuringRun &&
+                    requestId == allocationOptimizationRunId
+                ) {
                     val updated = current.copy(postRetirementAllocation = optimization.recommendedAllocation)
                     scenarios[currentIndex] = updated
                     results.remove(updated.id)
@@ -462,7 +467,7 @@ class RetirementLabState(
             }
             run.onSuccess { analysis ->
                 val stillCurrent = scenarios.firstOrNull { it.id == id } == scenario
-                if (stillCurrent && requestId == labAnalysisRunId) {
+                if (isProUnlocked && stillCurrent && requestId == labAnalysisRunId) {
                     labAnalyses[id] = analysis
                 }
             }.onFailure {
@@ -492,6 +497,12 @@ class RetirementLabState(
         isProUnlocked = entitlement.isProUnlocked
         entitlement.message?.let { storageMessage = it }
         if (!isProUnlocked) {
+            // Make every Pro-only coroutine started under the old entitlement stale. The work may
+            // finish on Dispatchers.Default, but its result must not repopulate locked state.
+            labAnalysisRunId += 1
+            allocationOptimizationRunId += 1
+            isAnalyzingLab = false
+            isOptimizingPostRetirementAllocation = false
             labAnalyses.clear()
             allocationOptimizations.clear()
         }
