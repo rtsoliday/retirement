@@ -1,6 +1,7 @@
 package com.retirementreadinesslab.simulation
 
 import com.retirementreadinesslab.model.AccountBalances
+import com.retirementreadinesslab.model.BudgetProfile
 import com.retirementreadinesslab.model.DEFAULT_PROJECTION_END_AGE
 import com.retirementreadinesslab.model.EARLY_WITHDRAWAL_PENALTY_RATE
 import com.retirementreadinesslab.model.FilingStatus
@@ -35,9 +36,9 @@ class RetirementSimulatorTest {
 
         assertEquals(first.successProbability, second.successProbability, 0.0001)
         assertEquals(first.medianEndingBalance, second.medianEndingBalance, 0.01)
-        assertEquals("2026.06-sepp", first.provenance.engineVersion)
+        assertEquals("2026.07-logic-audit", first.provenance.engineVersion)
         assertEquals("Monthly cashflow model with annual result bands", first.provenance.engineCadence)
-        assertEquals("2024 federal brackets", first.provenance.taxTableVersion)
+        assertEquals("Inflation-indexed 2026 federal brackets and standard deduction", first.provenance.taxTableVersion)
         assertEquals(
             "SSA Trustees Alt2 2025 annual death probabilities",
             first.provenance.mortalityModelVersion
@@ -462,6 +463,113 @@ class RetirementSimulatorTest {
 
         assertEquals(16_000.0, oneSpouseInCareNeed, 0.01)
         assertEquals(16_300.0, allLivingPeopleInCareNeed, 0.01)
+    }
+
+    @Test
+    fun longTermCareCostInflatesAndScalesByCoveredPeople() {
+        val monthlyCost = RetirementSimulator.monthlyLongTermCareCost(
+            annualCost = 120_000.0,
+            healthcareInflationMultiplier = 1.5,
+            coveredPeople = 2
+        )
+
+        assertEquals(30_000.0, monthlyCost, 0.01)
+    }
+
+    @Test
+    fun annualSocialSecurityColaNeverReducesNominalBenefits() {
+        assertEquals(
+            1.25,
+            RetirementSimulator.applyAnnualSocialSecurityCola(
+                currentMultiplier = 1.25,
+                realizedAnnualInflation = 0.97
+            ),
+            0.0001
+        )
+        assertEquals(
+            1.2875,
+            RetirementSimulator.applyAnnualSocialSecurityCola(
+                currentMultiplier = 1.25,
+                realizedAnnualInflation = 1.03
+            ),
+            0.0001
+        )
+    }
+
+    @Test
+    fun annualMortalityProbabilityRepresentsDeathBeforeNextBirthday() {
+        val certainDeath = object : Random(0L) {
+            override fun nextDouble(): Double = 0.0
+        }
+
+        val deathAge = RetirementSimulator.sampleDeathAge(
+            gender = Gender.Male,
+            startAge = 65,
+            targetEndAge = 90,
+            random = certainDeath
+        )
+
+        assertEquals(66, deathAge)
+    }
+
+    @Test
+    fun spouseBenefitReductionUsesActualBenefitStartAge() {
+        val scenario = sampleScenario().copy(
+            household = HouseholdProfile(
+                currentAge = 67,
+                retirementAge = 67,
+                targetEndAge = 90,
+                filingStatus = FilingStatus.Married,
+                spouseCurrentAge = 62
+            ),
+            socialSecurity = SocialSecurityPlan(
+                annualBenefitAt67 = 30_000.0,
+                claimAge = 70,
+                spouseClaimAge = 62
+            )
+        )
+
+        assertEquals(
+            65 * 12,
+            RetirementSimulator.actualSpousalClaimAgeMonths(scenario, spouseAgeAtRetirement = 62)
+        )
+        assertEquals(
+            65 * 12,
+            RetirementSimulator.actualSurvivorClaimAgeMonths(
+                scenario = scenario,
+                spouseAgeAtRetirement = 62,
+                primaryDeathAge = 70
+            )
+        )
+    }
+
+    @Test
+    fun estimatedMedicareIncomeDoesNotDoubleCountCashNeedAndSocialSecurity() {
+        val income = RetirementSimulator.estimatedAnnualMedicareIncome(
+            annualNetNeed = 60_000.0,
+            annualSocialSecurity = 30_000.0,
+            annualOtherTaxableIncome = 0.0,
+            filingStatus = FilingStatus.Single
+        )
+
+        assertTrue(income < 60_000.0)
+        assertTrue(income > 30_000.0)
+    }
+
+    @Test
+    fun resultFingerprintChangesWhenBudgetAssumptionsChange() {
+        val base = sampleScenario().copy(numberOfSimulations = 1)
+        val changed = base.copy(
+            budget = BudgetProfile(annualPropertyTaxes = 4_000.0)
+        )
+
+        val baseResult = RetirementSimulator.run(base)
+        val changedResult = RetirementSimulator.run(changed)
+
+        assertTrue(
+            baseResult.provenance.assumptionFingerprint !=
+                changedResult.provenance.assumptionFingerprint
+        )
     }
 
     @Test

@@ -7,6 +7,7 @@ import com.retirementreadinesslab.model.DEFAULT_PRE_MEDICARE_MONTHLY_PREMIUM
 import com.retirementreadinesslab.model.BudgetLineItem
 import com.retirementreadinesslab.model.BudgetProfile
 import com.retirementreadinesslab.model.GuaranteedIncomePlan
+import com.retirementreadinesslab.model.Gender
 import com.retirementreadinesslab.model.HomePlan
 import com.retirementreadinesslab.model.MonthlyBudget
 import com.retirementreadinesslab.model.PostRetirementAllocationStrategy
@@ -26,7 +27,10 @@ class ScenarioJsonTest {
         val scenario = sampleBaseScenario().copy(
             name = "Base, with comma",
             spending = sampleBaseScenario().spending.copy(lowPortfolioSpendingReduction = 0.25),
-            household = sampleBaseScenario().household.copy(spouseCurrentAge = 49),
+            household = sampleBaseScenario().household.copy(
+                spouseCurrentAge = 49,
+                spouseGender = Gender.Male
+            ),
             socialSecurity = sampleBaseScenario().socialSecurity.copy(spouseClaimAge = 66),
             guaranteedIncome = GuaranteedIncomePlan(
                 annualIncome = 18_000.0,
@@ -78,6 +82,7 @@ class ScenarioJsonTest {
         assertEquals("Base, with comma", decoded.first().name)
         assertEquals(scenario.household.retirementAge, decoded.first().household.retirementAge)
         assertEquals(49, decoded.first().household.spouseCurrentAge)
+        assertEquals(Gender.Male, decoded.first().household.spouseGender)
         assertEquals(scenario.accounts.pretax, decoded.first().accounts.pretax, 0.01)
         assertEquals(SpendingPathModel.EmpiricalAgeDecline, decoded.first().spending.spendingPathModel)
         assertEquals(0.25, decoded.first().spending.lowPortfolioSpendingReduction, 0.01)
@@ -141,6 +146,7 @@ class ScenarioJsonTest {
             getJSONObject(0).getJSONObject("healthcare").remove("healthcareInflationMean")
             getJSONObject(0).getJSONObject("healthcare").remove("healthcareInflationStdDev")
             getJSONObject(0).getJSONObject("household").remove("spouseCurrentAge")
+            getJSONObject(0).getJSONObject("household").remove("spouseGender")
             getJSONObject(0).getJSONObject("socialSecurity").remove("spouseClaimAge")
             getJSONObject(0).remove("guaranteedIncome")
             getJSONObject(0).remove("rent")
@@ -161,6 +167,7 @@ class ScenarioJsonTest {
         assertEquals(DEFAULT_HEALTHCARE_INFLATION_MEAN, decoded.first().healthcare.healthcareInflationMean, 0.001)
         assertEquals(DEFAULT_HEALTHCARE_INFLATION_STD_DEV, decoded.first().healthcare.healthcareInflationStdDev, 0.001)
         assertEquals(decoded.first().household.currentAge, decoded.first().household.spouseCurrentAge)
+        assertEquals(Gender.Female, decoded.first().household.spouseGender)
         assertEquals(67, decoded.first().socialSecurity.spouseClaimAge)
         assertEquals(0.0, decoded.first().guaranteedIncome.annualIncome, 0.01)
         assertEquals(65, decoded.first().guaranteedIncome.startAge)

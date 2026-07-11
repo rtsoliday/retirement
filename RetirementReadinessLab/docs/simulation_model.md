@@ -11,18 +11,21 @@ Current behavior:
 - Stock and bond returns sampled from normal distributions.
 - Post-retirement stock/bond allocation selected from a tunable invested-assets-to-annual-spending ladder.
 - Inflation sampled from normal distribution with a floor.
-- Federal tax estimate using 2024 brackets.
+- Federal tax estimate using 2026 brackets and base standard deductions indexed with modeled general inflation.
 - Optional 10% early withdrawal tax on modeled pre-tax withdrawals before age 59 1/2.
 - Optional Rule of 55 assumption for qualifying employer-plan pre-tax withdrawals after retiring at 55 or later.
 - Optional 72(t) / SEPP fixed amortization schedule from modeled pre-tax assets, using IRS single-life expectancy factors and a 5% interest assumption.
 - Social Security claiming adjustment.
+- Annual Social Security COLA approximation with no nominal benefit reduction in deflation years.
 - Taxable Social Security estimate.
 - SSA Trustees Alt2 2025 annual death probabilities selected by gender, with an internal projection cap at age 119.
-- Medicare Parts B/D premium estimate after age 65, including modeled 2024 IRMAA tiers indexed by the Medicare inflation multiplier.
+- Separate primary and spouse mortality-table selections for married households.
+- Medicare Parts B/D premium estimate after age 65, with modeled 2026 IRMAA income tiers indexed separately from healthcare-cost inflation.
 - Pre-Medicare healthcare estimate.
-- Optional long-term care shock that replaces normal spending while active.
-- Optional Roth conversion up to a selected marginal bracket.
+- Optional long-term care shock, indexed with healthcare inflation, that replaces normal spending while active.
+- Optional annual Roth conversion that fills the unused room in a selected marginal bracket using modeled taxable income to date.
 - Optional cash reserve use during market drawdowns.
+- Paired Lab comparisons that reuse random paths so changes are not obscured by unrelated Monte Carlo noise.
 - Success probability, ending balance percentiles, and failure age summary.
 - Plain-language result interpretation for dashboard, detail view, and reports.
 

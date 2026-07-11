@@ -11,39 +11,41 @@ data class MedicarePremiumEstimate(
 )
 
 object MedicarePremiums {
-    const val PREMIUM_TABLE_VERSION = "2024 modeled Medicare Parts B/D with indexed IRMAA"
+    const val PREMIUM_TABLE_VERSION = "2026 modeled Medicare Parts B/D with indexed IRMAA"
 
-    private const val BASE_PART_B_MONTHLY = 174.70
-    private const val BASE_PART_D_MONTHLY = 55.50
+    private const val BASE_PART_B_MONTHLY = 202.90
+    private const val BASE_PART_D_MONTHLY = 38.99
 
     private val singleTiers = listOf(
-        IrmaaTier(103_000.0, 0.0, 0.0, "Base premium"),
-        IrmaaTier(129_000.0, 69.90, 12.90, "IRMAA tier 1"),
-        IrmaaTier(161_000.0, 174.70, 33.30, "IRMAA tier 2"),
-        IrmaaTier(193_000.0, 279.50, 53.80, "IRMAA tier 3"),
-        IrmaaTier(500_000.0, 384.30, 74.20, "IRMAA tier 4"),
-        IrmaaTier(Double.POSITIVE_INFINITY, 419.30, 81.00, "IRMAA tier 5")
+        IrmaaTier(109_000.0, 0.0, 0.0, "Base premium"),
+        IrmaaTier(137_000.0, 81.20, 14.50, "IRMAA tier 1"),
+        IrmaaTier(171_000.0, 202.90, 37.50, "IRMAA tier 2"),
+        IrmaaTier(205_000.0, 324.60, 60.40, "IRMAA tier 3"),
+        IrmaaTier(500_000.0, 446.30, 83.30, "IRMAA tier 4"),
+        IrmaaTier(Double.POSITIVE_INFINITY, 487.00, 91.00, "IRMAA tier 5")
     )
 
     private val marriedTiers = listOf(
-        IrmaaTier(206_000.0, 0.0, 0.0, "Base premium"),
-        IrmaaTier(258_000.0, 69.90, 12.90, "IRMAA tier 1"),
-        IrmaaTier(322_000.0, 174.70, 33.30, "IRMAA tier 2"),
-        IrmaaTier(386_000.0, 279.50, 53.80, "IRMAA tier 3"),
-        IrmaaTier(750_000.0, 384.30, 74.20, "IRMAA tier 4"),
-        IrmaaTier(Double.POSITIVE_INFINITY, 419.30, 81.00, "IRMAA tier 5")
+        IrmaaTier(218_000.0, 0.0, 0.0, "Base premium"),
+        IrmaaTier(274_000.0, 81.20, 14.50, "IRMAA tier 1"),
+        IrmaaTier(342_000.0, 202.90, 37.50, "IRMAA tier 2"),
+        IrmaaTier(410_000.0, 324.60, 60.40, "IRMAA tier 3"),
+        IrmaaTier(750_000.0, 446.30, 83.30, "IRMAA tier 4"),
+        IrmaaTier(Double.POSITIVE_INFINITY, 487.00, 91.00, "IRMAA tier 5")
     )
 
     fun estimateAnnualPremium(
         modifiedAdjustedGrossIncome: Double,
         filingStatus: FilingStatus,
         coveredPeople: Int = 1,
-        inflationMultiplier: Double = 1.0
+        inflationMultiplier: Double = 1.0,
+        incomeThresholdInflationMultiplier: Double = inflationMultiplier
     ): MedicarePremiumEstimate {
-        val people = coveredPeople.coerceAtLeast(1)
+        val people = coveredPeople.coerceAtLeast(0)
         val multiplier = inflationMultiplier.coerceAtLeast(0.0)
+        val thresholdMultiplier = incomeThresholdInflationMultiplier.coerceAtLeast(0.0001)
         val tier = tiersFor(filingStatus)
-            .first { modifiedAdjustedGrossIncome.coerceAtLeast(0.0) <= it.incomeCap * multiplier }
+            .first { modifiedAdjustedGrossIncome.coerceAtLeast(0.0) <= it.incomeCap * thresholdMultiplier }
         val monthlyPerPerson = (
             BASE_PART_B_MONTHLY +
                 BASE_PART_D_MONTHLY +

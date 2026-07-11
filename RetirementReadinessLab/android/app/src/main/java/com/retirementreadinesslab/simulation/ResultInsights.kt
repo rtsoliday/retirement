@@ -1,5 +1,6 @@
 package com.retirementreadinesslab.simulation
 
+import com.retirementreadinesslab.model.FilingStatus
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.RiskLevel
 import com.retirementreadinesslab.model.SimulationResult
@@ -62,11 +63,22 @@ object ResultInsights {
     }
 
     private fun healthcareBridge(scenario: RetirementScenario): String {
-        val preMedicareYears = (65 - scenario.household.retirementAge).coerceAtLeast(0)
+        val yearsToRetirement = scenario.household.retirementAge - scenario.household.currentAge
+        val spouseAgeAtRetirement = scenario.household.spouseCurrentAge + yearsToRetirement
+        val primaryPreMedicareYears = (65 - scenario.household.retirementAge).coerceAtLeast(0)
+        val spousePreMedicareYears = if (scenario.household.filingStatus == FilingStatus.Married) {
+            (65 - spouseAgeAtRetirement).coerceAtLeast(0)
+        } else {
+            0
+        }
+        val preMedicareYears = maxOf(primaryPreMedicareYears, spousePreMedicareYears)
+        val preMedicarePeopleAtRetirement =
+            (if (scenario.household.retirementAge < 65) 1 else 0) +
+                (if (scenario.household.filingStatus == FilingStatus.Married && spouseAgeAtRetirement < 65) 1 else 0)
         return when {
             preMedicareYears > 0 -> {
                 "The plan bridges $preMedicareYears pre-Medicare years with " +
-                    "${(scenario.healthcare.preMedicareMonthlyPremium * 12.0).money()} of starting annual premiums."
+                    "${(scenario.healthcare.preMedicareMonthlyPremium * 12.0 * preMedicarePeopleAtRetirement).money()} of starting annual premiums."
             }
             scenario.healthcare.includeMedicarePremiums -> {
                 "Medicare Parts B/D premiums and modeled IRMAA tiers are included after age 65."

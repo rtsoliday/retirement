@@ -81,7 +81,8 @@ object ReportBuilder {
             appendLine("- Mortality table: ${scenario.household.gender.label}")
             if (scenario.household.filingStatus == com.retirementreadinesslab.model.FilingStatus.Married) {
                 appendLine("- Spouse current age: ${scenario.household.spouseCurrentAge}")
-                appendLine("- Spouse mortality table: opposite gender, no separate spouse income")
+                appendLine("- Spouse mortality table: ${scenario.household.spouseGender.label}")
+                appendLine("- Separate spouse income: Not modeled")
             }
             appendLine("- Current age: ${scenario.household.currentAge}")
             appendLine("- Projection cap: Age ${scenario.household.targetEndAge}")
@@ -145,7 +146,7 @@ object ReportBuilder {
             appendLine("- Long-term care duration: ${scenario.longTermCare.averageDurationYears} years")
             appendLine("- Simulations: ${scenario.numberOfSimulations}")
             appendLine("- Random seed: ${scenario.seed}")
-            appendLine("- Federal tax table: 2024 brackets")
+            appendLine("- Federal tax table: Inflation-indexed 2026 brackets and standard deduction")
             appendLine()
             appendLine("Suggested next test")
             appendLine(result?.riskBreakdown?.recommendedNextTest ?: "Run this scenario before comparing next steps.")

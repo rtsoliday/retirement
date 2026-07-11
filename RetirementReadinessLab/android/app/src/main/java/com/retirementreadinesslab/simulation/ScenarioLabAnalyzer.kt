@@ -3,6 +3,7 @@ package com.retirementreadinesslab.simulation
 import com.retirementreadinesslab.model.MortgagePlan
 import com.retirementreadinesslab.model.PostRetirementAllocationStrategy
 import com.retirementreadinesslab.model.PostRetirementAllocationTier
+import com.retirementreadinesslab.model.PRO_SIMULATION_LIMIT
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.RothConversionStrategy
 import java.util.Locale
@@ -78,14 +79,19 @@ enum class LabComparisonType {
 object ScenarioLabAnalyzer {
     const val QUICK_LAB_SIMULATIONS = 300
     const val ALLOCATION_OPTIMIZATION_SIMULATIONS = 500
+    private const val COMPARISON_SEED_OFFSET = 400L
 
     fun analyze(
         scenario: RetirementScenario,
         quickSimulations: Int = QUICK_LAB_SIMULATIONS,
         targetEstimateSimulations: Int = RetirementOptimizer.QUICK_SIMULATIONS
     ): ScenarioLabAnalysis {
-        val boundedQuickSimulations = quickSimulations.coerceAtLeast(50)
-        val baseResult = runQuick(scenario, boundedQuickSimulations, seedOffset = 0)
+        val boundedQuickSimulations = quickSimulations.coerceIn(50, PRO_SIMULATION_LIMIT)
+        val baseResult = runQuick(
+            scenario,
+            boundedQuickSimulations,
+            seedOffset = COMPARISON_SEED_OFFSET
+        )
         return ScenarioLabAnalysis(
             scenarioId = scenario.id,
             decisionEstimate = RetirementOptimizer.estimate(
@@ -105,7 +111,7 @@ object ScenarioLabAnalyzer {
         scenario: RetirementScenario,
         quickSimulations: Int = ALLOCATION_OPTIMIZATION_SIMULATIONS
     ): PostRetirementAllocationOptimization {
-        val boundedQuickSimulations = quickSimulations.coerceAtLeast(50)
+        val boundedQuickSimulations = quickSimulations.coerceIn(50, PRO_SIMULATION_LIMIT)
         val candidateAllocations = (0..20).map { it / 20.0 }
         var testedAllocations = 0
 
@@ -130,9 +136,12 @@ object ScenarioLabAnalyzer {
         var bestScore = startingScore
 
         PostRetirementAllocationTier.entries.forEach { tier ->
-            bestScore = candidateAllocations
+            val candidateBest = candidateAllocations
                 .map { value -> score(bestScore.allocation.withStockAllocation(tier, value)) }
-                .maxWith(compareBy<AllocationScore> { it.readiness }.thenBy { it.medianEndingBalance })
+                .maxWith(allocationScoreComparator)
+            if (allocationScoreComparator.compare(candidateBest, bestScore) > 0) {
+                bestScore = candidateBest
+            }
         }
 
         return PostRetirementAllocationOptimization(
@@ -150,15 +159,14 @@ object ScenarioLabAnalyzer {
     private fun retirementAgeSweep(base: RetirementScenario, quickSimulations: Int): LabSweepAnalysis {
         val currentAge = base.household.currentAge
         val baseAge = base.household.retirementAge
+        val lastValidAge = minOf(70, base.household.targetEndAge - 1)
         val ages = listOf(baseAge - 2, baseAge, baseAge + 2, baseAge + 4)
-            .filter { it in currentAge..70 }
+            .filter { it in currentAge..lastValidAge }
             .distinct()
 
-        val rows = ages.mapIndexed { index, age ->
-            val scenario = base
-                .withRetirementAgeForAnalysis(age)
-                .copy(seed = base.seed + 100)
-            val result = runQuick(scenario, quickSimulations, seedOffset = index.toLong())
+        val rows = ages.map { age ->
+            val scenario = base.withRetirementAgeForAnalysis(age)
+            val result = runQuick(scenario, quickSimulations, seedOffset = 100L)
             LabSweepRowAnalysis(
                 label = "Age $age",
                 detail = "${age - currentAge} years from now",
@@ -177,13 +185,12 @@ object ScenarioLabAnalyzer {
 
     private fun spendingSweep(base: RetirementScenario, quickSimulations: Int): LabSweepAnalysis {
         val factors = listOf(0.90, 0.95, 1.00, 1.05, 1.10)
-        val rows = factors.mapIndexed { index, factor ->
+        val rows = factors.map { factor ->
             val spending = base.spending.annualBaseSpending * factor
             val scenario = base.copy(
-                spending = base.spending.copy(annualBaseSpending = spending),
-                seed = base.seed + 200
+                spending = base.spending.copy(annualBaseSpending = spending)
             )
-            val result = runQuick(scenario, quickSimulations, seedOffset = index.toLong())
+            val result = runQuick(scenario, quickSimulations, seedOffset = 200L)
             val pct = ((factor - 1.0) * 100.0)
             LabSweepRowAnalysis(
                 label = if (factor == 1.0) "Current" else "${signedWholePercent(pct)} spending",
@@ -203,12 +210,11 @@ object ScenarioLabAnalyzer {
 
     private fun socialSecuritySweep(base: RetirementScenario, quickSimulations: Int): LabSweepAnalysis {
         val ages = setOf(62, 67, 70, base.socialSecurity.claimAge).sorted()
-        val rows = ages.mapIndexed { index, age ->
+        val rows = ages.map { age ->
             val scenario = base.copy(
-                socialSecurity = base.socialSecurity.copy(claimAge = age),
-                seed = base.seed + 300
+                socialSecurity = base.socialSecurity.copy(claimAge = age)
             )
-            val result = runQuick(scenario, quickSimulations, seedOffset = index.toLong())
+            val result = runQuick(scenario, quickSimulations, seedOffset = 300L)
             LabSweepRowAnalysis(
                 label = "Claim $age",
                 detail = if (age < base.household.retirementAge) "Available at retirement" else "Bridge ${age - base.household.retirementAge} years",
@@ -230,8 +236,12 @@ object ScenarioLabAnalyzer {
         baseReadiness: Double,
         quickSimulations: Int
     ): List<LabComparisonAnalysis> {
-        fun score(updated: RetirementScenario, seedOffset: Long): Double {
-            return runQuick(updated, quickSimulations, seedOffset).successProbability
+        fun score(updated: RetirementScenario): Double {
+            return runQuick(
+                updated,
+                quickSimulations,
+                seedOffset = COMPARISON_SEED_OFFSET
+            ).successProbability
         }
 
         val rothComparison = rothComparison(base)
@@ -240,11 +250,11 @@ object ScenarioLabAnalyzer {
         val marketComparison = marketComparison(base)
         val mortgageComparison = mortgageComparison(base)
 
-        val roth = score(rothComparison.scenario, seedOffset = 40)
-        val ltc = score(longTermCareComparison.scenario, seedOffset = 50)
-        val healthcareInflation = score(healthcareInflationComparison.scenario, seedOffset = 60)
-        val marketDownturn = score(marketComparison.scenario, seedOffset = 70)
-        val mortgagePayoff = score(mortgageComparison.scenario, seedOffset = 80)
+        val roth = score(rothComparison.scenario)
+        val ltc = score(longTermCareComparison.scenario)
+        val healthcareInflation = score(healthcareInflationComparison.scenario)
+        val marketDownturn = score(marketComparison.scenario)
+        val mortgagePayoff = score(mortgageComparison.scenario)
 
         return listOf(
             LabComparisonAnalysis(
@@ -317,8 +327,7 @@ object ScenarioLabAnalyzer {
         val enabled = !base.rothConversion.enabled
         return ComparisonScenario(
             scenario = base.copy(
-                rothConversion = RothConversionStrategy(enabled = enabled, marginalRateCap = 0.22),
-                seed = base.seed + 40
+                rothConversion = RothConversionStrategy(enabled = enabled, marginalRateCap = 0.22)
             ),
             title = if (enabled) "Enable Roth conversions" else "Disable Roth conversions",
             subtitle = if (enabled) "Fill the 22% bracket after retirement" else "Compare without planned conversions"
@@ -329,8 +338,7 @@ object ScenarioLabAnalyzer {
         val enabled = !base.longTermCare.enabled
         return ComparisonScenario(
             scenario = base.copy(
-                longTermCare = base.longTermCare.copy(enabled = enabled),
-                seed = base.seed + 50
+                longTermCare = base.longTermCare.copy(enabled = enabled)
             ),
             title = if (enabled) "Add long-term care risk" else "Remove long-term care risk",
             subtitle = if (enabled) "Late-life care shock" else "Compare without the care shock"
@@ -352,7 +360,7 @@ object ScenarioLabAnalyzer {
             )
         }
         return ComparisonScenario(
-            scenario = base.copy(healthcare = updatedHealthcare, seed = base.seed + 60),
+            scenario = base.copy(healthcare = updatedHealthcare),
             title = if (stressHigher) "Stress healthcare inflation" else "Ease healthcare inflation",
             subtitle = if (stressHigher) "Higher medical cost growth" else "Lower medical cost growth"
         )
@@ -381,7 +389,7 @@ object ScenarioLabAnalyzer {
             )
         }
         return ComparisonScenario(
-            scenario = base.copy(market = updatedMarket, seed = base.seed + 70),
+            scenario = base.copy(market = updatedMarket),
             title = if (stressLower) "Stress lower returns" else "Ease return stress",
             subtitle = if (stressLower) "Lower expected returns, wider swings" else "Higher expected returns, narrower swings"
         )
@@ -395,7 +403,7 @@ object ScenarioLabAnalyzer {
             MortgagePlan(monthlyPayment = 1_500.0, yearsLeft = 10, monthsLeft = 0, currentBalance = 150_000.0)
         }
         return ComparisonScenario(
-            scenario = base.copy(mortgage = updatedMortgage, seed = base.seed + 80),
+            scenario = base.copy(mortgage = updatedMortgage),
             title = if (hasMortgage) "Remove mortgage payment" else "Add mortgage payment",
             subtitle = if (hasMortgage) {
                 "Tests retirement cash flow without mortgage payments"
@@ -459,4 +467,7 @@ object ScenarioLabAnalyzer {
         val readiness: Double,
         val medianEndingBalance: Double
     )
+
+    private val allocationScoreComparator =
+        compareBy<AllocationScore> { it.readiness }.thenBy { it.medianEndingBalance }
 }

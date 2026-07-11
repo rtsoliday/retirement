@@ -74,6 +74,20 @@ class ScenarioLabAnalyzerTest {
     }
 
     @Test
+    fun spendingSweepUsesComparableRandomPaths() {
+        val analysis = ScenarioLabAnalyzer.analyze(
+            scenario = sampleBaseScenario(),
+            quickSimulations = 100,
+            targetEstimateSimulations = 50
+        )
+        val rows = analysis.sweeps
+            .first { it.type == LabSweepType.SpendingFlexibility }
+            .rows
+
+        assertTrue(rows.zipWithNext().all { (lower, higher) -> lower.readiness >= higher.readiness })
+    }
+
+    @Test
     fun allocationOptimizerFindsBestMixWithoutRunningWholeLab() {
         val scenario = sampleBaseScenario().copy(
             household = HouseholdProfile(currentAge = 40, retirementAge = 40, targetEndAge = 41),

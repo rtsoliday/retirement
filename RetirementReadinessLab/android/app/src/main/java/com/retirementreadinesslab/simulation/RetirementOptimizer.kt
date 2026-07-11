@@ -1,6 +1,7 @@
 package com.retirementreadinesslab.simulation
 
 import com.retirementreadinesslab.model.RetirementScenario
+import com.retirementreadinesslab.model.PRO_SIMULATION_LIMIT
 import kotlin.math.floor
 
 data class RetirementDecisionEstimate(
@@ -22,7 +23,8 @@ object RetirementOptimizer {
         simulationCount: Int = QUICK_SIMULATIONS,
         maxRetirementAge: Int = 70
     ): RetirementDecisionEstimate {
-        val boundedSimulations = simulationCount.coerceAtLeast(50)
+        require(targetReadiness in 0.0..1.0) { "Target readiness must be between 0% and 100%." }
+        val boundedSimulations = simulationCount.coerceIn(50, PRO_SIMULATION_LIMIT)
         val earliest = findEarliestRetirementAge(
             scenario = scenario,
             targetReadiness = targetReadiness,
@@ -59,7 +61,7 @@ object RetirementOptimizer {
             val result = runQuick(
                 scenario = scenario.withRetirementAgeForAnalysis(age),
                 simulationCount = simulationCount,
-                seedOffset = 10_000L + age
+                seedOffset = 10_000L
             )
             if (result.successProbability >= targetReadiness) {
                 return age to result.successProbability
@@ -110,7 +112,7 @@ object RetirementOptimizer {
             )
         }
 
-        repeat(11) { index ->
+        repeat(11) {
             val mid = (low + high) / 2.0
             val readiness = readinessFor(mid)
             if (readiness >= targetReadiness) {

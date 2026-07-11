@@ -40,9 +40,15 @@ object ScenarioJson {
     fun decodeScenarios(raw: String): List<RetirementScenario> {
         if (raw.isBlank()) return emptyList()
         val array = JSONArray(raw)
+        val fallbackIdPrefix = System.currentTimeMillis()
         return buildList {
             for (index in 0 until array.length()) {
-                add(decodeScenario(array.getJSONObject(index)))
+                add(
+                    decodeScenario(
+                        json = array.getJSONObject(index),
+                        fallbackId = "scenario-$fallbackIdPrefix-$index"
+                    )
+                )
             }
         }
     }
@@ -57,6 +63,7 @@ object ScenarioJson {
                 .put("targetEndAge", scenario.household.targetEndAge)
                 .put("filingStatus", scenario.household.filingStatus.name)
                 .put("gender", scenario.household.gender.name)
+                .put("spouseGender", scenario.household.spouseGender.name)
                 .put("spouseCurrentAge", scenario.household.spouseCurrentAge))
             .put("accounts", JSONObject()
                 .put("pretax", scenario.accounts.pretax)
@@ -118,7 +125,7 @@ object ScenarioJson {
             .put("seed", scenario.seed)
     }
 
-    private fun decodeScenario(json: JSONObject): RetirementScenario {
+    private fun decodeScenario(json: JSONObject, fallbackId: String): RetirementScenario {
         val household = json.getJSONObject("household")
         val accounts = json.getJSONObject("accounts")
         val spending = json.getJSONObject("spending")
@@ -137,16 +144,19 @@ object ScenarioJson {
 
         val retirementAge = household.optInt("retirementAge", 60)
         val defaultWithdrawalStrategy = WithdrawalStrategy.defaultsForRetirementAge(retirementAge)
+        val primaryGender = enumOrDefault(household.optString("gender"), Gender.Male)
+        val defaultSpouseGender = if (primaryGender == Gender.Male) Gender.Female else Gender.Male
 
         return RetirementScenario(
-            id = json.optString("id", "scenario-${System.currentTimeMillis()}"),
+            id = json.optString("id").takeIf { it.isNotBlank() } ?: fallbackId,
             name = json.optString("name", "Saved scenario"),
             household = HouseholdProfile(
                 currentAge = household.optInt("currentAge", 50),
                 retirementAge = retirementAge,
                 targetEndAge = DEFAULT_PROJECTION_END_AGE,
                 filingStatus = enumOrDefault(household.optString("filingStatus"), FilingStatus.Single),
-                gender = enumOrDefault(household.optString("gender"), Gender.Male),
+                gender = primaryGender,
+                spouseGender = enumOrDefault(household.optString("spouseGender"), defaultSpouseGender),
                 spouseCurrentAge = household.optInt("spouseCurrentAge", household.optInt("currentAge", 50))
             ),
             accounts = AccountBalances(

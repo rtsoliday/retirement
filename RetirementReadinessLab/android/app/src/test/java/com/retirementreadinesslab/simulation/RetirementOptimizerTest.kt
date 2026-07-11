@@ -19,7 +19,7 @@ import org.junit.Test
 
 class RetirementOptimizerTest {
     @Test
-    fun analysisRetirementAgeChangesRefreshWithdrawalDefaults() {
+    fun analysisRetirementAgeChangesRefreshPenaltyWithoutInventingEligibility() {
         val scenario = sampleBaseScenario().copy(
             household = HouseholdProfile(currentAge = 54, retirementAge = 67),
             withdrawalStrategy = WithdrawalStrategy(
@@ -37,10 +37,10 @@ class RetirementOptimizerTest {
 
         assertTrue(age54.withdrawalStrategy.applyEarlyWithdrawalPenalty)
         assertFalse(age54.withdrawalStrategy.ruleOf55Eligible)
-        assertFalse(age54.withdrawalStrategy.seppEligible)
+        assertTrue(age54.withdrawalStrategy.seppEligible)
         assertTrue(age58.withdrawalStrategy.applyEarlyWithdrawalPenalty)
-        assertTrue(age58.withdrawalStrategy.ruleOf55Eligible)
-        assertFalse(age58.withdrawalStrategy.seppEligible)
+        assertFalse(age58.withdrawalStrategy.ruleOf55Eligible)
+        assertTrue(age58.withdrawalStrategy.seppEligible)
         assertTrue(age58.withdrawalStrategy.useCashReserveDuringDrawdowns)
         assertEquals(-0.08, age58.withdrawalStrategy.drawdownTrigger, 0.001)
         assertEquals(scenario.withdrawalStrategy, originalAge.withdrawalStrategy)

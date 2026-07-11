@@ -2,6 +2,7 @@ package com.retirementreadinesslab.simulation
 
 import com.retirementreadinesslab.model.AccountBalances
 import com.retirementreadinesslab.model.HealthcarePlan
+import com.retirementreadinesslab.model.FilingStatus
 import com.retirementreadinesslab.model.LongTermCareAssumption
 import com.retirementreadinesslab.model.RiskLevel
 import com.retirementreadinesslab.model.sampleBaseScenario
@@ -58,5 +59,25 @@ class ResultInsightsTest {
         val insight = ResultInsights.summarize(scenario, result)
 
         assertTrue(insight.bullets.any { it.contains("Medicare premiums are excluded") })
+    }
+
+    @Test
+    fun healthcareBridgeIncludesYoungerSpouseAndStartingPremiumCount() {
+        val scenario = sampleBaseScenario().copy(
+            household = sampleBaseScenario().household.copy(
+                currentAge = 60,
+                retirementAge = 67,
+                filingStatus = FilingStatus.Married,
+                spouseCurrentAge = 55
+            ),
+            healthcare = HealthcarePlan(preMedicareMonthlyPremium = 1_000.0),
+            numberOfSimulations = 50
+        )
+        val result = RetirementSimulator.run(scenario)
+
+        val insight = ResultInsights.summarize(scenario, result)
+
+        assertTrue(insight.bullets.any { it.contains("3 pre-Medicare years") })
+        assertTrue(insight.bullets.any { it.contains("$12,000") })
     }
 }

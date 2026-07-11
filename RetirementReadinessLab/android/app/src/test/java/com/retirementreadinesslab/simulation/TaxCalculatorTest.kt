@@ -10,7 +10,43 @@ class TaxCalculatorTest {
     fun singleFilerUsesProgressiveBrackets() {
         val tax = TaxCalculator.taxLiability(50_000.0, FilingStatus.Single)
 
-        assertEquals(6_053.0, tax, 1.0)
+        assertEquals(5_752.0, tax, 1.0)
+    }
+
+    @Test
+    fun ordinaryIncomeAppliesBaseStandardDeduction() {
+        assertEquals(
+            0.0,
+            TaxCalculator.ordinaryIncomeTaxLiability(16_100.0, FilingStatus.Single),
+            0.01
+        )
+        assertEquals(
+            1_000.0,
+            TaxCalculator.ordinaryIncomeTaxLiability(26_100.0, FilingStatus.Single),
+            0.01
+        )
+    }
+
+    @Test
+    fun ordinaryIncomeIndexesBracketsAndStandardDeductionForInflation() {
+        assertEquals(
+            0.0,
+            TaxCalculator.ordinaryIncomeTaxLiability(
+                ordinaryIncome = 32_200.0,
+                filingStatus = FilingStatus.Single,
+                inflationMultiplier = 2.0
+            ),
+            0.01
+        )
+        assertEquals(
+            2_000.0,
+            TaxCalculator.ordinaryIncomeTaxLiability(
+                ordinaryIncome = 52_200.0,
+                filingStatus = FilingStatus.Single,
+                inflationMultiplier = 2.0
+            ),
+            0.01
+        )
     }
 
     @Test
@@ -22,6 +58,17 @@ class TaxCalculatorTest {
         )
 
         assertEquals(0.0, taxable, 0.01)
+    }
+
+    @Test
+    fun upperSocialSecurityTierUsesHalfBenefitWhenItIsBelowFixedBase() {
+        val taxable = TaxCalculator.taxableSocialSecurity(
+            otherIncome = 32_100.0,
+            annualSocialSecurity = 4_000.0,
+            filingStatus = FilingStatus.Single
+        )
+
+        assertEquals(2_085.0, taxable, 0.01)
     }
 
     @Test
@@ -87,5 +134,23 @@ class TaxCalculatorTest {
         )
 
         assertEquals(0.0, gross, 0.01)
+    }
+
+    @Test
+    fun rothConversionFillsOnlyUnusedBracketSpaceAndUsesIncrementalTax() {
+        val plan = TaxCalculator.rothConversionPlan(
+            pretaxBalance = 100_000.0,
+            currentTaxableIncome = 80_000.0,
+            rateCap = 0.22,
+            filingStatus = FilingStatus.Single
+        )
+
+        assertEquals(41_800.0, plan.conversionAmount, 0.01)
+        assertEquals(
+            TaxCalculator.ordinaryIncomeTaxLiability(121_800.0, FilingStatus.Single) -
+                TaxCalculator.ordinaryIncomeTaxLiability(80_000.0, FilingStatus.Single),
+            plan.additionalTax,
+            0.01
+        )
     }
 }

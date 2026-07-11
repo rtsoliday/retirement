@@ -65,7 +65,6 @@ import com.retirementreadinesslab.model.PRO_SIMULATION_LIMIT
 import com.retirementreadinesslab.model.RentPlan
 import com.retirementreadinesslab.model.RetirementScenario
 import com.retirementreadinesslab.model.RothConversionStrategy
-import com.retirementreadinesslab.model.RULE_OF_55_MINIMUM_RETIREMENT_AGE
 import com.retirementreadinesslab.model.SocialSecurityPlan
 import com.retirementreadinesslab.model.SpendingPlan
 import com.retirementreadinesslab.model.SpendingPathModel
@@ -74,7 +73,6 @@ import com.retirementreadinesslab.model.forFeatureAccess
 import com.retirementreadinesslab.model.validate
 import com.retirementreadinesslab.model.warnings
 import com.retirementreadinesslab.simulation.MedicarePremiums
-import com.retirementreadinesslab.simulation.RetirementSimulator
 import com.retirementreadinesslab.simulation.SocialSecurity
 import com.retirementreadinesslab.state.RetirementLabState
 import com.retirementreadinesslab.ui.asCurrency
@@ -266,8 +264,15 @@ fun SetupScreen(
                         NumberField("Spouse current age", form.spouseCurrentAge) {
                             form = form.copy(spouseCurrentAge = it)
                         }
+                        ChoiceGroup(
+                            title = "Spouse sex for mortality calculations",
+                            options = Gender.entries.toList(),
+                            selected = form.spouseGender,
+                            label = { it.label },
+                            onSelected = { form = form.copy(spouseGender = it) }
+                        )
                         Text(
-                            text = "The spouse is modeled as the opposite gender with no separate earned or Social Security income. The simulation continues until both spouses have died or the household runs out of money.",
+                            text = "The spouse has no separate earned or Social Security income in the current model. The simulation continues until both spouses have died or the household runs out of money.",
                             style = MaterialTheme.typography.bodySmall,
                             color = LabMutedText
                         )
@@ -658,7 +663,7 @@ fun SetupScreen(
                     color = LabMutedText
                 )
                 NumberField("Random seed", form.seed) { form = form.copy(seed = it) }
-                KeyValueRow("Federal tax table", "2024 brackets")
+                KeyValueRow("Federal tax table", "Inflation-indexed 2026 brackets")
                 KeyValueRow("Medicare model", MedicarePremiums.PREMIUM_TABLE_VERSION)
                 KeyValueRow("Projection horizon", "Mortality cap age $DEFAULT_PROJECTION_END_AGE per person")
                 KeyValueRow("Engine cadence", "Monthly cashflow model")
@@ -998,6 +1003,7 @@ private data class EditableAssumptions(
     val retirementAge: String,
     val filingStatus: FilingStatus,
     val gender: Gender,
+    val spouseGender: Gender,
     val spouseCurrentAge: String,
     val annualSpending: String,
     val generalInflationMean: String,
@@ -1137,6 +1143,7 @@ private data class EditableAssumptions(
                 targetEndAge = DEFAULT_PROJECTION_END_AGE,
                 filingStatus = filingStatus,
                 gender = gender,
+                spouseGender = spouseGender,
                 spouseCurrentAge = spouseCurrentAge ?: currentAge
             ),
             spending = SpendingPlan(
@@ -1219,48 +1226,8 @@ private data class EditableAssumptions(
         val defaults = WithdrawalStrategy.defaultsForRetirementAge(retirementAge)
         return copy(
             retirementAge = value,
-            applyEarlyWithdrawalPenalty = defaults.applyEarlyWithdrawalPenalty,
-            ruleOf55Eligible = defaults.ruleOf55Eligible,
-            seppEligible = defaultSeppEligible(retirementAge)
+            applyEarlyWithdrawalPenalty = defaults.applyEarlyWithdrawalPenalty
         )
-    }
-
-    private fun defaultSeppEligible(retirementAge: Int): Boolean {
-        if (retirementAge >= RULE_OF_55_MINIMUM_RETIREMENT_AGE) return false
-        if (retirementAge * 12 >= PENALTY_FREE_WITHDRAWAL_AGE_MONTHS) return false
-
-        val pretaxBalance = parseMoney(pretax) ?: return false
-        if (pretaxBalance <= 0.0) return false
-
-        val annualBridgeNeed = estimatedAnnualBridgeNeed(retirementAge)
-        if (annualBridgeNeed <= 0.0) return false
-
-        val bridgeMonths = (PENALTY_FREE_WITHDRAWAL_AGE_MONTHS - retirementAge * 12).coerceAtLeast(0)
-        val bridgeNeed = annualBridgeNeed * bridgeMonths.toDouble() / 12.0
-        val nonPenaltyBridgeAssets =
-            (parseMoney(cash) ?: 0.0) +
-                (parseMoney(taxable) ?: 0.0) +
-                (parseMoney(roth) ?: 0.0)
-        if (bridgeNeed <= nonPenaltyBridgeAssets) return false
-
-        return RetirementSimulator.seppFixedAmortizationAnnualPayment(
-            accountBalance = pretaxBalance,
-            age = retirementAge
-        ) > 0.0
-    }
-
-    private fun estimatedAnnualBridgeNeed(retirementAge: Int): Double {
-        val spending = parseMoney(annualSpending) ?: return 0.0
-        val healthcare = (parseMoney(preMedicareMonthlyPremium) ?: 0.0) * 12.0
-        val mortgage = (parseMoney(mortgagePayment) ?: 0.0) * 12.0
-        val rent = (parseMoney(monthlyRent) ?: 0.0) * 12.0
-        val guaranteedIncomeStart = guaranteedIncomeStartAge.toIntOrNull() ?: Int.MAX_VALUE
-        val guaranteed = if (guaranteedIncomeStart <= retirementAge) {
-            parseMoney(guaranteedAnnualIncome) ?: 0.0
-        } else {
-            0.0
-        }
-        return (spending + healthcare + mortgage + rent - guaranteed).coerceAtLeast(0.0)
     }
 
     companion object {
@@ -1270,6 +1237,7 @@ private data class EditableAssumptions(
                 retirementAge = scenario.household.retirementAge.toString(),
                 filingStatus = scenario.household.filingStatus,
                 gender = scenario.household.gender,
+                spouseGender = scenario.household.spouseGender,
                 spouseCurrentAge = scenario.household.spouseCurrentAge.toString(),
                 annualSpending = scenario.spending.annualBaseSpending.wholeDollarText(),
                 generalInflationMean = scenario.spending.generalInflationMean.percentInputText(),
@@ -1389,7 +1357,11 @@ private fun parsePercent(value: String): Double? {
 }
 
 private fun requireMoney(label: String, value: Double?): String? {
-    return if (value == null || value < 0.0) "$label must be a non-negative number." else null
+    return if (value == null || !value.isFinite() || value < 0.0) {
+        "$label must be a finite non-negative number."
+    } else {
+        null
+    }
 }
 
 private fun requireInt(label: String, value: Int?, min: Int, max: Int): String? {

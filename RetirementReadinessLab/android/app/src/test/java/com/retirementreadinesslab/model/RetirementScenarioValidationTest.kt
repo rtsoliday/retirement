@@ -58,6 +58,23 @@ class RetirementScenarioValidationTest {
     }
 
     @Test
+    fun rejectsNonFiniteOutOfRangeAndUnsafeImportedValues() {
+        val scenario = sampleBaseScenario().copy(
+            spending = sampleBaseScenario().spending.copy(annualBaseSpending = Double.NaN),
+            budget = BudgetProfile(annualPropertyTaxes = -1.0),
+            market = sampleBaseScenario().market.copy(stockMeanReturn = 2.0),
+            numberOfSimulations = PRO_SIMULATION_LIMIT + 1
+        )
+
+        val errors = scenario.validate()
+
+        assertTrue(errors.any { it.contains("finite") })
+        assertTrue(errors.any { it.contains("Budget amounts") })
+        assertTrue(errors.any { it.contains("Market return assumptions") })
+        assertTrue(errors.any { it.contains("Simulation count cannot exceed") })
+    }
+
+    @Test
     fun withdrawalStrategyDefaultsFollowRetirementAge() {
         val age54 = WithdrawalStrategy.defaultsForRetirementAge(54)
         val age58 = WithdrawalStrategy.defaultsForRetirementAge(58)
@@ -67,11 +84,24 @@ class RetirementScenarioValidationTest {
         assertTrue(!age54.ruleOf55Eligible)
         assertTrue(!age54.seppEligible)
         assertTrue(age58.applyEarlyWithdrawalPenalty)
-        assertTrue(age58.ruleOf55Eligible)
+        assertTrue(!age58.ruleOf55Eligible)
         assertTrue(!age58.seppEligible)
         assertTrue(!age60.applyEarlyWithdrawalPenalty)
         assertTrue(!age60.ruleOf55Eligible)
         assertTrue(!age60.seppEligible)
+    }
+
+    @Test
+    fun rejectsImportedDurationsThatCanOverflowOrExceedSupportedUiRanges() {
+        val scenario = sampleBaseScenario().copy(
+            mortgage = sampleBaseScenario().mortgage.copy(yearsLeft = Int.MAX_VALUE),
+            longTermCare = sampleBaseScenario().longTermCare.copy(averageDurationYears = Int.MAX_VALUE)
+        )
+
+        val errors = scenario.validate()
+
+        assertTrue(errors.any { it.contains("years left") })
+        assertTrue(errors.any { it.contains("duration") })
     }
 
     @Test
