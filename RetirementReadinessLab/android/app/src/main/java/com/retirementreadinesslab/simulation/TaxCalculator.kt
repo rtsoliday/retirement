@@ -8,12 +8,22 @@ internal data class RothConversionPlan(
 )
 
 object TaxCalculator {
+    private const val ENHANCED_SENIOR_DEDUCTION = 6_000.0
+    private const val ENHANCED_SENIOR_PHASEOUT_RATE = 0.06
+    private const val ENHANCED_SENIOR_FIRST_TAX_YEAR = 2025
+    private const val ENHANCED_SENIOR_LAST_TAX_YEAR = 2028
     private val rates = listOf(0.10, 0.12, 0.22, 0.24, 0.32, 0.35, 0.37)
 
     private val standardDeductions = mapOf(
         FilingStatus.Single to 16_100.0,
         FilingStatus.Married to 32_200.0,
         FilingStatus.HeadOfHousehold to 24_150.0
+    )
+
+    private val additionalSeniorStandardDeductions = mapOf(
+        FilingStatus.Single to 2_050.0,
+        FilingStatus.Married to 1_650.0,
+        FilingStatus.HeadOfHousehold to 2_050.0
     )
 
     private val singleBrackets = listOf(0.0, 12_400.0, 50_400.0, 105_700.0, 201_775.0, 256_225.0, 640_600.0)
@@ -47,13 +57,18 @@ object TaxCalculator {
     fun ordinaryIncomeTaxLiability(
         ordinaryIncome: Double,
         filingStatus: FilingStatus,
-        inflationMultiplier: Double = 1.0
+        inflationMultiplier: Double = 1.0,
+        age65OrOlderPeople: Int = 0,
+        taxYear: Int = 2026
     ): Double {
         val multiplier = normalizedInflationMultiplier(inflationMultiplier)
-        val taxableIncome = (
-            ordinaryIncome.coerceAtLeast(0.0) -
-                standardDeductions.getValue(filingStatus) * multiplier
-            ).coerceAtLeast(0.0)
+        val taxableIncome = taxableOrdinaryIncome(
+            ordinaryIncome = ordinaryIncome,
+            filingStatus = filingStatus,
+            inflationMultiplier = multiplier,
+            age65OrOlderPeople = age65OrOlderPeople,
+            taxYear = taxYear
+        )
         return taxLiability(taxableIncome, filingStatus, multiplier)
     }
 
@@ -91,7 +106,9 @@ object TaxCalculator {
         annualOtherTaxableIncome: Double = 0.0,
         additionalWithdrawalTaxRate: Double = 0.0,
         additionalWithdrawalTaxableLimit: Double = Double.POSITIVE_INFINITY,
-        inflationMultiplier: Double = 1.0
+        inflationMultiplier: Double = 1.0,
+        age65OrOlderPeople: Int = 0,
+        taxYear: Int = 2026
     ): Double {
         val additionalRate = additionalWithdrawalTaxRate.coerceAtLeast(0.0)
         val additionalTaxableLimit = additionalWithdrawalTaxableLimit.coerceAtLeast(0.0)
@@ -105,7 +122,9 @@ object TaxCalculator {
             val tax = ordinaryIncomeTaxLiability(
                 ordinaryIncome = annualOtherTaxableIncome + withdrawal + taxableSocialSecurity,
                 filingStatus = filingStatus,
-                inflationMultiplier = inflationMultiplier
+                inflationMultiplier = inflationMultiplier,
+                age65OrOlderPeople = age65OrOlderPeople,
+                taxYear = taxYear
             )
             val additionalWithdrawalTax = minOf(withdrawal, additionalTaxableLimit) * additionalRate
             return withdrawal + annualOtherTaxableIncome + annualSocialSecurity - tax - additionalWithdrawalTax
@@ -147,7 +166,9 @@ object TaxCalculator {
         currentTaxableIncome: Double,
         rateCap: Double,
         filingStatus: FilingStatus,
-        inflationMultiplier: Double = 1.0
+        inflationMultiplier: Double = 1.0,
+        age65OrOlderPeople: Int = 0,
+        taxYear: Int = 2026
     ): RothConversionPlan {
         val availablePretax = pretaxBalance.coerceAtLeast(0.0)
         if (availablePretax <= 0.0) return RothConversionPlan(0.0, 0.0)
@@ -158,17 +179,54 @@ object TaxCalculator {
         val ordinaryIncome = currentTaxableIncome.coerceAtLeast(0.0)
         val multiplier = normalizedInflationMultiplier(inflationMultiplier)
         val upperLimit = bracketsFor(filingStatus).getOrNull(rateIndex + 1)?.times(multiplier)
-        val conversion = if (upperLimit == null) {
-            availablePretax
-        } else {
-            val bracketRoomBeforeDeduction = upperLimit + standardDeductions.getValue(filingStatus) * multiplier
-            minOf(availablePretax, (bracketRoomBeforeDeduction - ordinaryIncome).coerceAtLeast(0.0))
-        }
+        val conversion = upperLimit?.let { limit ->
+            var low = 0.0
+            var high = availablePretax
+            if (
+                taxableOrdinaryIncome(
+                    ordinaryIncome = ordinaryIncome + high,
+                    filingStatus = filingStatus,
+                    inflationMultiplier = multiplier,
+                    age65OrOlderPeople = age65OrOlderPeople,
+                    taxYear = taxYear
+                ) <= limit
+            ) {
+                high
+            } else {
+                repeat(40) {
+                    val mid = (low + high) / 2.0
+                    val taxableIncome = taxableOrdinaryIncome(
+                        ordinaryIncome = ordinaryIncome + mid,
+                        filingStatus = filingStatus,
+                        inflationMultiplier = multiplier,
+                        age65OrOlderPeople = age65OrOlderPeople,
+                        taxYear = taxYear
+                    )
+                    if (taxableIncome <= limit) {
+                        low = mid
+                    } else {
+                        high = mid
+                    }
+                }
+                low
+            }
+        } ?: availablePretax
         if (conversion <= 0.0) return RothConversionPlan(0.0, 0.0)
 
         val additionalTax = (
-            ordinaryIncomeTaxLiability(ordinaryIncome + conversion, filingStatus, multiplier) -
-                ordinaryIncomeTaxLiability(ordinaryIncome, filingStatus, multiplier)
+            ordinaryIncomeTaxLiability(
+                ordinaryIncome + conversion,
+                filingStatus,
+                multiplier,
+                age65OrOlderPeople,
+                taxYear
+            ) - ordinaryIncomeTaxLiability(
+                ordinaryIncome,
+                filingStatus,
+                multiplier,
+                age65OrOlderPeople,
+                taxYear
+            )
         ).coerceAtLeast(0.0)
         return RothConversionPlan(
             conversionAmount = conversion,
@@ -182,6 +240,37 @@ object TaxCalculator {
             FilingStatus.Married -> marriedBrackets
             FilingStatus.HeadOfHousehold -> headOfHouseholdBrackets
         }
+    }
+
+    private fun taxableOrdinaryIncome(
+        ordinaryIncome: Double,
+        filingStatus: FilingStatus,
+        inflationMultiplier: Double,
+        age65OrOlderPeople: Int,
+        taxYear: Int
+    ): Double {
+        val income = ordinaryIncome.coerceAtLeast(0.0)
+        val seniorCount = age65OrOlderPeople.coerceIn(
+            minimumValue = 0,
+            maximumValue = if (filingStatus == FilingStatus.Married) 2 else 1
+        )
+        val indexedStandardDeductions = (
+            standardDeductions.getValue(filingStatus) +
+                additionalSeniorStandardDeductions.getValue(filingStatus) * seniorCount.toDouble()
+            ) * inflationMultiplier
+        val enhancedSeniorDeduction = if (
+            seniorCount > 0 && taxYear in ENHANCED_SENIOR_FIRST_TAX_YEAR..ENHANCED_SENIOR_LAST_TAX_YEAR
+        ) {
+            val phaseoutThreshold = if (filingStatus == FilingStatus.Married) 150_000.0 else 75_000.0
+            val deductionPerPerson = (
+                ENHANCED_SENIOR_DEDUCTION -
+                    (income - phaseoutThreshold).coerceAtLeast(0.0) * ENHANCED_SENIOR_PHASEOUT_RATE
+                ).coerceAtLeast(0.0)
+            deductionPerPerson * seniorCount.toDouble()
+        } else {
+            0.0
+        }
+        return (income - indexedStandardDeductions - enhancedSeniorDeduction).coerceAtLeast(0.0)
     }
 
     private fun normalizedInflationMultiplier(value: Double): Double {

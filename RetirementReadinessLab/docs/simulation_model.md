@@ -8,10 +8,11 @@ Current behavior:
 
 - Monthly pre-retirement growth.
 - Monthly retirement withdrawals and cashflows.
+- Home-sale spending removes property tax and homeowners insurance only when the saved budget estimate was applied to annual base spending.
 - Stock and bond returns sampled from normal distributions.
 - Post-retirement stock/bond allocation selected from a tunable invested-assets-to-annual-spending ladder.
 - Inflation sampled from normal distribution with a floor.
-- Federal tax estimate using 2026 brackets and base standard deductions indexed with modeled general inflation.
+- Federal tax estimate using 2026 brackets, base and age-65 standard deductions, and the income-phased 2025-2028 enhanced senior deduction; permanent amounts are indexed with modeled general inflation.
 - Optional 10% early withdrawal tax on modeled pre-tax withdrawals before age 59 1/2.
 - Optional Rule of 55 assumption for qualifying employer-plan pre-tax withdrawals after retiring at 55 or later.
 - Optional 72(t) / SEPP fixed amortization schedule from modeled pre-tax assets, using IRS single-life expectancy factors and a 5% interest assumption.

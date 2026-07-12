@@ -28,6 +28,56 @@ class TaxCalculatorTest {
     }
 
     @Test
+    fun seniorDeductionsApplyByAgeIncomeFilingStatusAndTaxYear() {
+        assertEquals(
+            585.0,
+            TaxCalculator.ordinaryIncomeTaxLiability(
+                ordinaryIncome = 30_000.0,
+                filingStatus = FilingStatus.Single,
+                age65OrOlderPeople = 1,
+                taxYear = 2026
+            ),
+            0.01
+        )
+
+        val phasedSingleTaxableIncome = 100_000.0 - 16_100.0 - 2_050.0 - 4_500.0
+        assertEquals(
+            TaxCalculator.taxLiability(phasedSingleTaxableIncome, FilingStatus.Single),
+            TaxCalculator.ordinaryIncomeTaxLiability(
+                ordinaryIncome = 100_000.0,
+                filingStatus = FilingStatus.Single,
+                age65OrOlderPeople = 1,
+                taxYear = 2026
+            ),
+            0.01
+        )
+
+        val marriedTaxableIncome = 100_000.0 - 32_200.0 - 2 * 1_650.0 - 2 * 6_000.0
+        assertEquals(
+            TaxCalculator.taxLiability(marriedTaxableIncome, FilingStatus.Married),
+            TaxCalculator.ordinaryIncomeTaxLiability(
+                ordinaryIncome = 100_000.0,
+                filingStatus = FilingStatus.Married,
+                age65OrOlderPeople = 2,
+                taxYear = 2026
+            ),
+            0.01
+        )
+
+        val postExpirationTaxableIncome = 100_000.0 - 16_100.0 - 2_050.0
+        assertEquals(
+            TaxCalculator.taxLiability(postExpirationTaxableIncome, FilingStatus.Single),
+            TaxCalculator.ordinaryIncomeTaxLiability(
+                ordinaryIncome = 100_000.0,
+                filingStatus = FilingStatus.Single,
+                age65OrOlderPeople = 1,
+                taxYear = 2029
+            ),
+            0.01
+        )
+    }
+
+    @Test
     fun ordinaryIncomeIndexesBracketsAndStandardDeductionForInflation() {
         assertEquals(
             0.0,
@@ -149,6 +199,35 @@ class TaxCalculatorTest {
         assertEquals(
             TaxCalculator.ordinaryIncomeTaxLiability(121_800.0, FilingStatus.Single) -
                 TaxCalculator.ordinaryIncomeTaxLiability(80_000.0, FilingStatus.Single),
+            plan.additionalTax,
+            0.01
+        )
+    }
+
+    @Test
+    fun rothConversionAccountsForSeniorDeductionPhaseoutWhenFillingBracket() {
+        val plan = TaxCalculator.rothConversionPlan(
+            pretaxBalance = 100_000.0,
+            currentTaxableIncome = 80_000.0,
+            rateCap = 0.22,
+            filingStatus = FilingStatus.Single,
+            age65OrOlderPeople = 1,
+            taxYear = 2026
+        )
+
+        assertEquals(46_745.28, plan.conversionAmount, 0.01)
+        assertEquals(
+            TaxCalculator.ordinaryIncomeTaxLiability(
+                ordinaryIncome = 80_000.0 + plan.conversionAmount,
+                filingStatus = FilingStatus.Single,
+                age65OrOlderPeople = 1,
+                taxYear = 2026
+            ) - TaxCalculator.ordinaryIncomeTaxLiability(
+                ordinaryIncome = 80_000.0,
+                filingStatus = FilingStatus.Single,
+                age65OrOlderPeople = 1,
+                taxYear = 2026
+            ),
             plan.additionalTax,
             0.01
         )

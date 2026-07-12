@@ -130,7 +130,8 @@ data class BudgetProfile(
     val annualPropertyTaxes: Double = 0.0,
     val annualHomeInsurance: Double = 0.0,
     val annualAutoInsurance: Double = 0.0,
-    val monthlyBudgets: List<MonthlyBudget> = emptyList()
+    val monthlyBudgets: List<MonthlyBudget> = emptyList(),
+    val isAppliedToAnnualBaseSpending: Boolean = false
 ) {
     val annualFixedSpending: Double
         get() = annualPropertyTaxes + annualHomeInsurance + annualAutoInsurance

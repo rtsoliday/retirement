@@ -36,9 +36,9 @@ class RetirementSimulatorTest {
 
         assertEquals(first.successProbability, second.successProbability, 0.0001)
         assertEquals(first.medianEndingBalance, second.medianEndingBalance, 0.01)
-        assertEquals("2026.07-survivor-rules", first.provenance.engineVersion)
+        assertEquals("2026.07-senior-tax-deductions", first.provenance.engineVersion)
         assertEquals("Monthly cashflow model with annual result bands", first.provenance.engineCadence)
-        assertEquals("Inflation-indexed 2026 federal brackets and standard deduction", first.provenance.taxTableVersion)
+        assertEquals("2026 federal brackets with senior-aware deductions", first.provenance.taxTableVersion)
         assertEquals(
             "SSA Trustees Alt2 2025 annual death probabilities",
             first.provenance.mortalityModelVersion
@@ -802,6 +802,50 @@ class RetirementSimulatorTest {
         assertEquals(0.0, withNoEquityResult.successProbability, 0.0001)
         assertEquals(1.0, withHomeResult.successProbability, 0.0001)
         assertTrue(withHomeResult.medianEndingBalance > withoutHomeResult.medianEndingBalance)
+    }
+
+    @Test
+    fun homeSaleOnlyRemovesOwnershipCostsWhenBudgetEstimateWasApplied() {
+        val base = sampleScenario().copy(
+            household = HouseholdProfile(currentAge = 65, retirementAge = 65, targetEndAge = 75),
+            accounts = AccountBalances(pretax = 0.0, roth = 0.0, taxable = 0.0, cash = 10_000.0),
+            spending = SpendingPlan(
+                annualBaseSpending = 12_000.0,
+                generalInflationMean = 0.0,
+                generalInflationStdDev = 0.0,
+                spendingPathModel = SpendingPathModel.Flat,
+                lowPortfolioSpendingReduction = 0.0
+            ),
+            home = HomePlan(currentValue = 1_000_000.0),
+            healthcare = HealthcarePlan(preMedicareMonthlyPremium = 0.0, includeMedicarePremiums = false),
+            socialSecurity = SocialSecurityPlan(annualBenefitAt67 = 0.0, claimAge = 67),
+            market = MarketAssumptions(
+                preRetirementMeanReturn = 0.0,
+                preRetirementStdDev = 0.0,
+                stockMeanReturn = 0.0,
+                stockStdDev = 0.0,
+                bondMeanReturn = 0.0,
+                bondStdDev = 0.0
+            ),
+            withdrawalStrategy = WithdrawalStrategy(useCashReserveDuringDrawdowns = false),
+            numberOfSimulations = 1
+        )
+        val savedOnly = base.copy(
+            budget = BudgetProfile(
+                annualPropertyTaxes = 12_000.0,
+                isAppliedToAnnualBaseSpending = false
+            )
+        )
+        val applied = savedOnly.copy(
+            budget = savedOnly.budget.copy(isAppliedToAnnualBaseSpending = true)
+        )
+
+        val baseResult = RetirementSimulator.run(base)
+        val savedOnlyResult = RetirementSimulator.run(savedOnly)
+        val appliedResult = RetirementSimulator.run(applied)
+
+        assertEquals(baseResult.medianEndingBalance, savedOnlyResult.medianEndingBalance, 0.01)
+        assertTrue(appliedResult.medianEndingBalance > savedOnlyResult.medianEndingBalance)
     }
 
     @Test

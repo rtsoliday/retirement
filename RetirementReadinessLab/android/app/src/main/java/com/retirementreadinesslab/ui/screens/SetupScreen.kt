@@ -663,7 +663,7 @@ fun SetupScreen(
                     color = LabMutedText
                 )
                 NumberField("Random seed", form.seed) { form = form.copy(seed = it) }
-                KeyValueRow("Federal tax table", "Inflation-indexed 2026 brackets")
+                KeyValueRow("Federal tax table", "2026 brackets with senior-aware deductions")
                 KeyValueRow("Medicare model", MedicarePremiums.PREMIUM_TABLE_VERSION)
                 KeyValueRow("Projection horizon", "Mortality cap age $DEFAULT_PROJECTION_END_AGE per person")
                 KeyValueRow("Engine cadence", "Monthly cashflow model")
@@ -1137,6 +1137,10 @@ private data class EditableAssumptions(
         if (firstError != null) return ParsedAssumptions(error = firstError)
 
         val updated = base.copy(
+            budget = base.budget.copy(
+                isAppliedToAnnualBaseSpending = base.budget.isAppliedToAnnualBaseSpending &&
+                    annualSpending == base.spending.annualBaseSpending
+            ),
             household = HouseholdProfile(
                 currentAge = currentAge!!,
                 retirementAge = retirementAge!!,

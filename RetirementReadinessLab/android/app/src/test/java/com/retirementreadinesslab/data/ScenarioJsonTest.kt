@@ -64,6 +64,7 @@ class ScenarioJsonTest {
                 annualPropertyTaxes = 4_800.0,
                 annualHomeInsurance = 2_400.0,
                 annualAutoInsurance = 1_800.0,
+                isAppliedToAnnualBaseSpending = true,
                 monthlyBudgets = listOf(
                     MonthlyBudget(
                         month = "2026-05",
@@ -108,6 +109,7 @@ class ScenarioJsonTest {
         assertEquals(0.02, decoded.first().guaranteedIncome.annualIncrease, 0.01)
         assertEquals(0.75, decoded.first().guaranteedIncome.survivorPercent, 0.01)
         assertEquals(4_800.0, decoded.first().budget.annualPropertyTaxes, 0.01)
+        assertTrue(decoded.first().budget.isAppliedToAnnualBaseSpending)
         assertEquals("2026-05", decoded.first().budget.monthlyBudgets.first().month)
         assertEquals("Utilities", decoded.first().budget.monthlyBudgets.first().checkingSavingsBills.first().name)
         assertTrue(raw.startsWith("["))
@@ -133,6 +135,30 @@ class ScenarioJsonTest {
         val decoded = ScenarioJson.decodeScenarios(raw)
 
         assertTrue(decoded.first().healthcare.includeMedicarePremiums)
+    }
+
+    @Test
+    fun legacyBackupInfersWhetherBudgetEstimateWasAppliedToSpending() {
+        val budget = BudgetProfile(
+            annualPropertyTaxes = 4_800.0,
+            annualHomeInsurance = 2_400.0,
+            monthlyBudgets = listOf(
+                MonthlyBudget(month = "2026-05", cashAndAtmWithdrawals = 1_000.0)
+            )
+        )
+        val appliedScenario = sampleBaseScenario().copy(
+            budget = budget,
+            spending = sampleBaseScenario().spending.copy(
+                annualBaseSpending = budget.annualBaseSpendingEstimate
+            )
+        )
+        val raw = JSONArray(ScenarioJson.encodeScenarios(listOf(appliedScenario))).apply {
+            getJSONObject(0).getJSONObject("budget").remove("isAppliedToAnnualBaseSpending")
+        }.toString()
+
+        val decoded = ScenarioJson.decodeScenarios(raw)
+
+        assertTrue(decoded.first().budget.isAppliedToAnnualBaseSpending)
     }
 
     @Test

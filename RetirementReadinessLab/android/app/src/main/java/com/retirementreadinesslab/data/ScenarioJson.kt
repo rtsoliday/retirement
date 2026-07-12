@@ -143,6 +143,7 @@ object ScenarioJson {
         val longTermCare = json.optJSONObject("longTermCare") ?: JSONObject()
 
         val retirementAge = household.optInt("retirementAge", 60)
+        val annualBaseSpending = spending.optDouble("annualBaseSpending", 0.0)
         val defaultWithdrawalStrategy = WithdrawalStrategy.defaultsForRetirementAge(retirementAge)
         val primaryGender = enumOrDefault(household.optString("gender"), Gender.Male)
         val defaultSpouseGender = if (primaryGender == Gender.Male) Gender.Female else Gender.Male
@@ -166,7 +167,7 @@ object ScenarioJson {
                 cash = accounts.optDouble("cash", 0.0)
             ),
             spending = SpendingPlan(
-                annualBaseSpending = spending.optDouble("annualBaseSpending", 0.0),
+                annualBaseSpending = annualBaseSpending,
                 generalInflationMean = spending.optDouble("generalInflationMean", DEFAULT_GENERAL_INFLATION_MEAN),
                 generalInflationStdDev = spending.optDouble("generalInflationStdDev", DEFAULT_GENERAL_INFLATION_STD_DEV),
                 spendingPathModel = enumOrDefault(
@@ -175,7 +176,7 @@ object ScenarioJson {
                 ),
                 lowPortfolioSpendingReduction = spending.optDouble("lowPortfolioSpendingReduction", 0.10)
             ),
-            budget = decodeBudget(budget),
+            budget = decodeBudget(budget, annualBaseSpending),
             mortgage = MortgagePlan(
                 monthlyPayment = mortgage.optDouble("monthlyPayment", 0.0),
                 yearsLeft = mortgage.optInt("yearsLeft", 0),
@@ -284,6 +285,7 @@ object ScenarioJson {
             .put("annualPropertyTaxes", budget.annualPropertyTaxes)
             .put("annualHomeInsurance", budget.annualHomeInsurance)
             .put("annualAutoInsurance", budget.annualAutoInsurance)
+            .put("isAppliedToAnnualBaseSpending", budget.isAppliedToAnnualBaseSpending)
             .put("monthlyBudgets", JSONArray().apply {
                 budget.monthlyBudgets.forEach { month ->
                     put(JSONObject()
@@ -306,13 +308,19 @@ object ScenarioJson {
         }
     }
 
-    private fun decodeBudget(json: JSONObject): BudgetProfile {
-        return BudgetProfile(
+    private fun decodeBudget(json: JSONObject, annualBaseSpending: Double): BudgetProfile {
+        val budget = BudgetProfile(
             annualPropertyTaxes = json.optDouble("annualPropertyTaxes", 0.0),
             annualHomeInsurance = json.optDouble("annualHomeInsurance", 0.0),
             annualAutoInsurance = json.optDouble("annualAutoInsurance", 0.0),
-            monthlyBudgets = decodeMonthlyBudgets(json.optJSONArray("monthlyBudgets") ?: JSONArray())
+            monthlyBudgets = decodeMonthlyBudgets(json.optJSONArray("monthlyBudgets") ?: JSONArray()),
+            isAppliedToAnnualBaseSpending = json.optBoolean("isAppliedToAnnualBaseSpending", false)
         )
+        if (json.has("isAppliedToAnnualBaseSpending")) return budget
+
+        val legacyEstimateWasApplied = budget.annualBaseSpendingEstimate > 0.0 &&
+            kotlin.math.abs(budget.annualBaseSpendingEstimate - annualBaseSpending) < 0.01
+        return budget.copy(isAppliedToAnnualBaseSpending = legacyEstimateWasApplied)
     }
 
     private fun decodeMonthlyBudgets(array: JSONArray): List<MonthlyBudget> {

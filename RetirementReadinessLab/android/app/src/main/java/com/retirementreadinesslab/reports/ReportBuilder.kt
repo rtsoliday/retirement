@@ -146,7 +146,7 @@ object ReportBuilder {
             appendLine("- Long-term care duration: ${scenario.longTermCare.averageDurationYears} years")
             appendLine("- Simulations: ${scenario.numberOfSimulations}")
             appendLine("- Random seed: ${scenario.seed}")
-            appendLine("- Federal tax table: Inflation-indexed 2026 brackets and standard deduction")
+            appendLine("- Federal tax table: 2026 brackets with senior-aware deductions")
             appendLine()
             appendLine("Suggested next test")
             appendLine(result?.riskBreakdown?.recommendedNextTest ?: "Run this scenario before comparing next steps.")

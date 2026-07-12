@@ -245,7 +245,13 @@ class RetirementLabState(
 
     fun saveSelectedBudget(budget: BudgetProfile) {
         if (scenarios.any { it.id == selectedScenarioId }) {
-            updateSelected { scenario -> scenario.copy(budget = budget) }
+            updateSelected { scenario ->
+                val remainsApplied = scenario.budget.isAppliedToAnnualBaseSpending &&
+                    kotlin.math.abs(budget.annualBaseSpendingEstimate - scenario.spending.annualBaseSpending) < 0.01
+                scenario.copy(
+                    budget = budget.copy(isAppliedToAnnualBaseSpending = remainsApplied)
+                )
+            }
             storageMessage = "Budget saved."
         }
     }
@@ -257,7 +263,7 @@ class RetirementLabState(
         }
         updateSelected { scenario ->
             scenario.copy(
-                budget = budget,
+                budget = budget.copy(isAppliedToAnnualBaseSpending = true),
                 spending = scenario.spending.copy(annualBaseSpending = estimate)
             )
         }

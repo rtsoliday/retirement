@@ -31,11 +31,12 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 object RetirementSimulator {
-    private const val ENGINE_VERSION = "2026.07-survivor-rules"
+    private const val ENGINE_VERSION = "2026.07-senior-tax-deductions"
     private const val ENGINE_CADENCE = "Monthly cashflow model with annual result bands"
-    private const val TAX_TABLE_VERSION = "Inflation-indexed 2026 federal brackets and standard deduction"
+    private const val TAX_TABLE_VERSION = "2026 federal brackets with senior-aware deductions"
     private val MORTALITY_MODEL_VERSION = MortalityTables.TABLE_VERSION
     private const val MONTHS_PER_YEAR = 12
+    private const val BASE_TAX_YEAR = 2026
     private const val MAX_PATH_SCATTER_POINTS = 30_000
     private const val BALANCE_EPSILON = 0.01
     private const val SIMULATION_SEED_STRIDE = -7046029254386353131L
@@ -410,10 +411,14 @@ object RetirementSimulator {
         var monthlyGuaranteedIncome = scenario.guaranteedIncome.annualIncome / MONTHS_PER_YEAR.toDouble() *
             compound(1.0 + monthlyGuaranteedIncomeIncrease, preRetirementMonths)
         var monthlyHomeOwnershipCostInBase =
-            (scenario.budget.annualPropertyTaxes + scenario.budget.annualHomeInsurance) /
-                MONTHS_PER_YEAR.toDouble() *
-                compound(1.0 + monthlyInflationMean, preRetirementMonths) *
-                spendingPathMultiplier
+            if (scenario.budget.isAppliedToAnnualBaseSpending) {
+                (scenario.budget.annualPropertyTaxes + scenario.budget.annualHomeInsurance) /
+                    MONTHS_PER_YEAR.toDouble() *
+                    compound(1.0 + monthlyInflationMean, preRetirementMonths) *
+                    spendingPathMultiplier
+            } else {
+                0.0
+            }
         var monthlyHealthcare = scenario.healthcare.preMedicareMonthlyPremium *
             compound(1.0 + monthlyHealthcareInflationMean, preRetirementMonths)
         var medicareInflationMultiplier = compound(1.0 + monthlyHealthcareInflationMean, preRetirementMonths)
@@ -465,6 +470,9 @@ object RetirementSimulator {
             } else {
                 scenario.household.filingStatus
             }
+            val age65OrOlderPeople = (if (primaryAlive && age >= 65) 1 else 0) +
+                (if (spouseAlive && spouseAge >= 65) 1 else 0)
+            val taxYear = BASE_TAX_YEAR + yearsToRetirement + monthOffset / MONTHS_PER_YEAR
 
             val primaryInLongTermCare = primaryAlive &&
                 primaryLtcStartAge != null &&
@@ -555,7 +563,9 @@ object RetirementSimulator {
                 annualSocialSecurity = socialSecurity * MONTHS_PER_YEAR.toDouble(),
                 annualOtherTaxableIncome = guaranteedIncome * MONTHS_PER_YEAR.toDouble(),
                 filingStatus = currentFilingStatus,
-                taxInflationMultiplier = taxInflationMultiplier
+                taxInflationMultiplier = taxInflationMultiplier,
+                age65OrOlderPeople = age65OrOlderPeople,
+                taxYear = taxYear
             )
             val preMedicarePeople = (if (primaryAlive && age < 65) 1 else 0) +
                 (if (spouseAlive && spouseAge < 65) 1 else 0)
@@ -629,6 +639,8 @@ object RetirementSimulator {
                 balances = balances,
                 useCashFirst = useCashReserveForDrawdown,
                 taxInflationMultiplier = taxInflationMultiplier,
+                age65OrOlderPeople = age65OrOlderPeople,
+                taxYear = taxYear,
                 additionalWithdrawalTaxRate = earlyWithdrawalPenaltyRate(
                     retirementAge = scenario.household.retirementAge,
                     primaryAgeMonths = primaryAgeMonths,
@@ -662,7 +674,9 @@ object RetirementSimulator {
                     currentTaxableIncome = currentAnnualMedicareIncome,
                     rateCap = scenario.rothConversion.marginalRateCap,
                     filingStatus = currentFilingStatus,
-                    inflationMultiplier = taxInflationMultiplier
+                    inflationMultiplier = taxInflationMultiplier,
+                    age65OrOlderPeople = age65OrOlderPeople,
+                    taxYear = taxYear
                 )
                 if (conversionPlan.conversionAmount > 0.0) {
                     balances.pretax -= conversionPlan.conversionAmount
@@ -772,6 +786,8 @@ object RetirementSimulator {
         balances: SimBalances,
         useCashFirst: Boolean,
         taxInflationMultiplier: Double,
+        age65OrOlderPeople: Int,
+        taxYear: Int,
         additionalWithdrawalTaxRate: Double
     ): PortfolioWithdrawalPlan {
         val additionalRate = additionalWithdrawalTaxRate.coerceAtLeast(0.0)
@@ -795,7 +811,9 @@ object RetirementSimulator {
                     annualTaxablePortfolioWithdrawal +
                     annualTaxableSocialSecurity,
                 filingStatus = filingStatus,
-                inflationMultiplier = taxInflationMultiplier
+                inflationMultiplier = taxInflationMultiplier,
+                age65OrOlderPeople = age65OrOlderPeople,
+                taxYear = taxYear
             )
             val additionalWithdrawalTax = annualTaxablePortfolioWithdrawal * additionalRate
             val annualNetCash = annualSocialSecurity +
@@ -1162,14 +1180,18 @@ object RetirementSimulator {
         annualSocialSecurity: Double,
         annualOtherTaxableIncome: Double,
         filingStatus: FilingStatus,
-        taxInflationMultiplier: Double = 1.0
+        taxInflationMultiplier: Double = 1.0,
+        age65OrOlderPeople: Int = 0,
+        taxYear: Int = BASE_TAX_YEAR
     ): Double {
         val portfolioWithdrawal = TaxCalculator.grossWithdrawalForNetNeed(
             netNeed = annualNetNeed.coerceAtLeast(0.0),
             annualSocialSecurity = annualSocialSecurity.coerceAtLeast(0.0),
             filingStatus = filingStatus,
             annualOtherTaxableIncome = annualOtherTaxableIncome.coerceAtLeast(0.0),
-            inflationMultiplier = taxInflationMultiplier
+            inflationMultiplier = taxInflationMultiplier,
+            age65OrOlderPeople = age65OrOlderPeople,
+            taxYear = taxYear
         )
         val otherIncome = portfolioWithdrawal + annualOtherTaxableIncome.coerceAtLeast(0.0)
         return otherIncome + TaxCalculator.taxableSocialSecurity(
