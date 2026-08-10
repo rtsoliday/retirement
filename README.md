@@ -16,7 +16,7 @@ A Python toolkit for Monte Carlo retirement planning. The simulator projects por
 Python 3.12 or later is recommended.
 
 ```bash
-pip install numpy matplotlib kivy
+pip install numpy matplotlib numba pandas
 ```
 Tkinter ships with the standard Python distribution.
 
