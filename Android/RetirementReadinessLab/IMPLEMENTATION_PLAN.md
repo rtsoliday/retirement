@@ -12,10 +12,10 @@ The app should feel more like a guided retirement decision lab than a spreadshee
 
 Keep this program separate from the existing desktop/Python application.
 
-Recommended future structure:
+Current repository structure:
 
 ```text
-RetirementReadinessLab/
+Android/RetirementReadinessLab/
   IMPLEMENTATION_PLAN.md
   README.md
   android/
@@ -31,7 +31,7 @@ RetirementReadinessLab/
     example_scenarios.json
 ```
 
-Initial work in this folder should be documentation-first. Actual Android source code can be added under `RetirementReadinessLab/android/` later.
+The Android project now lives under `Android/RetirementReadinessLab/android/`.
 
 ## 3. Target Users
 
@@ -743,7 +743,7 @@ Exit criteria:
 
 Deliverables:
 
-- New Android project under `RetirementReadinessLab/android/`.
+- New Android project under `Android/RetirementReadinessLab/android/`.
 - Compose navigation shell.
 - Theme and reusable UI components.
 - Local persistence foundation.

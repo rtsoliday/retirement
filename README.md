@@ -1,49 +1,35 @@
-# Retirement Simulator
+# Retirement tools
 
-A Python toolkit for Monte Carlo retirement planning. The simulator projects portfolio balances through retirement while accounting for taxes, inflation, Social Security and pre-Medicare health costs.
+This repository contains four separate programs. Each program's code, data, and tests are grouped under its own directory.
 
-## Features
-- **Monte Carlo engine** – models stock and bond returns, inflation, and dynamic asset allocation.
-- **Tax aware** – computes federal income tax using 2024 brackets for single, married and head of household filers.
-- **Social Security** – accepts the age benefits start and adjusts payouts accordingly.
-- **Health care before Medicare** – includes an optional pre‑65 premium (defaults to $650/month) that grows with inflation until age 65.
-- **Mortgage and other spending** – yearly retirement needs can include mortgage and health care payments that phase out after a set number of years.
-- **Mortality modeling** – uses gender‑specific probability tables to simulate death and stop withdrawals.
-- **Configuration persistence** – GUI inputs are saved to and loaded from `config.json`.
-- **Interactive front‑ends** – Tkinter (`monticarlo.py`) and Kivy (`kivy_app.py`) interfaces with optional plotting of successful and failed paths.
+| Program | Platform | Directory |
+| --- | --- | --- |
+| Retirement simulator | Python desktop (Tkinter) | [`Python/retirement_simulator/`](Python/retirement_simulator/) |
+| Mortgage vs. investment calculator | Python desktop (Tkinter) | [`Python/mortgage_investment/`](Python/mortgage_investment/) |
+| Fidelity fund ranker | Python command line | [`Python/fidelity_fund_ranker/`](Python/fidelity_fund_ranker/) |
+| Retirement Readiness Lab | Native Android | [`Android/RetirementReadinessLab/`](Android/RetirementReadinessLab/) |
 
-## Installation
-Python 3.12 or later is recommended.
+See each program's README for requirements and run commands. The Python retirement simulator and Android app are separate implementations of the retirement planning concept.
 
-```bash
-pip install numpy matplotlib kivy
-```
-Tkinter ships with the standard Python distribution.
+## Quick start
 
-## Running the simulator
-### Tkinter interface
-```bash
-python monticarlo.py
-```
-
-### Kivy interface
-```bash
-python kivy_app.py
-```
-
-Both interfaces allow you to adjust general market assumptions and user‑specific parameters (age, savings, mortgage, health care, etc.), run simulations, and view success rates. Results and settings are persisted in `config.json`.
-
-For advanced use, the `core` module exposes a `SimulationConfig` dataclass and a `simulate` function that returns the percentage of runs where funds last through all retirement years.
-
-## Testing
-Run the test suite with [pytest](https://pytest.org/):
+From the repository root:
 
 ```bash
+python Python/retirement_simulator/montecarlo.py
+python Python/mortgage_investment/mortgage_investment.py
+python Python/fidelity_fund_ranker/rank_fidelity_funds.py --help
 pytest
 ```
 
+Open `Android/RetirementReadinessLab/android` in Android Studio, or run its Gradle wrapper from that directory.
+
+`Python/retirement_simulator/monticarlo.py` is a compatibility launcher for `montecarlo.py`; it is not a separate app. `core.py` is the simulator's calculation library. There is no Kivy app in this repository.
+
 ## License
+
 Released under the [GNU General Public License v3](LICENSE).
 
 ## Disclaimer
-This project is for educational purposes only and does not constitute financial advice.
+
+These programs are for educational purposes only and do not constitute financial advice.

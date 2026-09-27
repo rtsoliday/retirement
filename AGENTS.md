@@ -4,27 +4,16 @@ This file contains a short tactical summary based on repository evidence. `../ll
 
 <!-- BEGIN MACHINE:summary -->
 ## Quick start
-- Repository-local guidance is sufficient: start with `AGENTS.md`, `README.md`, `docs/`, build/test/config files, and the source tree.
-- A Python toolkit for Monte Carlo retirement planning. The simulator projects portfolio balances through retirement while accounting for taxes, inflation, Social Security and pre-Medicare health costs.
-- Primary work areas: `tests`.
+- This repository has four separate programs: three under `Python/` and one under `Android/RetirementReadinessLab/`.
+- Read the root `README.md` and the README in the relevant program directory before changing it.
 
-## Read first
-- `README.md`: Primary project overview and workflow notes
-- `pytest.ini`: Build system entry point or dependency manifest
-- `core.py`: Likely operator or developer entry point
-- `montecarlo.py`: Likely operator or developer entry point
-- `mortgage_investment.py`: Likely operator or developer entry point
-
-## Build and test
-- Documented setup/build commands: `pip install numpy matplotlib kivy`, `make it effectively proprietary. To prevent this, the GPL assures that`.
-- Documented test commands: `pytest`.
-- Likely run commands or operator entry points: `python monticarlo.py`, `python kivy_app.py`.
-
-## Operational warnings
-- No operational warnings were extracted from the inspected files.
-
-## Compatibility constraints
-- No explicit compatibility constraints were extracted from the inspected files.
+## Programs and tests
+- `Python/retirement_simulator/`: Tkinter app (`montecarlo.py`), calculation library (`core.py`), data, and tests. `monticarlo.py` is a compatibility launcher.
+- `Python/mortgage_investment/`: standalone Tkinter calculator.
+- `Python/fidelity_fund_ranker/`: standalone command-line script.
+- `Android/RetirementReadinessLab/android/`: native Android Gradle project. Product docs live one level above the Gradle root.
+- Run Python tests with `pytest` from the repository root; `pytest.ini` points to the retirement simulator tests.
+- Run Android unit tests from the Android Gradle root with `./gradlew :app:testDebugUnitTest`.
 
 ## Related knowledge
 - Repository-local documentation should be treated as authoritative.

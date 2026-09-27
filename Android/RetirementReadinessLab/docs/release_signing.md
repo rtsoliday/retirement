@@ -14,7 +14,7 @@ The release build is intentionally not wired to a committed signing key.
 
 ## Build Commands
 
-From `RetirementReadinessLab/android`:
+From `Android/RetirementReadinessLab/android`:
 
 ```bash
 ./gradlew :app:assembleDebug

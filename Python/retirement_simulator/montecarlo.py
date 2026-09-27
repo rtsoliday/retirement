@@ -1,6 +1,7 @@
 import numpy as np
 import tkinter as tk
 from tkinter import ttk, messagebox
+from pathlib import Path
 
 from core import (
     SimulationConfig,
@@ -447,7 +448,7 @@ def _load_inputs() -> SimulationConfig:
         if gender.startswith("m")
         else "DeathProbsE_F_Alt2_TR2025.csv"
     )
-    df = pd.read_csv(file)
+    df = pd.read_csv(Path(__file__).with_name(file))
     death_row = df[df["Year"] == 2025].iloc[0]
     death_probs = death_row.drop("Year").astype(float).values
 

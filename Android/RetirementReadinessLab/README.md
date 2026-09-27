@@ -23,14 +23,14 @@ This folder currently contains:
 - App icon, splash branding, privacy/disclaimer copy, and release-prep documentation.
 - Unit tests, Compose instrumentation test compilation, and a simulator performance profile.
 
-The app has been built and launched from Android Studio during development. Use the Gradle wrapper from `RetirementReadinessLab/android`.
+The app has been built and launched from Android Studio during development. Use the Gradle wrapper from `Android/RetirementReadinessLab/android`.
 
 ## Open In Android Studio
 
 Open this folder as an Android project:
 
 ```text
-RetirementReadinessLab/android
+Android/RetirementReadinessLab/android
 ```
 
 Android Studio should sync Gradle dependencies from the root `settings.gradle.kts` and `build.gradle.kts` files.
@@ -43,7 +43,7 @@ Before commercial release, resolve the licensing decision documented in `IMPLEME
 
 ## Useful Commands
 
-From `RetirementReadinessLab/android`:
+From `Android/RetirementReadinessLab/android`:
 
 ```bash
 ./gradlew :app:testDebugUnitTest

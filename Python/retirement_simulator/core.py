@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
@@ -96,7 +96,7 @@ brackets = TAX_BRACKETS["single"]
 rates = TAX_RATES["single"]
 
 
-CONFIG_FILE = "config.json"
+CONFIG_FILE = Path(__file__).with_name("config.json")
 
 
 def parse_percent(val: str) -> float:
@@ -1987,7 +1987,7 @@ def _collect_paths_sequential(cfg: SimulationConfig, n_sims: int):
 def load_config() -> dict:
     """Load saved configuration if available."""
 
-    if os.path.exists(CONFIG_FILE):
+    if CONFIG_FILE.exists():
         with open(CONFIG_FILE) as f:
             return json.load(f)
     return {}
