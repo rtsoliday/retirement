@@ -1,6 +1,7 @@
 package com.retirementreadinesslab.simulation
 
 import com.retirementreadinesslab.model.AccountBalances
+import com.retirementreadinesslab.model.FilingStatus
 import com.retirementreadinesslab.model.HealthcarePlan
 import com.retirementreadinesslab.model.HouseholdProfile
 import com.retirementreadinesslab.model.LongTermCareAssumption
@@ -18,6 +19,33 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ScenarioLabAnalyzerTest {
+    @Test
+    fun retirementSweepKeepsCurrentPlanWhenRetirementIsAfterSeventy() {
+        val scenario = sampleBaseScenario().copy(
+            household = HouseholdProfile(currentAge = 72, retirementAge = 72, targetEndAge = 73)
+        )
+        val analysis = ScenarioLabAnalyzer.analyze(scenario, quickSimulations = 50, targetEstimateSimulations = 50)
+        val rows = analysis.sweeps.first { it.type == LabSweepType.RetirementAge }.rows
+        assertEquals(listOf("Age 72"), rows.map { it.label })
+        assertTrue(rows.single().isBase)
+    }
+
+    @Test
+    fun retirementSweepExcludesAgesBeyondOlderSpousesProjectionCap() {
+        val scenario = sampleBaseScenario().copy(
+            household = HouseholdProfile(
+                currentAge = 60, retirementAge = 60, targetEndAge = 65,
+                filingStatus = FilingStatus.Married,
+                spouseCurrentAge = 63
+            ),
+            accounts = AccountBalances(pretax = 0.0, roth = 10_000_000.0, cash = 0.0)
+        )
+        val analysis = ScenarioLabAnalyzer.analyze(scenario, quickSimulations = 50, targetEstimateSimulations = 50)
+        val rows = analysis.sweeps.first { it.type == LabSweepType.RetirementAge }.rows
+        assertEquals(listOf("Age 60"), rows.map { it.label })
+        assertTrue(rows.single().isBase)
+    }
+
     @Test
     fun analyzerBuildsTargetFindersSweepsAndComparisons() {
         val scenario = sampleBaseScenario()

@@ -76,6 +76,8 @@ import com.retirementreadinesslab.simulation.MedicarePremiums
 import com.retirementreadinesslab.simulation.SocialSecurity
 import com.retirementreadinesslab.state.RetirementLabState
 import com.retirementreadinesslab.ui.asCurrency
+import com.retirementreadinesslab.ui.asEditablePercent
+import com.retirementreadinesslab.ui.asEditableMoney
 import com.retirementreadinesslab.ui.findActivity
 import com.retirementreadinesslab.ui.components.KeyValueRow
 import com.retirementreadinesslab.ui.components.ProLockedInlineNotice
@@ -341,8 +343,8 @@ fun SetupScreen(
                         testTag = "restore-general-inflation-defaults",
                         onClick = {
                             form = form.copy(
-                                generalInflationMean = DEFAULT_GENERAL_INFLATION_MEAN.percentInputText(),
-                                generalInflationStdDev = DEFAULT_GENERAL_INFLATION_STD_DEV.percentInputText()
+                                generalInflationMean = DEFAULT_GENERAL_INFLATION_MEAN.asEditablePercent(),
+                                generalInflationStdDev = DEFAULT_GENERAL_INFLATION_STD_DEV.asEditablePercent()
                             )
                         }
                     )
@@ -397,7 +399,7 @@ fun SetupScreen(
                         testTag = "restore-pre-medicare-premium-default",
                         onClick = {
                             form = form.copy(
-                                preMedicareMonthlyPremium = DEFAULT_PRE_MEDICARE_MONTHLY_PREMIUM.wholeDollarText()
+                                preMedicareMonthlyPremium = DEFAULT_PRE_MEDICARE_MONTHLY_PREMIUM.asEditableMoney()
                             )
                         }
                     )
@@ -414,8 +416,8 @@ fun SetupScreen(
                         enabled = isProUnlocked,
                         onClick = {
                             form = form.copy(
-                                healthcareInflationMean = DEFAULT_HEALTHCARE_INFLATION_MEAN.percentInputText(),
-                                healthcareInflationStdDev = DEFAULT_HEALTHCARE_INFLATION_STD_DEV.percentInputText()
+                                healthcareInflationMean = DEFAULT_HEALTHCARE_INFLATION_MEAN.asEditablePercent(),
+                                healthcareInflationStdDev = DEFAULT_HEALTHCARE_INFLATION_STD_DEV.asEditablePercent()
                             )
                         }
                     )
@@ -502,12 +504,12 @@ fun SetupScreen(
                         onClick = {
                             val defaults = MarketAssumptions()
                             form = form.copy(
-                                preRetirementMeanReturn = defaults.preRetirementMeanReturn.percentInputText(),
-                                preRetirementStdDev = defaults.preRetirementStdDev.percentInputText(),
-                                stockMeanReturn = defaults.stockMeanReturn.percentInputText(),
-                                stockStdDev = defaults.stockStdDev.percentInputText(),
-                                bondMeanReturn = defaults.bondMeanReturn.percentInputText(),
-                                bondStdDev = defaults.bondStdDev.percentInputText()
+                                preRetirementMeanReturn = defaults.preRetirementMeanReturn.asEditablePercent(),
+                                preRetirementStdDev = defaults.preRetirementStdDev.asEditablePercent(),
+                                stockMeanReturn = defaults.stockMeanReturn.asEditablePercent(),
+                                stockStdDev = defaults.stockStdDev.asEditablePercent(),
+                                bondMeanReturn = defaults.bondMeanReturn.asEditablePercent(),
+                                bondStdDev = defaults.bondStdDev.asEditablePercent()
                             )
                         }
                     )
@@ -1243,37 +1245,37 @@ private data class EditableAssumptions(
                 gender = scenario.household.gender,
                 spouseGender = scenario.household.spouseGender,
                 spouseCurrentAge = scenario.household.spouseCurrentAge.toString(),
-                annualSpending = scenario.spending.annualBaseSpending.wholeDollarText(),
-                generalInflationMean = scenario.spending.generalInflationMean.percentInputText(),
-                generalInflationStdDev = scenario.spending.generalInflationStdDev.percentInputText(),
+                annualSpending = scenario.spending.annualBaseSpending.asEditableMoney(),
+                generalInflationMean = scenario.spending.generalInflationMean.asEditablePercent(),
+                generalInflationStdDev = scenario.spending.generalInflationStdDev.asEditablePercent(),
                 spendingPathModel = scenario.spending.spendingPathModel,
-                lowPortfolioSpendingReduction = scenario.spending.lowPortfolioSpendingReduction.percentInputText(),
-                pretax = scenario.accounts.pretax.wholeDollarText(),
-                roth = scenario.accounts.roth.wholeDollarText(),
-                taxable = scenario.accounts.taxable.wholeDollarText(),
-                cash = scenario.accounts.cash.wholeDollarText(),
-                preMedicareMonthlyPremium = scenario.healthcare.preMedicareMonthlyPremium.wholeDollarText(),
-                healthcareInflationMean = scenario.healthcare.healthcareInflationMean.percentInputText(),
-                healthcareInflationStdDev = scenario.healthcare.healthcareInflationStdDev.percentInputText(),
-                mortgagePayment = scenario.mortgage.monthlyPayment.wholeDollarText(),
+                lowPortfolioSpendingReduction = scenario.spending.lowPortfolioSpendingReduction.asEditablePercent(),
+                pretax = scenario.accounts.pretax.asEditableMoney(),
+                roth = scenario.accounts.roth.asEditableMoney(),
+                taxable = scenario.accounts.taxable.asEditableMoney(),
+                cash = scenario.accounts.cash.asEditableMoney(),
+                preMedicareMonthlyPremium = scenario.healthcare.preMedicareMonthlyPremium.asEditableMoney(),
+                healthcareInflationMean = scenario.healthcare.healthcareInflationMean.asEditablePercent(),
+                healthcareInflationStdDev = scenario.healthcare.healthcareInflationStdDev.asEditablePercent(),
+                mortgagePayment = scenario.mortgage.monthlyPayment.asEditableMoney(),
                 mortgageYearsLeft = scenario.mortgage.yearsLeft.toString(),
                 mortgageMonthsLeft = scenario.mortgage.monthsLeft.toString(),
-                mortgageBalance = scenario.mortgage.currentBalance.wholeDollarText(),
-                homeValue = scenario.home.currentValue.wholeDollarText(),
-                monthlyRent = scenario.rent.monthlyRent.wholeDollarText(),
-                socialSecurityAt67 = scenario.socialSecurity.annualBenefitAt67.wholeDollarText(),
+                mortgageBalance = scenario.mortgage.currentBalance.asEditableMoney(),
+                homeValue = scenario.home.currentValue.asEditableMoney(),
+                monthlyRent = scenario.rent.monthlyRent.asEditableMoney(),
+                socialSecurityAt67 = scenario.socialSecurity.annualBenefitAt67.asEditableMoney(),
                 claimAge = scenario.socialSecurity.claimAge.toString(),
                 spouseClaimAge = scenario.socialSecurity.spouseClaimAge.toString(),
-                guaranteedAnnualIncome = scenario.guaranteedIncome.annualIncome.wholeDollarText(),
+                guaranteedAnnualIncome = scenario.guaranteedIncome.annualIncome.asEditableMoney(),
                 guaranteedIncomeStartAge = scenario.guaranteedIncome.startAge.toString(),
-                guaranteedIncomeAnnualIncrease = scenario.guaranteedIncome.annualIncrease.percentInputText(),
-                guaranteedIncomeSurvivorPercent = scenario.guaranteedIncome.survivorPercent.percentInputText(),
-                preRetirementMeanReturn = scenario.market.preRetirementMeanReturn.percentInputText(),
-                preRetirementStdDev = scenario.market.preRetirementStdDev.percentInputText(),
-                stockMeanReturn = scenario.market.stockMeanReturn.percentInputText(),
-                stockStdDev = scenario.market.stockStdDev.percentInputText(),
-                bondMeanReturn = scenario.market.bondMeanReturn.percentInputText(),
-                bondStdDev = scenario.market.bondStdDev.percentInputText(),
+                guaranteedIncomeAnnualIncrease = scenario.guaranteedIncome.annualIncrease.asEditablePercent(),
+                guaranteedIncomeSurvivorPercent = scenario.guaranteedIncome.survivorPercent.asEditablePercent(),
+                preRetirementMeanReturn = scenario.market.preRetirementMeanReturn.asEditablePercent(),
+                preRetirementStdDev = scenario.market.preRetirementStdDev.asEditablePercent(),
+                stockMeanReturn = scenario.market.stockMeanReturn.asEditablePercent(),
+                stockStdDev = scenario.market.stockStdDev.asEditablePercent(),
+                bondMeanReturn = scenario.market.bondMeanReturn.asEditablePercent(),
+                bondStdDev = scenario.market.bondStdDev.asEditablePercent(),
                 postRetirementAllocation = scenario.postRetirementAllocation,
                 rothConversionEnabled = scenario.rothConversion.enabled,
                 rothBracketCap = closestTaxCap(scenario.rothConversion.marginalRateCap),
@@ -1282,9 +1284,9 @@ private data class EditableAssumptions(
                 seppEligible = scenario.withdrawalStrategy.seppEligible,
                 useCashReserveDuringDrawdowns = SHOW_CASH_RESERVE_DRAWDOWN_SETTINGS &&
                     scenario.withdrawalStrategy.useCashReserveDuringDrawdowns,
-                drawdownTrigger = scenario.withdrawalStrategy.drawdownTrigger.percentInputText(),
+                drawdownTrigger = scenario.withdrawalStrategy.drawdownTrigger.asEditablePercent(),
                 longTermCareEnabled = scenario.longTermCare.enabled,
-                longTermCareAnnualCost = scenario.longTermCare.annualCost.wholeDollarText(),
+                longTermCareAnnualCost = scenario.longTermCare.annualCost.asEditableMoney(),
                 longTermCareDurationYears = scenario.longTermCare.averageDurationYears.toString(),
                 numberOfSimulations = scenario.numberOfSimulations.toString(),
                 seed = scenario.seed.toString()
@@ -1385,15 +1387,7 @@ private fun requireSimulationCount(value: Int?, featureAccess: FeatureAccess): S
 
 private fun requirePercent(label: String, value: Double?, min: Double, max: Double): String? {
     if (value == null || value !in min..max) {
-        return "$label must be between ${min.percentInputText()}% and ${max.percentInputText()}%."
+        return "$label must be between ${min.asEditablePercent()}% and ${max.asEditablePercent()}%."
     }
     return null
-}
-
-private fun Double.wholeDollarText(): String = toLong().toString()
-
-private fun Double.percentInputText(): String {
-    return String.format(Locale.US, "%.1f", this * 100.0)
-        .trimEnd('0')
-        .trimEnd('.')
 }

@@ -8,6 +8,7 @@ internal data class RothConversionPlan(
 )
 
 object TaxCalculator {
+    private const val WITHDRAWAL_SEARCH_ITERATIONS = 24
     private const val ENHANCED_SENIOR_DEDUCTION = 6_000.0
     private const val ENHANCED_SENIOR_PHASEOUT_RATE = 0.06
     private const val ENHANCED_SENIOR_FIRST_TAX_YEAR = 2025
@@ -139,7 +140,7 @@ object TaxCalculator {
             high *= 2.0
         }
 
-        repeat(40) {
+        repeat(WITHDRAWAL_SEARCH_ITERATIONS) {
             val mid = (low + high) / 2.0
             if (netCashFrom(mid) >= netNeed) {
                 high = mid

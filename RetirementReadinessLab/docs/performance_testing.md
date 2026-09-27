@@ -11,6 +11,13 @@ Automated profile:
 - Prints elapsed runtime to the test log.
 - Uses a generous default threshold of 15 seconds to avoid flaky local builds.
 
+Current calculation optimizations:
+
+- Medicare income fallback gross-ups are evaluated lazily. Once two completed tax years are
+  available for the IRMAA lookback, the unused estimate is skipped.
+- Monthly withdrawal gross-up searches use 24 bisection steps. This retains cent-level accuracy
+  for ordinary planning inputs while avoiding the excess work of the previous 40-step search.
+
 Manual release profile:
 
 - A 10,000-simulation test is included but ignored by default.

@@ -36,7 +36,7 @@ class RetirementSimulatorTest {
 
         assertEquals(first.successProbability, second.successProbability, 0.0001)
         assertEquals(first.medianEndingBalance, second.medianEndingBalance, 0.01)
-        assertEquals("2026.07-senior-tax-deductions", first.provenance.engineVersion)
+        assertEquals("2026.08-performance-audit", first.provenance.engineVersion)
         assertEquals("Monthly cashflow model with annual result bands", first.provenance.engineCadence)
         assertEquals("2026 federal brackets with senior-aware deductions", first.provenance.taxTableVersion)
         assertEquals(
@@ -557,6 +557,36 @@ class RetirementSimulatorTest {
     }
 
     @Test
+    fun medicareLookbackSkipsFallbackOnceTwoYearsOfIncomeAreAvailable() {
+        var fallbackCalls = 0
+
+        val income = RetirementSimulator.medicareIncomeLookback(
+            annualMedicareIncomeHistory = listOf(80_000.0, 90_000.0, 100_000.0)
+        ) {
+            fallbackCalls += 1
+            999_999.0
+        }
+
+        assertEquals(90_000.0, income, 0.01)
+        assertEquals(0, fallbackCalls)
+    }
+
+    @Test
+    fun medicareLookbackEstimatesIncomeUntilTwoYearsAreAvailable() {
+        var fallbackCalls = 0
+
+        val income = RetirementSimulator.medicareIncomeLookback(
+            annualMedicareIncomeHistory = listOf(80_000.0)
+        ) {
+            fallbackCalls += 1
+            95_000.0
+        }
+
+        assertEquals(95_000.0, income, 0.01)
+        assertEquals(1, fallbackCalls)
+    }
+
+    @Test
     fun resultFingerprintChangesWhenBudgetAssumptionsChange() {
         val base = sampleScenario().copy(numberOfSimulations = 1)
         val changed = base.copy(
@@ -569,6 +599,29 @@ class RetirementSimulatorTest {
         assertTrue(
             baseResult.provenance.assumptionFingerprint !=
                 changedResult.provenance.assumptionFingerprint
+        )
+    }
+
+    @Test
+    fun resultFingerprintTracksWhetherBudgetSpendingIncludesHomeOwnershipCosts() {
+        val base = sampleScenario().copy(
+            budget = BudgetProfile(
+                annualPropertyTaxes = 4_000.0,
+                annualHomeInsurance = 2_000.0,
+                isAppliedToAnnualBaseSpending = false
+            ),
+            numberOfSimulations = 1
+        )
+        val applied = base.copy(
+            budget = base.budget.copy(isAppliedToAnnualBaseSpending = true)
+        )
+
+        val baseResult = RetirementSimulator.run(base)
+        val appliedResult = RetirementSimulator.run(applied)
+
+        assertTrue(
+            baseResult.provenance.assumptionFingerprint !=
+                appliedResult.provenance.assumptionFingerprint
         )
     }
 

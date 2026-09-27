@@ -150,6 +150,37 @@ class TaxCalculatorTest {
     }
 
     @Test
+    fun grossWithdrawalSearchRetainsCentLevelAccuracy() {
+        val netNeed = 87_654.32
+        val socialSecurity = 31_234.56
+        val otherIncome = 12_345.67
+        val withdrawal = TaxCalculator.grossWithdrawalForNetNeed(
+            netNeed = netNeed,
+            annualSocialSecurity = socialSecurity,
+            filingStatus = FilingStatus.Single,
+            annualOtherTaxableIncome = otherIncome,
+            additionalWithdrawalTaxRate = 0.10,
+            age65OrOlderPeople = 1,
+            taxYear = 2026
+        )
+        val taxableSocialSecurity = TaxCalculator.taxableSocialSecurity(
+            otherIncome = otherIncome + withdrawal,
+            annualSocialSecurity = socialSecurity,
+            filingStatus = FilingStatus.Single
+        )
+        val tax = TaxCalculator.ordinaryIncomeTaxLiability(
+            ordinaryIncome = otherIncome + withdrawal + taxableSocialSecurity,
+            filingStatus = FilingStatus.Single,
+            age65OrOlderPeople = 1,
+            taxYear = 2026
+        )
+        val netCash = withdrawal + otherIncome + socialSecurity - tax - withdrawal * 0.10
+
+        assertTrue(netCash >= netNeed)
+        assertEquals(netNeed, netCash, 0.01)
+    }
+
+    @Test
     fun additionalWithdrawalTaxCanBeLimitedToTaxableDistributionAmount() {
         val withoutPenalty = TaxCalculator.grossWithdrawalForNetNeed(
             netNeed = 75_000.0,

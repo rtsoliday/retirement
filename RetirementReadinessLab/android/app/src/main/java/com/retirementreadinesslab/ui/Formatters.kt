@@ -1,5 +1,6 @@
 package com.retirementreadinesslab.ui
 
+import java.math.BigDecimal
 import java.text.NumberFormat
 import java.util.Locale
 import kotlin.math.abs
@@ -23,4 +24,13 @@ fun Double.asCompactCurrency(): String {
 
 fun Double.asPercent(): String {
     return "${"%.0f".format(Locale.US, this * 100.0)}%"
+}
+
+fun Double.asEditableMoney(blankWhenZero: Boolean = false): String {
+    if (blankWhenZero && this == 0.0) return ""
+    return BigDecimal.valueOf(this).stripTrailingZeros().toPlainString()
+}
+
+fun Double.asEditablePercent(): String {
+    return BigDecimal.valueOf(this).movePointRight(2).stripTrailingZeros().toPlainString()
 }

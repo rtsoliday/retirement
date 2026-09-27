@@ -41,6 +41,7 @@ import com.retirementreadinesslab.model.BudgetProfile
 import com.retirementreadinesslab.model.MonthlyBudget
 import com.retirementreadinesslab.state.RetirementLabState
 import com.retirementreadinesslab.ui.asCurrency
+import com.retirementreadinesslab.ui.asEditableMoney
 import com.retirementreadinesslab.ui.components.KeyValueRow
 import com.retirementreadinesslab.ui.components.SectionHeader
 import com.retirementreadinesslab.ui.theme.LabMutedText
@@ -413,9 +414,9 @@ private data class EditableBudget(
     companion object {
         fun from(budget: BudgetProfile): EditableBudget {
             return EditableBudget(
-                annualPropertyTaxes = budget.annualPropertyTaxes.wholeDollarText(),
-                annualHomeInsurance = budget.annualHomeInsurance.wholeDollarText(),
-                annualAutoInsurance = budget.annualAutoInsurance.wholeDollarText(),
+                annualPropertyTaxes = budget.annualPropertyTaxes.asEditableMoney(blankWhenZero = true),
+                annualHomeInsurance = budget.annualHomeInsurance.asEditableMoney(blankWhenZero = true),
+                annualAutoInsurance = budget.annualAutoInsurance.asEditableMoney(blankWhenZero = true),
                 monthlyBudgets = budget.monthlyBudgets
                     .sortedBy { it.month }
                     .map { EditableMonthlyBudget.from(it) }
@@ -478,7 +479,7 @@ private data class EditableMonthlyBudget(
                 month = monthlyBudget.month,
                 checkingSavingsBills = monthlyBudget.checkingSavingsBills.map { EditableBudgetLineItem.from(it) },
                 creditCardBills = monthlyBudget.creditCardBills.map { EditableBudgetLineItem.from(it) },
-                cashAndAtmWithdrawals = monthlyBudget.cashAndAtmWithdrawals.wholeDollarText()
+                cashAndAtmWithdrawals = monthlyBudget.cashAndAtmWithdrawals.asEditableMoney(blankWhenZero = true)
             )
         }
     }
@@ -517,7 +518,7 @@ private data class EditableBudgetLineItem(
             return EditableBudgetLineItem(
                 id = item.id,
                 name = item.name,
-                monthlyAmount = item.monthlyAmount.wholeDollarText()
+                monthlyAmount = item.monthlyAmount.asEditableMoney(blankWhenZero = true)
             )
         }
     }
@@ -585,8 +586,4 @@ private fun parseMonth(month: String): YearMonth {
 private fun monthLabel(month: String): String {
     val formatter = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.US)
     return parseMonth(month).format(formatter)
-}
-
-private fun Double.wholeDollarText(): String {
-    return if (this == 0.0) "" else toLong().toString()
 }

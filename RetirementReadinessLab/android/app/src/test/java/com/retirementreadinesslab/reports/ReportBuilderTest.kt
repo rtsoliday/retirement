@@ -8,6 +8,22 @@ import org.junit.Test
 
 class ReportBuilderTest {
     @Test
+    fun reportPreservesPercentageAssumptions() {
+        val base = sampleBaseScenario()
+        val scenario = base.copy(
+            spending = base.spending.copy(generalInflationMean = 0.02345, generalInflationStdDev = 0.016),
+            market = base.market.copy(stockMeanReturn = 0.12345, bondMeanReturn = 0.0325),
+            guaranteedIncome = base.guaranteedIncome.copy(annualIncrease = 0.0125)
+        )
+        val report = ReportBuilder.buildTextReport(scenario, null)
+        assertTrue(report.contains("General inflation average: 2.345%"))
+        assertTrue(report.contains("General inflation Std Dev: 1.6%"))
+        assertTrue(report.contains("Post-retirement stock returns average: 12.345%"))
+        assertTrue(report.contains("Post-retirement bond returns average: 3.25%"))
+        assertTrue(report.contains("Guaranteed income annual increase: 1.25%"))
+    }
+
+    @Test
     fun reportIncludesResultAssumptionsAndDisclaimer() {
         val scenario = sampleBaseScenario().copy(numberOfSimulations = 50)
         val result = RetirementSimulator.run(scenario)
@@ -54,7 +70,7 @@ class ReportBuilderTest {
         assertTrue(report.contains("Next useful test:"))
         assertTrue(report.contains("Calculation provenance"))
         assertTrue(report.contains("Assumption fingerprint"))
-        assertTrue(report.contains("2026.07-senior-tax-deductions"))
+        assertTrue(report.contains("2026.08-performance-audit"))
         assertTrue(report.contains("SSA Trustees Alt2 2025 annual death probabilities"))
         assertTrue(report.contains("Privacy note"))
         assertTrue(report.contains("generated locally from user-entered scenario data"))

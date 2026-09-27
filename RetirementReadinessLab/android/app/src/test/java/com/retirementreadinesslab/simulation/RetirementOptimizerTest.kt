@@ -1,6 +1,7 @@
 package com.retirementreadinesslab.simulation
 
 import com.retirementreadinesslab.model.AccountBalances
+import com.retirementreadinesslab.model.FilingStatus
 import com.retirementreadinesslab.model.HealthcarePlan
 import com.retirementreadinesslab.model.HouseholdProfile
 import com.retirementreadinesslab.model.LongTermCareAssumption
@@ -18,6 +19,37 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RetirementOptimizerTest {
+    @Test
+    fun retirementSearchAgeLimitRespectsBothAdultsAndRequestedMaximum() {
+        val base = sampleBaseScenario().copy(
+            household = HouseholdProfile(
+                currentAge = 50, retirementAge = 50, targetEndAge = 80,
+                filingStatus = FilingStatus.Married, spouseCurrentAge = 65
+            )
+        )
+        assertEquals(64, base.latestRetirementAgeForAnalysis(70))
+        assertEquals(60, base.latestRetirementAgeForAnalysis(60))
+        val youngerSpouse = base.copy(household = base.household.copy(spouseCurrentAge = 40))
+        assertEquals(79, youngerSpouse.latestRetirementAgeForAnalysis(90))
+        val single = base.copy(household = base.household.copy(filingStatus = FilingStatus.Single))
+        assertEquals(79, single.latestRetirementAgeForAnalysis(90))
+    }
+
+    @Test
+    fun retirementSearchStopsBeforeOlderSpouseReachesProjectionCap() {
+        val scenario = sampleBaseScenario().copy(
+            household = HouseholdProfile(
+                currentAge = 60, retirementAge = 60, targetEndAge = 65,
+                filingStatus = FilingStatus.Married,
+                spouseCurrentAge = 63
+            ),
+            accounts = AccountBalances(pretax = 0.0, roth = 0.0, cash = 0.0),
+            socialSecurity = SocialSecurityPlan(annualBenefitAt67 = 0.0)
+        )
+        val estimate = RetirementOptimizer.estimate(scenario, simulationCount = 50)
+        assertNull(estimate.earliestRetirementAge)
+    }
+
     @Test
     fun analysisRetirementAgeChangesRefreshPenaltyWithoutInventingEligibility() {
         val scenario = sampleBaseScenario().copy(

@@ -159,7 +159,7 @@ object ScenarioLabAnalyzer {
     private fun retirementAgeSweep(base: RetirementScenario, quickSimulations: Int): LabSweepAnalysis {
         val currentAge = base.household.currentAge
         val baseAge = base.household.retirementAge
-        val lastValidAge = minOf(70, base.household.targetEndAge - 1)
+        val lastValidAge = base.latestRetirementAgeForAnalysis(maxOf(70, baseAge))
         val ages = listOf(baseAge - 2, baseAge, baseAge + 2, baseAge + 4)
             .filter { it in currentAge..lastValidAge }
             .distinct()

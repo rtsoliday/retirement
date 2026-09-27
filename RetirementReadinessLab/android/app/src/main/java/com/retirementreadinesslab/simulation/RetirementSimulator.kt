@@ -31,7 +31,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 object RetirementSimulator {
-    private const val ENGINE_VERSION = "2026.07-senior-tax-deductions"
+    private const val ENGINE_VERSION = "2026.08-performance-audit"
     private const val ENGINE_CADENCE = "Monthly cashflow model with annual result bands"
     private const val TAX_TABLE_VERSION = "2026 federal brackets with senior-aware deductions"
     private val MORTALITY_MODEL_VERSION = MortalityTables.TABLE_VERSION
@@ -39,6 +39,7 @@ object RetirementSimulator {
     private const val BASE_TAX_YEAR = 2026
     private const val MAX_PATH_SCATTER_POINTS = 30_000
     private const val BALANCE_EPSILON = 0.01
+    private const val WITHDRAWAL_SEARCH_ITERATIONS = 24
     private const val SIMULATION_SEED_STRIDE = -7046029254386353131L
     private const val FUNDING_THRESHOLD_TARGET_READINESS = 0.95
     private const val FUNDING_THRESHOLD_WINDOW_SIZE = 60
@@ -550,23 +551,6 @@ object RetirementSimulator {
             } else {
                 0.0
             }
-            val baseNeedBeforeHealthcare = monthlyRetirementNeed(
-                monthlySpending = baseSpending,
-                mortgageCost = mortgageCost,
-                rentCost = rentCost,
-                healthcareCost = 0.0,
-                longTermCareCost = ltcCost,
-                replaceBaseSpendingWithLongTermCare = replaceBaseSpendingWithLongTermCare
-            )
-            val estimatedAnnualIncomeForIrmaa = estimatedAnnualMedicareIncome(
-                annualNetNeed = baseNeedBeforeHealthcare.coerceAtLeast(0.0) * MONTHS_PER_YEAR.toDouble(),
-                annualSocialSecurity = socialSecurity * MONTHS_PER_YEAR.toDouble(),
-                annualOtherTaxableIncome = guaranteedIncome * MONTHS_PER_YEAR.toDouble(),
-                filingStatus = currentFilingStatus,
-                taxInflationMultiplier = taxInflationMultiplier,
-                age65OrOlderPeople = age65OrOlderPeople,
-                taxYear = taxYear
-            )
             val preMedicarePeople = (if (primaryAlive && age < 65) 1 else 0) +
                 (if (spouseAlive && spouseAge < 65) 1 else 0)
             val medicarePeople = (if (primaryAlive && age >= 65) 1 else 0) +
@@ -574,9 +558,27 @@ object RetirementSimulator {
             val preMedicareCost = monthlyHealthcare * preMedicarePeople.toDouble()
             val medicareCost = if (scenario.healthcare.includeMedicarePremiums && medicarePeople > 0) {
                 val irmaaIncome = medicareIncomeLookback(
-                    annualMedicareIncomeHistory,
-                    estimatedAnnualIncomeForIrmaa
-                )
+                    annualMedicareIncomeHistory
+                ) {
+                    val baseNeedBeforeHealthcare = monthlyRetirementNeed(
+                        monthlySpending = baseSpending,
+                        mortgageCost = mortgageCost,
+                        rentCost = rentCost,
+                        healthcareCost = 0.0,
+                        longTermCareCost = ltcCost,
+                        replaceBaseSpendingWithLongTermCare = replaceBaseSpendingWithLongTermCare
+                    )
+                    estimatedAnnualMedicareIncome(
+                        annualNetNeed = baseNeedBeforeHealthcare.coerceAtLeast(0.0) *
+                            MONTHS_PER_YEAR.toDouble(),
+                        annualSocialSecurity = socialSecurity * MONTHS_PER_YEAR.toDouble(),
+                        annualOtherTaxableIncome = guaranteedIncome * MONTHS_PER_YEAR.toDouble(),
+                        filingStatus = currentFilingStatus,
+                        taxInflationMultiplier = taxInflationMultiplier,
+                        age65OrOlderPeople = age65OrOlderPeople,
+                        taxYear = taxYear
+                    )
+                }
                 MedicarePremiums
                     .estimateAnnualPremium(
                         modifiedAdjustedGrossIncome = irmaaIncome,
@@ -842,7 +844,7 @@ object RetirementSimulator {
             high *= 2.0
         }
 
-        repeat(40) {
+        repeat(WITHDRAWAL_SEARCH_ITERATIONS) {
             val mid = (low + high) / 2.0
             if (estimate(mid).annualNetCash >= netNeed) {
                 high = mid
@@ -1166,13 +1168,13 @@ object RetirementSimulator {
         return annualStdDev / sqrt(MONTHS_PER_YEAR.toDouble())
     }
 
-    private fun medicareIncomeLookback(
+    internal fun medicareIncomeLookback(
         annualMedicareIncomeHistory: List<Double>,
-        fallbackAnnualIncome: Double
+        fallbackAnnualIncome: () -> Double
     ): Double {
         return annualMedicareIncomeHistory
             .getOrNull(annualMedicareIncomeHistory.lastIndex - 1)
-            ?: fallbackAnnualIncome
+            ?: fallbackAnnualIncome()
     }
 
     internal fun estimatedAnnualMedicareIncome(
@@ -1325,6 +1327,7 @@ object RetirementSimulator {
             scenario.budget.annualPropertyTaxes.fingerprintNumber(),
             scenario.budget.annualHomeInsurance.fingerprintNumber(),
             scenario.budget.annualAutoInsurance.fingerprintNumber(),
+            scenario.budget.isAppliedToAnnualBaseSpending.toString(),
             scenario.mortgage.monthlyPayment.fingerprintNumber(),
             scenario.mortgage.yearsLeft.toString(),
             scenario.mortgage.monthsLeft.toString(),

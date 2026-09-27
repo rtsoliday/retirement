@@ -24,7 +24,9 @@ object ReportPdfExporter {
         result: SimulationResult?
     ): File {
         val reportsDir = File(context.cacheDir, "shared_reports").apply { mkdirs() }
-        val file = File(reportsDir, "retirement-readiness-${reportTimestamp()}.pdf")
+        // Every shared URI must keep pointing to its original report, even when several
+        // exports are created within the same minute.
+        val file = File.createTempFile("retirement-readiness-${reportTimestamp()}-", ".pdf", reportsDir)
         val document = PdfDocument()
 
         try {

@@ -54,7 +54,7 @@ object RetirementOptimizer {
         maxRetirementAge: Int
     ): Pair<Int, Double>? {
         val firstAge = scenario.household.currentAge
-        val lastAge = minOf(maxRetirementAge, scenario.household.targetEndAge - 1)
+        val lastAge = scenario.latestRetirementAgeForAnalysis(maxRetirementAge)
         if (firstAge > lastAge) return null
 
         for (age in firstAge..lastAge) {
