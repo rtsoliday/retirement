@@ -29,7 +29,7 @@ Open `Android/RetirementReadinessLab/android` in Android Studio, or run its Grad
 
 ## License
 
-Released under the [GNU General Public License v3](LICENSE).
+Proprietary. Copyright (c) 2026 Robert Soliday. All rights reserved. See [LICENSE](LICENSE). Third-party components retain their own license terms.
 
 ## Disclaimer
 

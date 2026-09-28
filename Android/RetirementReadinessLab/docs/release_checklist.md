@@ -60,7 +60,7 @@
 - Store copy avoids guarantee and advice language.
 - In-app disclaimer is visible.
 - Reports include disclaimer and privacy note.
-- License decision documented before commercialization.
+- Confirm proprietary notices and preserve third-party license notices before commercialization.
 
 ## Closed Testing Exit
 

@@ -134,16 +134,9 @@ Avoid:
 - Requiring users to create accounts for the MVP.
 - Adding network calls for market data in the first release.
 
-## 8. Licensing Decision
+## 8. Licensing
 
-The current repository is GPLv3. Before commercializing the Android app, decide whether the new Android app will:
-
-- Remain GPL-compatible and publish source for distributed builds.
-- Reimplement the simulation logic from scratch under a different license, if legally available.
-- Use the existing code and accept GPL obligations.
-- Move the new app to a separate repository with a clear license boundary.
-
-This decision should be made before porting `core.py` logic into Kotlin or sharing code between projects.
+The original code and documentation in this repository are proprietary and all rights reserved under the root [LICENSE](../../LICENSE). This includes the Android app and shared simulation logic. Third-party components retain their own licenses and notices. Confirm the terms for any third-party dependencies and preserve their notices when distributing builds.
 
 ## 9. High-Level Architecture
 
@@ -865,7 +858,7 @@ Before considering the app release-ready:
 
 Decide before implementation:
 
-- Will the Android app be GPLv3, proprietary, or separately licensed?
+- Will the copyright holder offer separate distribution terms for the Android app?
 - Should the MVP support couples or only one person?
 - Should state taxes be deferred until after launch?
 - Should market assumptions be editable in MVP or hidden behind advanced settings?
