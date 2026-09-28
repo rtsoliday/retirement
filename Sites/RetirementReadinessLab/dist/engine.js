@@ -1,3 +1,4 @@
+import {buildPathPoints,buildBalanceBands} from './chart-data.js';
 import {ENGINE_VERSION, validateScenario} from './model.js';
 import {maleMortality,femaleMortality} from './mortality.js';
 import {taxableSocialSecurity,ordinaryIncomeTax,grossWithdrawalForNetNeed,rothConversionPlan} from './tax.js';
@@ -53,7 +54,7 @@ export function runOne(s,rng){
   const retireBalance=sum(b),lowThreshold=retireBalance*.5;let pathFactor=spendingPath(s,0),spending=s.spending.annualBaseSpending/12*Math.pow(1+infMean,preMonths)*pathFactor;
   let rent=s.rent.monthlyRent*Math.pow(1+infMean,preMonths),home=s.home.currentValue*Math.pow(1+infMean,preMonths),seniorRent=3000*Math.pow(1+infMean,preMonths);
   const mortgageTotal=s.mortgage.yearsLeft*12+s.mortgage.monthsLeft;let mortgageMonths=Math.max(0,mortgageTotal-preMonths),mortgageBalance=mortgageTotal>0?s.mortgage.currentBalance*mortgageMonths/mortgageTotal:s.mortgage.currentBalance;
-  let otherMonthly=s.guaranteedIncome.annualIncome/12*Math.pow(1+incomeGrowth,preMonths),homeCosts=s.budget.isAppliedToAnnualBaseSpending?(s.budget.annualPropertyTaxes+s.budget.annualHomeInsurance)/12*Math.pow(1+infMean,preMonths)*pathFactor:0;
+  let otherMonthly=s.guaranteedIncome.annualIncome/12*Math.pow(1+incomeGrowth,preMonths),homeCosts=s.budget.isAppliedToAnnualBaseSpending?(s.budget.appliedAnnualHomeCosts??(s.budget.annualPropertyTaxes+s.budget.annualHomeInsurance))/12*Math.pow(1+infMean,preMonths)*pathFactor:0;
   let preMedicare=s.healthcare.preMedicareMonthlyPremium*Math.pow(1+healthMean,preMonths),healthIndex=Math.pow(1+healthMean,preMonths),taxIndex=Math.pow(1+infMean,preMonths),ssIndex=Math.pow(1+Math.max(0,s.spending.generalInflationMean),yearsToRet),annualInf=1;
   const stockMean=monthly(s.market.stockMeanReturn),stockSd=sd(s.market.stockStdDev),bondMean=monthly(s.market.bondMeanReturn),bondSd=sd(s.market.bondStdDev);
   const seppEnd=Math.max(714,h.retirementAge*12+60),annualSepp=s.withdrawalStrategy.seppEligible?seppPayment(b.pretax,h.retirementAge):0;
@@ -87,29 +88,27 @@ export function runOne(s,rng){
     if(s.rothConversion.enabled&&!seppActive&&monthInYear===11){const conversion=rothConversionPlan(b.pretax,annualMedicareIncome,s.rothConversion.marginalRateCap,status,taxIndex,seniors,taxYear);if(conversion.amount>0){b.pretax-=conversion.amount;b.roth+=conversion.amount;withdrawConversionTax(b,conversion.tax);annualMedicareIncome+=conversion.amount;}}
     if(!homeSold&&mortgageMonths>0){mortgageBalance=Math.max(0,mortgageBalance-mortgageBalance/mortgageMonths);mortgageMonths--;}
     if(sum(b)<0&&sum(b)>-.01)b.cash-=sum(b);
-    if(sum(b)<0&&failureAge===null){if(!homeSold&&home>0){b.cash+=Math.max(0,home-mortgageBalance);home=0;mortgageBalance=0;mortgageMonths=0;homeSold=true;}if(sum(b)<0){failureAge=age;yearEnd.push(sum(b));break;}}
+    if(sum(b)<0&&failureAge===null){if(!homeSold&&home>0){b.cash+=Math.max(0,home-mortgageBalance);home=0;mortgageBalance=0;mortgageMonths=0;homeSold=true;}if(sum(b)<0){failureAge=age;yearEnd.push(0);break;}}
     if(monthInYear===11){yearEnd.push(sum(b));chart.push(sum(b));}
     const inf=Math.max(monthly(-.05),rng.normal(infMean,infSd)),healthInf=Math.max(monthly(-.02),rng.normal(healthMean,healthSd)),nextFactor=spendingPath(s,m+1),change=nextFactor/Math.max(.0001,pathFactor);
     spending*=(1+inf)*change;rent*=1+inf;if(!homeSold)home*=1+inf;seniorRent*=1+inf;otherMonthly*=1+incomeGrowth;homeCosts*=(1+inf)*change;preMedicare*=1+healthInf;healthIndex*=1+healthInf;taxIndex*=1+inf;annualInf*=1+inf;pathFactor=nextFactor;
     if(monthInYear===11){ssIndex*=Math.max(1,annualInf);annualInf=1;incomeHistory.push(annualMedicareIncome);annualMedicareIncome=0;}
   }
-  while(yearEnd.length<horizon+1)yearEnd.push(yearEnd[yearEnd.length-1]);
   return {success:failureAge===null,failureAge,yearEnd,chart,survivedThroughAge:Math.max(h.retirementAge,Math.min(houseDeath-1,h.retirementAge+horizon))};
 }
 
 function riskBreakdown(s,p){const h=s.household,prePeople=Number(h.retirementAge<65)+Number(h.filingStatus==='Married'&&h.spouseCurrentAge+h.retirementAge-h.currentAge<65),healthBurden=s.healthcare.preMedicareMonthlyPremium*12*prePeople/Math.max(1,s.spending.annualBaseSpending),total=Object.values(s.accounts).reduce((a,b)=>a+b,0),taxBurden=s.accounts.pretax/Math.max(1,total),spendingRatio=s.spending.annualBaseSpending/Math.max(1,total);const market=p>=.82?'Healthy':p>=.65?'Watch':'AtRisk',healthcare=healthBurden>.25?'AtRisk':healthBurden>.18||s.longTermCare.enabled?'Watch':'Healthy',taxes=taxBurden>.85?'AtRisk':taxBurden>.60?'Watch':'Healthy',spending=spendingRatio>.07?'AtRisk':spendingRatio>.045?'Watch':'Healthy',longevity=h.retirementAge<55?'AtRisk':h.retirementAge<62?'Watch':'Healthy';const entries=[['spending',spending],['taxes',taxes],['healthcare',healthcare],['longevity',longevity],['market sequence',market]],primary=(entries.find(x=>x[1]==='AtRisk')||entries.find(x=>x[1]==='Watch')||['none'])[0],next={spending:'Test a 5% lower spending scenario.',taxes:'Compare Roth conversions up to the 22% bracket.',healthcare:'Run the healthcare and long-term care stress test.',longevity:'Compare retiring two years later.','market sequence':'Test a larger cash reserve strategy.',none:'Compare Social Security claim ages.'};return {market,healthcare,taxes,spending,longevity,primaryRisk:primary,recommendedNextTest:next[primary]};}
-export function runSimulation(s,onProgress=()=>{}){
+export function runSimulation(s,onProgress=()=>{},options={}){
   const errors=validateScenario(s);if(errors.length)throw new Error(errors.join(' '));
   const n=s.numberOfSimulations,paths=[],endings=[],failures=[];let successes=0;
-  for(let i=0;i<n;i++){const seed=BigInt(s.seed)+BigInt(i)*STRIDE,path=runOne(s,new JavaRandom(seed));paths.push(path);endings.push(path.yearEnd[path.yearEnd.length-1]);if(path.success)successes++;else if(path.failureAge!==null)failures.push(path.failureAge);if(i%25===0)onProgress((i+1)/n);}
-  const p=successes/n,sorted=endings.sort((a,b)=>a-b),years=paths[0].yearEnd.length,bands=[];
-  for(let y=0;y<years;y++){const vals=paths.map(x=>x.yearEnd[y]).sort((a,b)=>a-b);bands.push({age:s.household.retirementAge+y,pessimistic:percentile(vals,.1),median:percentile(vals,.5),optimistic:percentile(vals,.9)});}
+  for(let i=0;i<n;i++){const seed=BigInt(s.seed)+BigInt(i)*STRIDE,path=runOne(s,new JavaRandom(seed));paths.push(path);endings.push(Math.max(0,path.yearEnd[path.yearEnd.length-1]));if(path.success)successes++;else if(path.failureAge!==null)failures.push(path.failureAge);if(i%25===0)onProgress((i+1)/n);}
+  const p=successes/n,sorted=endings.sort((a,b)=>a-b),bands=buildBalanceBands(paths,s.household.retirementAge);
   failures.sort((a,b)=>a-b);const buckets=new Map();for(const age of failures){const start=Math.floor(age/5)*5;buckets.set(start,(buckets.get(start)||0)+1);}
   const failureAgeBuckets=[...buckets].map(([start,count])=>({label:`${start}-${start+4}`,count,shareOfFailures:count/failures.length}));
   const maxAge=Math.max(...paths.map(x=>x.survivedThroughAge)),notFailedByAge=[];
   for(let age=s.household.retirementAge;age<=maxAge;age++)notFailedByAge.push({age,notFailedShare:paths.filter(x=>x.failureAge===null||x.failureAge>age).length/n,aliveShare:paths.filter(x=>x.survivedThroughAge>=age).length/n});
   const maxYears=Math.max(...paths.map(x=>x.chart.length)),meanPath=[];for(let y=0;y<maxYears;y++){const positive=paths.map(x=>x.chart[y]).filter(x=>x>0);if(positive.length)meanPath.push({yearsInRetirement:y,balance:positive.reduce((a,b)=>a+b,0)/positive.length});}
-  return {scenarioId:s.id,successProbability:p,medianEndingBalance:percentile(sorted,.5),pessimisticEndingBalance:percentile(sorted,.1),optimisticEndingBalance:percentile(sorted,.9),medianFailureAge:failures.length?percentile(failures,.5):null,failureAgeBuckets,balanceBands:bands,notFailedByAge,meanPath,riskBreakdown:riskBreakdown(s,p),provenance:{engineVersion:ENGINE_VERSION,engineCadence:'Monthly cashflow model with annual result bands',taxTableVersion:'2026 federal brackets with senior-aware deductions',mortalityModelVersion:'SSA Trustees Alt2 2025 annual death probabilities',randomSeed:s.seed,simulationCount:n},generatedAtEpochMillis:Date.now()};
+  return {scenarioId:s.id,successProbability:p,medianEndingBalance:percentile(sorted,.5),pessimisticEndingBalance:percentile(sorted,.1),optimisticEndingBalance:percentile(sorted,.9),medianFailureAge:failures.length?percentile(failures,.5):null,failureAgeBuckets,balanceBands:bands,notFailedByAge,meanPath,pathPoints:options.includePathPoints===false?[]:buildPathPoints(paths),riskBreakdown:riskBreakdown(s,p),provenance:{engineVersion:ENGINE_VERSION,engineCadence:'Monthly cashflow model with annual result bands',taxTableVersion:'2026 federal brackets with senior-aware deductions',mortalityModelVersion:'SSA Trustees Alt2 2025 annual death probabilities',randomSeed:s.seed,simulationCount:n},generatedAtEpochMillis:Date.now()};
 }
 
 export function estimateDecision(s,targetReadiness=.80,simulationCount=180,maxRetirementAge=70){
@@ -119,10 +118,10 @@ export function estimateDecision(s,targetReadiness=.80,simulationCount=180,maxRe
   let earliestRetirementAge=null,earliestRetirementReadiness=null;
   for(let age=h.currentAge;age<=last;age++){
     const variant=structuredClone(s);variant.household.retirementAge=age;variant.withdrawalStrategy.applyEarlyWithdrawalPenalty=age*12<714;variant.numberOfSimulations=count;variant.seed=s.seed+10000;
-    const readiness=runSimulation(variant).successProbability;
+    const readiness=runSimulation(variant,()=>{},{includePathPoints:false}).successProbability;
     if(readiness>=targetReadiness){earliestRetirementAge=age;earliestRetirementReadiness=readiness;break;}
   }
-  function readinessFor(spending){const variant=structuredClone(s);variant.spending.annualBaseSpending=spending;variant.numberOfSimulations=count;variant.seed=s.seed+20000;return runSimulation(variant).successProbability;}
+  function readinessFor(spending){const variant=structuredClone(s);variant.spending.annualBaseSpending=spending;variant.numberOfSimulations=count;variant.seed=s.seed+20000;return runSimulation(variant,()=>{},{includePathPoints:false}).successProbability;}
   let safeAnnualSpending=null,safeSpendingReadiness=null;
   if(readinessFor(0)>=targetReadiness){
     const maxSpend=Math.max(s.spending.annualBaseSpending*3,250000);let low=0,high=Math.min(Math.max(s.spending.annualBaseSpending*1.5,40000),maxSpend),highReady=readinessFor(high);

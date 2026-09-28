@@ -1,4 +1,5 @@
-export const ENGINE_VERSION = '2026.08-web-port';
+export const ENGINE_VERSION = '2026.09-observed-balances';
+export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
 export const DEFAULT_SEED = 20260429;
 export const ALLOCATION_KEYS = ['stockUnder30x', 'stock30xTo35x', 'stock35xTo40x', 'stock40xTo45x', 'stock45xTo50x', 'stock50xOrMore'];
 
@@ -8,7 +9,7 @@ export function baseScenario() {
     household: {currentAge: 50, retirementAge: 67, targetEndAge: 119, filingStatus: 'Single', gender: 'Male', spouseGender: 'Female', spouseCurrentAge: 50},
     accounts: {pretax: 800000, roth: 100000, taxable: 0, cash: 50000},
     spending: {annualBaseSpending: 75000, generalInflationMean: .023, generalInflationStdDev: .016, spendingPathModel: 'EmpiricalAgeDecline', lowPortfolioSpendingReduction: .10},
-    budget: {annualPropertyTaxes: 0, annualHomeInsurance: 0, annualAutoInsurance: 0, monthlyBudgets: [], isAppliedToAnnualBaseSpending: false},
+    budget: {annualPropertyTaxes: 0, annualHomeInsurance: 0, annualAutoInsurance: 0, monthlyBudgets: [], retirementAnnualAdjustment: 0, estimateNeedsReview: false, isAppliedToAnnualBaseSpending: false},
     mortgage: {monthlyPayment: 0, yearsLeft: 0, monthsLeft: 0, currentBalance: 0},
     rent: {monthlyRent: 0}, home: {currentValue: 0},
     healthcare: {preMedicareMonthlyPremium: 1250, healthcareInflationMean: .04, healthcareInflationStdDev: .018, includeMedicarePremiums: true},
@@ -85,18 +86,65 @@ export function validateScenario(s) {
   const market=s.market;
   if (market.preRetirementMeanReturn < -.20 || market.preRetirementMeanReturn > .25 || market.stockMeanReturn < -.20 || market.stockMeanReturn > .25 || market.bondMeanReturn < -.20 || market.bondMeanReturn > .20 || market.preRetirementStdDev < 0 || market.preRetirementStdDev > .60 || market.stockStdDev < 0 || market.stockStdDev > .60 || market.bondStdDev < 0 || market.bondStdDev > .40) errors.push('Market return assumptions are outside the supported range.');
   if (ALLOCATION_KEYS.some(k=>s.postRetirementAllocation[k]<0 || s.postRetirementAllocation[k]>1)) errors.push('Stock allocation must be between 0% and 100%.');
-  if (s.rothConversion.enabled && ![.10,.12,.22,.24,.32,.35,.37].some(x=>Math.abs(x-s.rothConversion.marginalRateCap)<.0001)) errors.push('Roth conversion cap must be a supported tax bracket.');
+  if (s.rothConversion.enabled && !ROTH_CONVERSION_RATES.some(x=>Math.abs(x-s.rothConversion.marginalRateCap)<.0001)) errors.push('Roth conversion cap must be 10%, 12%, 22%, 24%, 32%, 35%, or 37%.');
   if (s.longTermCare.annualCost < 0 || s.longTermCare.averageDurationYears < 1 || s.longTermCare.averageDurationYears > 10) errors.push('Long-term care cost or duration is invalid.');
   if (s.withdrawalStrategy.drawdownTrigger < -.50 || s.withdrawalStrategy.drawdownTrigger > .25) errors.push('Cash drawdown trigger is outside the supported range.');
-  if (s.budget.annualPropertyTaxes < 0 || s.budget.annualHomeInsurance < 0 || s.budget.annualAutoInsurance < 0 || s.budget.monthlyBudgets.some(m=>m.cashAndAtmWithdrawals<0 || [...(m.checkingSavingsBills||[]),...(m.creditCardBills||[])].some(i=>i.monthlyAmount<0))) errors.push('Budget amounts cannot be negative.');
+  // Draft budget errors are shown in the budget editor; only applied spending feeds the simulation.
   return errors;
 }
 
-export function budgetEstimate(budget) {
-  const byMonth = new Map((budget.monthlyBudgets||[]).map(m=>[m.month,m]));
-  const months = [...byMonth.values()].sort((a,b)=>a.month.localeCompare(b.month)).slice(-12);
-  const monthlyAverage = months.length ? months.reduce((sum,m)=>sum + Number(m.cashAndAtmWithdrawals||0) + [...(m.checkingSavingsBills||[]),...(m.creditCardBills||[])].reduce((x,i)=>x+Number(i.monthlyAmount||0),0),0)/months.length : 0;
-  return monthlyAverage*12 + Number(budget.annualPropertyTaxes||0) + Number(budget.annualHomeInsurance||0) + Number(budget.annualAutoInsurance||0);
+export const ANNUAL_BILLS = [['Property taxes','annualPropertyTaxes','propertyTaxes'],['Home insurance','annualHomeInsurance','homeInsurance'],['Auto insurance','annualAutoInsurance','autoInsurance']];
+export const SEPARATE_COSTS = [['Mortgage payments','mortgage'],['Rent','rent'],['Healthcare premiums','healthcare']];
+const amount = v => Number(v ?? 0);
+export function budgetMonthTotals(m) {
+  const checking=(m.checkingSavingsBills||[]).reduce((sum,x)=>sum+amount(x.monthlyAmount),0);
+  const credit=(m.creditCardBills||[]).reduce((sum,x)=>sum+amount(x.monthlyAmount),0);
+  const gross=checking+credit+amount(m.cashAndAtmWithdrawals);
+  const annualBills=ANNUAL_BILLS.reduce((sum,[,,key])=>sum+amount(m.adjustments?.[key]),0);
+  const separateCosts=SEPARATE_COSTS.reduce((sum,[,key])=>sum+amount(m.adjustments?.[key]),0);
+  return {checking,credit,gross,annualBills,separateCosts,adjusted:gross-annualBills-separateCosts};
+}
+export function budgetBreakdown(budget) {
+  const months=[...(budget.monthlyBudgets||[])].sort((a,b)=>String(a.month).localeCompare(String(b.month))).slice(-12);
+  const totals=months.reduce((sum,m)=>{const row=budgetMonthTotals(m);for(const key of Object.keys(sum))sum[key]+=row[key];return sum;},{gross:0,annualBills:0,separateCosts:0,adjusted:0});
+  const count=months.length,average=key=>count?totals[key]/count:0;
+  const annualBills=ANNUAL_BILLS.reduce((sum,[,key])=>sum+amount(budget[key]),0);
+  const retirementAdjustment=amount(budget.retirementAnnualAdjustment);
+  return {months,count,totals,grossAverage:average('gross'),annualBillsAverage:average('annualBills'),separateCostsAverage:average('separateCosts'),monthlyAverage:average('adjusted'),annualized:average('adjusted')*12,annualBills,retirementAdjustment,estimate:average('adjusted')*12+annualBills+retirementAdjustment};
+}
+export function validateBudget(budget,{requireMonths=false}={}) {
+  const errors=[],months=budget.monthlyBudgets||[],seen=new Set();
+  const nonnegative=v=>Number.isFinite(amount(v))&&amount(v)>=0;
+  if(requireMonths&&!months.length)errors.push('Add at least one complete month of spending before using the estimate.');
+  for(const [label,key] of ANNUAL_BILLS)if(!nonnegative(budget[key]))errors.push(`${label}: enter a finite amount of 0 or more.`);
+  if(!Number.isFinite(amount(budget.retirementAnnualAdjustment)))errors.push('Enter a finite retirement adjustment.');
+  for(const [i,m] of months.entries()){
+    const label=/^\d{4}-(0[1-9]|1[0-2])$/.test(m.month)?m.month:`Month ${i+1}`;
+    if(label!==m.month)errors.push(`${label}: choose a valid month.`);
+    if(seen.has(m.month))errors.push(`${label}: this month is entered twice. Keep one combined entry per month.`);seen.add(m.month);
+    if(!nonnegative(m.cashAndAtmWithdrawals)||!(m.checkingSavingsBills||[]).every(x=>nonnegative(x.monthlyAmount)))errors.push(`${label}: cash and bank spending must be 0 or more.`);
+    if(!(m.creditCardBills||[]).every(x=>Number.isFinite(amount(x.monthlyAmount))))errors.push(`${label}: enter finite credit card spending. A negative net refund is allowed.`);
+    if([...ANNUAL_BILLS.map(x=>x[2]),...SEPARATE_COSTS.map(x=>x[1])].some(k=>!nonnegative(m.adjustments?.[k])))errors.push(`${label}: amounts already counted must be 0 or more.`);
+  }
+  const d=budgetBreakdown(budget);
+  // Refund-heavy months may be negative; evaluate deductions over the entire sample.
+  if(d.totals.adjusted < -0.005)errors.push('Adjustments exceed spending across the selected months. Check for amounts deducted twice.');
+  if(d.estimate < 0)errors.push('The retirement adjustment would make the annual estimate negative.');
+  return errors;
+}
+export function budgetEstimate(budget) { return budgetBreakdown(budget).estimate; }
+export function markBudgetEdited(budget) {
+  if(budget.isAppliedToAnnualBaseSpending&&budget.appliedAnnualHomeCosts===undefined)budget.appliedAnnualHomeCosts=amount(budget.annualPropertyTaxes)+amount(budget.annualHomeInsurance);
+  budget.estimateNeedsReview=true;
+}
+export function applyBudgetEstimate(scenario) {
+  const errors=validateBudget(scenario.budget,{requireMonths:true});
+  if(errors.length)throw new Error(errors.join(' '));
+  const b=scenario.budget;
+  scenario.spending.annualBaseSpending=budgetEstimate(b);
+  b.appliedAnnualHomeCosts=amount(b.annualPropertyTaxes)+amount(b.annualHomeInsurance);
+  b.isAppliedToAnnualBaseSpending=true;b.estimateNeedsReview=false;
+  return scenario.spending.annualBaseSpending;
 }
 
 export function scenarioWarnings(s) {
