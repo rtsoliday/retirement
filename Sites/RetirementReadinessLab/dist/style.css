@@ -76,3 +76,52 @@ button:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #4c
 @media(max-width:680px){.plot-surface{height:260px}.plot-card{padding:16px}.plot-dialog{width:calc(100vw - 12px);max-height:calc(100dvh - 12px);padding:12px}.plot-dialog .plot-card{padding:10px}.plot-dialog-head h2{font-size:1rem}.plot-controls button{font-size:.72rem;padding:7px 10px}.plot-controls span{font-size:.69rem}.plot-dialog .plot-surface{height:45dvh;min-height:260px}.plot-legend{font-size:.67rem}.plot-inspector{font-size:.7rem}}
 @media print{.plot-inspector,.plot-dialog{display:none!important}.plot-card{break-inside:avoid}.plot-surface{height:260px}}
 .plot-dialog-head{position:sticky;top:0;z-index:2;background:#f6f8f7;padding:3px 0 8px}
+
+/* Disclosures shown with results and in the standalone model explanation. */
+.planning-disclosure{margin-bottom:18px;border:1px solid #dbc999;border-left:4px solid #bd8c2d;background:#fffaf0;border-radius:10px;padding:16px 18px;color:#463d2c;line-height:1.55}
+.planning-disclosure strong{display:block;font-size:.88rem;color:#3b452e}
+.planning-disclosure p{margin:7px 0;font-size:.82rem}
+.planning-disclosure a{font-size:.8rem;font-weight:700;color:#176b5b}
+.disclosure-page{min-height:100vh;display:flex;flex-direction:column}
+.disclosure-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px clamp(20px,4vw,54px);background:#103b34;color:white}
+.disclosure-brand{display:flex;align-items:center;gap:12px;color:white;text-decoration:none;font-weight:750}
+.disclosure-header .brand-icon{width:36px;height:36px;font-size:1.1rem}
+.disclosure-back{color:#e5f2ea;font-size:.85rem;font-weight:650}
+.disclosure-main{max-width:900px}
+.disclosure-main h1{font-size:clamp(2rem,4vw,3rem);letter-spacing:-.05em;margin:0 0 12px}
+.disclosure-intro{font-size:1.04rem;line-height:1.65;color:#465b52;margin:0 0 24px}
+.disclosure-main .card{margin-bottom:16px;line-height:1.65}
+.disclosure-main .card p{margin:0 0 12px}
+.disclosure-main .card p:last-child{margin-bottom:0}
+.disclosure-main .card ul{margin:0;padding-left:22px}
+.disclosure-main .card li+li{margin-top:8px}
+.disclosure-updated{color:#697c72;font-size:.78rem;margin-top:24px}
+.disclosure-page footer{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;background:white}
+@media(max-width:600px){.disclosure-header{padding:14px 16px}.disclosure-brand{font-size:.77rem}.disclosure-back{font-size:.72rem}}
+@media print{.planning-disclosure{break-inside:avoid}.disclosure-header,.disclosure-page footer{display:none}}
+
+.scope-disclosure{font-size:.78rem;line-height:1.55;color:#52685d;margin:-8px 0 22px}.scope-disclosure a{font-weight:700;color:#176b5b}
+
+/* Visible explanation of the Monte Carlo method across the planner. */
+.monte-banner{display:flex;align-items:center;justify-content:space-between;gap:28px;padding:27px 30px;border:1px solid #b5d8cd;border-radius:12px;background:linear-gradient(110deg,#e0f2eb 0%,#f5fbf8 72%);color:#204f43}
+.monte-banner>div{min-width:0}.monte-eyebrow,.monte-run-label{display:block;font-size:.68rem;font-weight:800;letter-spacing:.11em;text-transform:uppercase;color:#176c59}
+.monte-banner h2{font-size:clamp(1.35rem,2.4vw,1.9rem);line-height:1.18;letter-spacing:-.035em;margin:8px 0 10px;color:#174f42}
+.monte-banner p{font-size:.83rem;line-height:1.65;max-width:70ch;margin:0;color:#4f6d62}
+.monte-banner a{flex:none;color:#135e50;font-size:.78rem;font-weight:750;text-decoration:underline;text-underline-offset:3px}
+.monte-run-summary{display:flex;align-items:center;gap:14px 22px;flex-wrap:wrap;margin:-6px 0 22px;padding:13px 18px;border:1px solid #cce2d9;border-radius:9px;background:#edf7f2;color:#3d5e53;font-size:.79rem}
+.monte-run-summary .monte-run-label{margin-right:auto}.monte-run-summary strong{font-variant-numeric:tabular-nums;color:#17594b}.monte-run-summary a{color:#176b5b;font-weight:700}
+@media(max-width:760px){.monte-banner{display:block;padding:22px}.monte-banner a{display:inline-block;margin-top:15px}.monte-run-summary{align-items:flex-start;flex-direction:column;gap:7px}.monte-run-summary .monte-run-label{margin:0}}
+@media print{.monte-banner{background:#fff}.monte-banner a,.monte-run-summary a{display:none}}
+
+/* Free preview and Pro account controls. */
+.plan-notice{display:flex;align-items:center;gap:8px 14px;flex-wrap:wrap;margin:0 0 18px;padding:13px 18px;border:1px solid #decfa8;border-radius:9px;background:#fff9ea;color:#66522e;font-size:.78rem;line-height:1.55}
+.plan-notice strong{color:#51401e}.plan-notice.pro{border-color:#b6dacb;background:#eaf7f0;color:#2d5d4a}.plan-notice.pro strong{color:#205843}.plan-notice .text-link{font-weight:750}
+.billing-signin{display:inline-block;text-decoration:none;padding:11px 16px;color:white}.billing-footnote{font-size:.78rem;line-height:1.6;color:#687c74;max-width:85ch;margin:20px 0}.grid.two .card>.metric-value{font-size:2rem;font-weight:750;letter-spacing:-.04em;margin:18px 0}.grid.two .card>p{font-size:.83rem;line-height:1.65}
+@media print{.plan-notice,.billing-signin{display:none!important}}
+
+.billing-paths{max-width:280px;margin:20px 0}.billing-paths input{width:100%}
+
+.billing-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:20px 0}.billing-option{display:grid;gap:12px;border:1px solid #dce7df;border-radius:12px;padding:16px;background:#f8fbf8}.billing-option strong{font-size:1.35rem;letter-spacing:-.03em}.billing-option small{font-size:.85rem;color:#68796e;font-weight:600}.billing-option button{width:100%}@media(max-width:600px){.billing-options{grid-template-columns:1fr}}
+
+/* Sign-in and account-linking controls. */
+.account-card{margin-bottom:18px}.account-card p{font-size:.84rem;line-height:1.6}.account-actions{margin-top:14px}.account-actions .secondary{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:10px 14px}.account-actions .subtle{padding:10px 14px}

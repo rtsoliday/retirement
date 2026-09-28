@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#0e463c">
+  <title>Site traffic — Retirement Readiness Lab</title>
+  <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./admin.css">
+  <script type="module" src="./admin.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="disclosure-page">
+    <header class="disclosure-header">
+      <a class="disclosure-brand" href="./index.html"><span class="brand-icon" aria-hidden="true">R<span>↗</span></span><span>Retirement Readiness Lab</span></a>
+      <a class="disclosure-back" href="./index.html">Back to planner →</a>
+    </header>
+    <main id="main" class="admin-main">
+      <div class="admin-head">
+        <div>
+          <p class="kicker">Site administration</p>
+          <h1>Traffic over time</h1>
+          <p>Cloudflare traffic for retirementforecast.us and its www address. Only the site owner can view these figures.</p>
+        </div>
+        <a class="secondary admin-cloudflare-link" href="https://dash.cloudflare.com/a3c03e9b8c31326489c36e60ec3f3e47/retirementforecast.us/analytics/traffic" target="_blank" rel="noopener noreferrer">Open Cloudflare dashboard ↗</a>
+      </div>
+      <div class="admin-toolbar">
+        <div class="admin-range" role="group" aria-label="Date range">
+          <button type="button" data-days="7" aria-pressed="true">Last 7 days</button>
+          <button type="button" data-days="30" aria-pressed="false">Last 30 days</button>
+        </div>
+        <button type="button" id="refresh" class="secondary">Refresh figures</button>
+      </div>
+      <p id="status" class="admin-status" role="status">Loading Cloudflare traffic…</p>
+      <section id="setup" class="card admin-setup" hidden>
+        <h2>Connect Cloudflare Analytics</h2>
+        <p>This page needs a read-only Cloudflare Analytics API token stored as a secret in this Site's settings. It is never sent to browsers or included in the website files.</p>
+        <p>After adding <code>CLOUDFLARE_ANALYTICS_TOKEN</code> to the Site's environment variables, publish the current version again and refresh this page.</p>
+      </section>
+      <div id="dashboard" hidden>
+        <div class="admin-metrics">
+          <section class="card admin-metric"><span>Page views in range</span><strong id="total-views">—</strong><small>Successful HTML page responses</small></section>
+          <section class="card admin-metric"><span>Unique visitor IPs yesterday</span><strong id="yesterday-visitors">—</strong><small>One IP can represent several people</small></section>
+          <section class="card admin-metric"><span>Peak unique IPs in one day</span><strong id="peak-visitors">—</strong><small>Within the selected date range</small></section>
+        </div>
+        <p class="admin-period" id="period"></p>
+        <div class="admin-chart-grid">
+          <section class="card"><h2>Page views by day</h2><div class="admin-chart" id="views-chart" role="img" aria-label="Daily page views chart"></div></section>
+          <section class="card"><h2>Unique visitor IPs by day</h2><div class="admin-chart" id="visitors-chart" role="img" aria-label="Daily unique visitor IPs chart"></div></section>
+        </div>
+        <section class="card admin-table-card">
+          <h2>Daily figures</h2>
+          <div class="table-wrap"><table><thead><tr><th scope="col">Date (UTC)</th><th scope="col">Page views</th><th scope="col">Unique visitor IPs</th></tr></thead><tbody id="daily-rows"></tbody></table></div>
+        </section>
+      </div>
+      <p class="admin-definition">Cloudflare counts page views when it serves an HTML page through the custom domain. The planner's internal tabs do not each count as a new page view. Unique visitor IPs are an estimate of people, not a person-level count; bots, shared networks, and changing IP addresses can affect it. Visits to the separate chatgpt.site address are outside these figures. Today is partial, and Cloudflare may report data with a delay.</p>
+    </main>
+    <footer><span>© 2026 Robert Soliday. All rights reserved.</span><span><a href="./index.html">Return to planner</a></span></footer>
+  </div>
+</body>
+</html>

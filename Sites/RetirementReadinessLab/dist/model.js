@@ -1,6 +1,8 @@
 export const ENGINE_VERSION = '2026.09-observed-balances';
 export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
 export const DEFAULT_SEED = 20260429;
+export const FREE_SIMULATION_PATHS = 4;
+export const MAX_SIMULATION_PATHS = 10000;
 export const ALLOCATION_KEYS = ['stockUnder30x', 'stock30xTo35x', 'stock35xTo40x', 'stock40xTo45x', 'stock45xTo50x', 'stock50xOrMore'];
 
 export function baseScenario() {
@@ -20,7 +22,7 @@ export function baseScenario() {
     rothConversion: {enabled: false, marginalRateCap: .22},
     withdrawalStrategy: {useCashReserveDuringDrawdowns: false, drawdownTrigger: -.01, applyEarlyWithdrawalPenalty: false, ruleOf55Eligible: false, seppEligible: false},
     longTermCare: {enabled: true, annualCost: 100000, averageDurationYears: 3},
-    numberOfSimulations: 1500, seed: DEFAULT_SEED
+    numberOfSimulations: FREE_SIMULATION_PATHS, simulationPathsCustomized: false, seed: DEFAULT_SEED
   };
 }
 
@@ -28,9 +30,9 @@ export function sampleScenarios() {
   const base = baseScenario();
   const later = structuredClone(base);
   later.id = 'later-retirement'; later.name = 'Retire at 62'; later.household.retirementAge = 62;
-  later.socialSecurity.claimAge = 70; later.rothConversion.enabled = true; later.seed = 20260430;
+  later.socialSecurity.claimAge = 70; later.rothConversion.enabled = true;
   const lean = structuredClone(base);
-  lean.id = 'lean-plan'; lean.name = 'Lower spending'; lean.spending.annualBaseSpending = 68000; lean.seed = 20260431;
+  lean.id = 'lean-plan'; lean.name = 'Lower spending'; lean.spending.annualBaseSpending = 68000;
   return [base, later, lean];
 }
 
@@ -56,7 +58,16 @@ export function normalizeScenario(raw) {
       result[key] = {...base[key], ...raw[key]};
     } else result[key] = raw[key];
   }
+  // Imported and previously saved scenarios cannot change the site's fixed seed.
+  result.seed = DEFAULT_SEED;
+  result.simulationPathsCustomized = raw?.simulationPathsCustomized === true;
   return result;
+}
+
+export function applyProSimulationDefault(s) {
+  if (s.simulationPathsCustomized || s.numberOfSimulations !== FREE_SIMULATION_PATHS) return false;
+  s.numberOfSimulations = MAX_SIMULATION_PATHS;
+  return true;
 }
 
 export function validateScenario(s) {
@@ -76,7 +87,7 @@ export function validateScenario(s) {
   if (sp.generalInflationMean < -.02 || sp.generalInflationMean > .15 || sp.generalInflationStdDev < 0 || sp.generalInflationStdDev > .3) errors.push('General inflation assumptions are outside the supported range.');
   if (sp.lowPortfolioSpendingReduction < 0 || sp.lowPortfolioSpendingReduction > 1) errors.push('Spending reduction must be between 0% and 100%.');
   if (s.healthcare.healthcareInflationMean < 0 || s.healthcare.healthcareInflationMean > .2 || s.healthcare.healthcareInflationStdDev < 0 || s.healthcare.healthcareInflationStdDev > .3) errors.push('Healthcare inflation assumptions are outside the supported range.');
-  if (s.numberOfSimulations < 1 || s.numberOfSimulations > 10000 || !Number.isInteger(s.numberOfSimulations)) errors.push('Simulation count must be between 1 and 10,000.');
+  if (s.numberOfSimulations < 1 || s.numberOfSimulations > MAX_SIMULATION_PATHS || !Number.isInteger(s.numberOfSimulations)) errors.push('Simulation count must be between 1 and 10,000.');
   if (!Number.isSafeInteger(s.seed)) errors.push('Seed must be an integer.');
   if (s.mortgage.yearsLeft < 0 || s.mortgage.yearsLeft > 80 || s.mortgage.monthsLeft < 0 || s.mortgage.monthsLeft > 11 || s.mortgage.monthlyPayment < 0 || s.mortgage.currentBalance < 0) errors.push('Mortgage payment, balance, or term is invalid.');
   if (s.rent.monthlyRent < 0 || s.home.currentValue < 0) errors.push('Housing amounts cannot be negative.');
@@ -158,6 +169,7 @@ export function scenarioWarnings(s) {
   if(!s.healthcare.includeMedicarePremiums)notes.push('Medicare premiums are excluded.');
   if(!s.longTermCare.enabled)notes.push('Long-term care risk is excluded.');
   if(s.socialSecurity.annualBenefitAt67<=0)notes.push('No Social Security benefit is entered.');
-  if(s.numberOfSimulations<500)notes.push('Use at least 500 simulations for final comparisons.');
+  if(s.numberOfSimulations===4)notes.push('Four paths are only a preview. Results move in 25% steps and are not reliable for decisions. Use many more paths for serious comparisons.');
+  else if(s.numberOfSimulations<500)notes.push('Fewer than 500 paths can make comparisons unstable. Use more paths before relying on small differences.');
   return notes;
 }

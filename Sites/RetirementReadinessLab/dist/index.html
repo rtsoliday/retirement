@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0e463c">
-  <meta name="description" content="Explore retirement scenarios with a local, monthly Monte Carlo model.">
+  <meta name="description" content="Explore U.S. retirement plans with Monte Carlo simulations of market returns, inflation, healthcare costs, and longevity.">
   <meta name="author" content="Robert Soliday">
-  <title>Retirement Readiness Lab</title>
+  <title>Retirement Readiness Lab | Monte Carlo retirement simulations</title>
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
 <div class="shell">
     <aside class="sidebar">
-      <div class="brand"><div class="brand-icon">R<span>↗</span></div><div><strong>Retirement <br>Readiness Lab</strong><small>Scenario planner</small></div></div>
+      <div class="brand"><div class="brand-icon">R<span>↗</span></div><div><strong>Retirement <br>Readiness Lab</strong><small>Monte Carlo planner</small></div></div>
       <button id="menu-toggle" class="secondary" aria-expanded="false" aria-controls="navigation">Menu ☰</button>
     <nav aria-label="Main navigation" id="navigation">
       <span class="nav-group">Your plan</span>
@@ -26,13 +26,14 @@
         <button data-view="results">Results</button>
         <span class="nav-group">Save & share</span>
       <button data-view="reports">Reports & backup</button>
+      <button data-view="billing">Plans & billing</button>
       </nav>
       <div class="sidebar-foot">Your scenarios are saved in this browser. Export a backup before clearing browser data.</div>
     </aside>
     <div class="workspace">
       <header class="topbar"><div class="topline"><span id="page-location" class="eyebrow">Overview</span><span class="privacy">● Saved on this device</span></div><div class="topactions"><div class="scenario-select-wrap"><label for="scenario-select">Current scenario</label><select id="scenario-select"></select></div><span id="result-state" class="run-state">Ready to simulate</span><button id="run-button" class="primary">Run simulation</button></div></header>
       <main id="main" tabindex="-1"></main>
-      <footer><span>© 2026 Robert Soliday. All rights reserved. <a href="https://github.com/rtsoliday/retirement/blob/master/LICENSE" rel="license noopener noreferrer" target="_blank">License terms</a></span><span>Educational planning estimates. Tax, Medicare, return, and mortality assumptions may differ from future rules and actual outcomes.</span></footer>
+      <footer><span>© 2026 Robert Soliday. All rights reserved. <a href="https://github.com/rtsoliday/retirement/blob/master/LICENSE" rel="license noopener noreferrer" target="_blank">License terms</a></span><span>For U.S. retirement planning only. Educational estimates, not advice or guarantees. <a href="./methodology.html">Model scope &amp; limitations</a></span></footer>
     </div>
   </div>
   <input type="file" id="import-file" accept="application/json,.json" hidden>

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0e463c">
+  <meta name="description" content="Scope, assumptions, limitations, and data handling for Retirement Readiness Lab.">
+  <meta name="author" content="Robert Soliday">
+  <title>Model scope &amp; limitations — Retirement Readiness Lab</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="disclosure-page">
+    <header class="disclosure-header">
+      <a class="disclosure-brand" href="./index.html"><span class="brand-icon" aria-hidden="true">R<span>↗</span></span><span>Retirement Readiness Lab</span></a>
+      <a class="disclosure-back" href="./index.html">Back to planner →</a>
+    </header>
+    <main id="main" class="disclosure-main">
+      <p class="kicker">About the estimates</p>
+      <h1>Model scope &amp; limitations</h1>
+      <p class="disclosure-intro">Retirement Readiness Lab is an educational scenario planner. It is designed for U.S. retirement planning only. Its results are hypothetical estimates, not predictions or guarantees of what will happen to you.</p>
+      <section class="card" id="monte-carlo">
+        <h2>How the Monte Carlo simulation works</h2>
+        <p>The planner runs many possible retirement lifetimes from the same starting assumptions. In each path it samples market returns, general inflation, healthcare inflation, and lifespan, then calculates monthly income, spending, taxes, and withdrawals. The free preview runs four paths. Pro subscribers can select up to 10,000 paths under Assumptions → Market &amp; withdrawal strategy → Advanced model settings or Plans &amp; billing. Both versions use the same fixed random sequence, and all calculations run in your browser.</p>
+        <p>The charts show the spread of those modeled outcomes rather than a single straight-line forecast. With only four paths, readiness changes in 25% steps and is too coarse for retirement decisions. More paths can make the estimate steadier, but they cannot make incorrect assumptions accurate or capture every future event.</p>
+      </section>
+      <section class="card">
+        <h2>What “readiness” means</h2>
+        <p>The readiness percentage is the share of simulated lifetimes that did not run out of portfolio funds under the inputs and assumptions selected. It is not the probability that your actual plan will succeed. A different set of assumptions, simulation count, or future events can change the result. The model cannot represent every possible outcome.</p>
+      </section>
+      <section class="card">
+        <h2>U.S. scope and laws</h2>
+        <p>The calculator uses simplified U.S. federal ordinary-income tax, Social Security, Medicare, and retirement withdrawal rules. Its tax tables start with 2026 federal brackets and deductions; estimates for later years inflate those figures rather than predicting future laws. It does not calculate state or local income taxes, a complete individual tax return, or laws and benefit systems outside the United States. It should not be used for retirement planning under another country's laws.</p>
+        <p>Tax and benefit rules can change. Check current rules and your own eligibility with the <a href="https://www.irs.gov/" rel="noopener noreferrer" target="_blank">IRS</a>, <a href="https://www.ssa.gov/myaccount/" rel="noopener noreferrer" target="_blank">Social Security Administration</a>, and <a href="https://www.medicare.gov/" rel="noopener noreferrer" target="_blank">Medicare</a>.</p>
+      </section>
+      <section class="card">
+        <h2>Other important assumptions</h2>
+        <ul>
+          <li>Investment returns, inflation, spending, healthcare costs, and longevity are modeled from your inputs and built-in assumptions. Actual conditions may differ substantially.</li>
+          <li>The Social Security estimate uses the benefit you enter at age 67 and simplified claiming, spouse, and survivor calculations. It is not an official benefit determination.</li>
+          <li>Long-term care costs are included only when that option is enabled. Other costs or events not entered or represented by the model can change the outcome.</li>
+          <li>Displayed balance ranges and ending balances describe simulated paths. They are not amounts you can expect or a promise that your portfolio will last.</li>
+        </ul>
+      </section>
+      <section class="card">
+        <h2>Use of the results</h2>
+        <p>Verify your inputs and compare more than one scenario. This tool does not provide individualized financial, investment, tax, legal, or insurance advice. Consult qualified professionals before making retirement, investment, tax, or insurance decisions.</p>
+      </section>
+      <section class="card">
+        <h2>Your scenario data</h2>
+        <p>The web planner saves scenarios in this browser's local storage and runs simulations in your browser. Report and backup files are created when you choose to export them. You are responsible for safeguarding exported files and making a backup before clearing browser data. The hosting service receives normal requests needed to deliver this page. If you sign in or subscribe, the Site checks your account's subscription status with Stripe. Stripe receives account and billing information but not your retirement scenarios or simulation inputs.</p>
+      </section>
+      <p class="disclosure-updated">Model description reviewed September 2026. Review the assumptions again before relying on a later result.</p>
+    </main>
+    <footer><span>© 2026 Robert Soliday. All rights reserved. <a href="https://github.com/rtsoliday/retirement/blob/master/LICENSE" rel="license noopener noreferrer" target="_blank">License terms</a></span><span><a href="./index.html">Return to planner</a></span></footer>
+  </div>
+</body>
+</html>

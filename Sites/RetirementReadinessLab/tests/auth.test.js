@@ -1,0 +1,148 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import worker from '../worker/index.js';
+
+const origin = 'https://retirementforecast.us';
+const project = 'retirement-auth-test';
+const firebaseEnv = {
+  ASSETS: { fetch: async () => new Response('planner') },
+  FIREBASE_API_KEY: 'test-public-key', FIREBASE_AUTH_DOMAIN: `${project}.firebaseapp.com`,
+  FIREBASE_PROJECT_ID: project, FIREBASE_APP_ID: '1:123:web:test',
+  FIREBASE_GOOGLE_ENABLED: 'true',
+  STRIPE_SECRET_KEY: 'rk_live_test',
+  STRIPE_PRO_LIVE_MONTHLY_PRICE_ID: 'price_monthly', STRIPE_PRO_LIVE_YEARLY_PRICE_ID: 'price_yearly',
+};
+const encoder = new TextEncoder();
+const b64 = bytes => Buffer.from(bytes).toString('base64url');
+const keyPair = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']);
+const jwk = { ...await crypto.subtle.exportKey('jwk', keyPair.publicKey), kid: 'test-kid', alg: 'RS256' };
+firebaseEnv.FIREBASE_JWKS_FETCH = async () => Response.json({ keys: [jwk] });
+async function token(overrides = {}) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64(JSON.stringify({ alg: 'RS256', kid: 'test-kid', typ: 'JWT' }));
+  const claims = b64(JSON.stringify({ aud: project, iss: `https://securetoken.google.com/${project}`, sub: 'firebase-user', exp: now + 3600, iat: now, auth_time: now, firebase: { sign_in_provider: 'google.com' }, ...overrides }));
+  const signature = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', keyPair.privateKey, encoder.encode(`${header}.${claims}`));
+  return `${header}.${claims}.${b64(signature)}`;
+}
+function request(path, { user, bearer, method = 'GET', siteOrigin = origin, body } = {}) {
+  return new Request(origin + path, { method, headers: { ...(user ? { 'oai-authenticated-user-id': user } : {}), ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}), ...(method === 'POST' ? { Origin: siteOrigin } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+}
+function stripeFixture(initial = []) {
+  const customers = new Map(initial.map(c => [c.id, structuredClone(c)]));
+  const writes = [];
+  const fetch = async (url, init) => {
+    const parsed = new URL(url), path = parsed.pathname, values = new URLSearchParams(init.body || '');
+    writes.push({ path, method: init.method, values, search: parsed.searchParams });
+    if (path === '/v1/customers/search') {
+      const query = parsed.searchParams.get('query') || '';
+      const match = /metadata\['([^']+)'\]:'([^']+)'/.exec(query);
+      return Response.json({ data: [...customers.values()].filter(c => c.metadata?.[match?.[1]] === match?.[2]), has_more: false });
+    }
+    if (path === '/v1/subscriptions') {
+      const customer = customers.get(parsed.searchParams.get('customer'));
+      return Response.json({ data: customer?.paid ? [{ id: 'sub_paid', status: 'active', items: { data: [{ price: { id: 'price_monthly' } }] } }] : [] });
+    }
+    if (path === '/v1/customers' && init.method === 'POST') {
+      const customer = { id: `cus_${customers.size + 1}`, metadata: { retirement_site_user_id: values.get('metadata[retirement_site_user_id]') || '', retirement_firebase_uid: values.get('metadata[retirement_firebase_uid]') || '' } };
+      customers.set(customer.id, customer); return Response.json(customer);
+    }
+    if (path.startsWith('/v1/customers/') && init.method === 'POST') {
+      const customer = customers.get(path.split('/').at(-1));
+      if (!customer) return Response.json({}, { status: 404 });
+      for (const [key, value] of values) { const m = /^metadata\[(.+)\]$/.exec(key); if (m) customer.metadata[m[1]] = value; }
+      return Response.json(customer);
+    }
+    if (path === '/v1/checkout/sessions' && init.method === 'POST') return Response.json({ url: 'https://checkout.stripe.com/c/pay/example' });
+    if (path === '/v1/billing_portal/sessions' && init.method === 'POST') return Response.json({ url: 'https://billing.stripe.com/p/session/example' });
+    return Response.json({}, { status: 404 });
+  };
+  return { env: { ...firebaseEnv, STRIPE_FETCH: fetch }, customers, writes };
+}
+
+test('public sign-in config is only exposed when all Firebase settings exist', async () => {
+  const disabled = await (await worker.fetch(request('/api/auth/config'), { ASSETS: firebaseEnv.ASSETS })).json();
+  assert.equal(disabled.configured, false); assert.equal(disabled.firebase, null);
+  const enabled = await (await worker.fetch(request('/api/auth/config', { user: 'chatgpt-user' }), firebaseEnv)).json();
+  assert.equal(enabled.configured, true); assert.equal(enabled.chatgptSignedIn, true);
+  assert.deepEqual(enabled.providers, { google: true });
+  assert.equal(enabled.firebase.projectId, project); assert.equal(enabled.firebase.apiKey, 'test-public-key');
+  assert.equal(JSON.stringify(enabled).includes('rk_live_'), false);
+});
+
+test('verified Google accounts can reach their own Pro subscription', async () => {
+  const fixture = stripeFixture([{ id: 'cus_paid', metadata: { retirement_firebase_uid: 'firebase-user' }, paid: true }]);
+  const response = await worker.fetch(request('/api/billing/status', { bearer: await token() }), fixture.env);
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.tier, 'pro'); assert.equal(result.maxPaths, 10000);
+  assert.equal(result.accountProvider, 'google');
+  assert.match(fixture.writes[0].search.get('query'), /retirement_firebase_uid/);
+});
+
+test('only the signed, verified owner Google identity receives complimentary Pro', async () => {
+  const fixture = stripeFixture();
+  const ownerToken = await token({ email: 'rtsoliday@gmail.com', email_verified: true });
+  const owner = await (await worker.fetch(request('/api/billing/status', { bearer: ownerToken }), fixture.env)).json();
+  assert.equal(owner.tier, 'pro'); assert.equal(owner.maxPaths, 10000);
+  assert.equal(owner.ownerAccess, true); assert.equal(owner.checkoutAvailable, false);
+  assert.equal(fixture.writes.length, 0);
+  const ownerByUid = await (await worker.fetch(request('/api/billing/status', { bearer: await token({ sub: 'xYPnJEpGrHfTJmBtFUnXlAQSdzU2' }) }), fixture.env)).json();
+  assert.equal(ownerByUid.tier, 'pro'); assert.equal(ownerByUid.ownerAccess, true);
+  const testMode = await (await worker.fetch(request('/api/billing/status', { bearer: ownerToken }), { ...fixture.env, STRIPE_SECRET_KEY: 'rk_test_fake' })).json();
+  assert.equal(testMode.tier, 'pro');
+  const checkout = await worker.fetch(request('/api/billing/checkout', { bearer: ownerToken, method: 'POST', body: { interval: 'monthly' } }), fixture.env);
+  assert.equal(checkout.status, 409);
+  assert.equal(fixture.writes.length, 0);
+  const otherGoogle = await (await worker.fetch(request('/api/billing/status', { user: '028696a7-7846-4822-a4c1-67026aa2383f', bearer: await token({ email: 'other@example.com', email_verified: true }) }), fixture.env)).json();
+  assert.equal(otherGoogle.tier, 'free');
+  for (const claims of [
+    { email: 'rtsoliday@gmail.com', email_verified: false },
+    { email: 'other@example.com', email_verified: true },
+  ]) {
+    const visitor = await (await worker.fetch(request('/api/billing/status', { bearer: await token(claims) }), fixture.env)).json();
+    assert.equal(visitor.tier, 'free'); assert.equal(visitor.maxPaths, 4);
+  }
+});
+
+test('forged, expired, wrong-project and unsupported tokens never fall back to ChatGPT', async () => {
+  const fixture = stripeFixture([{ id: 'cus_paid', metadata: { retirement_site_user_id: 'chatgpt-user' }, paid: true }]);
+  const good = await token();
+  const invalid = [good.slice(0, -5) + 'abcde', await token({ exp: Math.floor(Date.now() / 1000) - 1 }), await token({ aud: 'other-project' }), await token({ firebase: { sign_in_provider: 'anonymous' } }), await token({ firebase: { sign_in_provider: 'apple.com' } })];
+  for (const bearer of invalid) {
+    const response = await worker.fetch(request('/api/billing/status', { user: 'chatgpt-user', bearer }), fixture.env);
+    assert.equal(response.status, 401);
+  }
+  assert.equal(fixture.writes.length, 0);
+});
+
+test('account linking requires both identities and same origin, then shares one paid customer', async () => {
+  const fixture = stripeFixture([{ id: 'cus_paid', metadata: { retirement_site_user_id: 'chatgpt-user' }, paid: true }]);
+  const bearer = await token();
+  assert.equal((await worker.fetch(request('/api/billing/link', { bearer, method: 'POST' }), fixture.env)).status, 401);
+  assert.equal((await worker.fetch(request('/api/billing/link', { user: 'chatgpt-user', method: 'POST' }), fixture.env)).status, 401);
+  assert.equal((await worker.fetch(request('/api/billing/link', { user: 'chatgpt-user', bearer, method: 'POST', siteOrigin: 'https://evil.test' }), fixture.env)).status, 403);
+  const response = await worker.fetch(request('/api/billing/link', { user: 'chatgpt-user', bearer, method: 'POST' }), fixture.env);
+  assert.equal(response.status, 200); assert.equal(fixture.customers.get('cus_paid').metadata.retirement_firebase_uid, 'firebase-user');
+  const firebaseAccess = await (await worker.fetch(request('/api/billing/status', { bearer }), fixture.env)).json();
+  assert.equal(firebaseAccess.tier, 'pro');
+});
+
+test('two paid accounts are not silently combined', async () => {
+  const fixture = stripeFixture([
+    { id: 'cus_chatgpt', metadata: { retirement_site_user_id: 'chatgpt-user' }, paid: true },
+    { id: 'cus_firebase', metadata: { retirement_firebase_uid: 'firebase-user' }, paid: true },
+  ]);
+  const response = await worker.fetch(request('/api/billing/link', { user: 'chatgpt-user', bearer: await token(), method: 'POST' }), fixture.env);
+  assert.equal(response.status, 409);
+  assert.equal(fixture.customers.get('cus_chatgpt').metadata.retirement_firebase_uid, undefined);
+});
+
+test('Firebase checkout uses its verified UID, without borrowing ChatGPT entitlement', async () => {
+  const fixture = stripeFixture();
+  const response = await worker.fetch(request('/api/billing/checkout', { bearer: await token(), method: 'POST', body: { interval: 'yearly' } }), fixture.env);
+  assert.equal(response.status, 200);
+  const checkout = fixture.writes.find(w => w.path === '/v1/checkout/sessions');
+  assert.equal(checkout.values.get('client_reference_id'), 'firebase:firebase-user');
+  assert.equal(checkout.values.get('line_items[0][price]'), 'price_yearly');
+  assert.equal(fixture.customers.get('cus_1').metadata.retirement_firebase_uid, 'firebase-user');
+});
