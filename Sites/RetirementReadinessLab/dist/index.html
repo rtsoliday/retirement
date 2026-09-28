@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0e463c">
+  <meta name="description" content="Explore retirement scenarios with a local, monthly Monte Carlo model.">
+  <title>Retirement Readiness Lab</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-icon">R<span>↗</span></div><div><strong>Retirement<br>Readiness Lab</strong><small>Scenario planner</small></div></div>
+      <nav aria-label="Main navigation" id="navigation">
+        <button data-view="dashboard" class="active">Overview</button>
+        <button data-view="setup">Assumptions</button>
+        <button data-view="budget">Budget</button>
+        <button data-view="scenarios">Scenarios</button>
+        <button data-view="lab">Scenario lab</button>
+        <button data-view="results">Results</button>
+        <button data-view="reports">Reports & backup</button>
+      </nav>
+      <div class="sidebar-foot">Your scenarios are saved in this browser. Export a backup before clearing browser data.</div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar"><div class="topline"><span class="eyebrow">Retirement planning workspace</span><span class="privacy">● Stored on this device</span></div><div class="topactions"><div class="scenario-select-wrap"><label for="scenario-select">Scenario</label><select id="scenario-select"></select></div><button id="run-button" class="primary">Run simulation</button></div></header>
+      <main id="main" tabindex="-1"></main>
+      <footer>Educational planning estimates. Tax, Medicare, return, and mortality assumptions may differ from future rules and actual outcomes.</footer>
+    </div>
+  </div>
+  <input type="file" id="import-file" accept="application/json,.json" hidden>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

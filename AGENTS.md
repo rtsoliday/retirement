@@ -4,7 +4,7 @@ This file contains a short tactical summary based on repository evidence. `../ll
 
 <!-- BEGIN MACHINE:summary -->
 ## Quick start
-- This repository has four separate programs: three under `Python/` and one under `Android/RetirementReadinessLab/`.
+- This repository has five separate programs: three under `Python/`, one under `Android/RetirementReadinessLab/`, and one under `Sites/RetirementReadinessLab/`.
 - Read the root `README.md` and the README in the relevant program directory before changing it.
 
 ## Programs and tests
@@ -12,8 +12,10 @@ This file contains a short tactical summary based on repository evidence. `../ll
 - `Python/mortgage_investment/`: standalone Tkinter calculator.
 - `Python/fidelity_fund_ranker/`: standalone command-line script.
 - `Android/RetirementReadinessLab/android/`: native Android Gradle project. Product docs live one level above the Gradle root.
+- `Sites/RetirementReadinessLab/`: static Sites browser port with a JavaScript simulation engine, local browser storage, and Android parity tests.
 - Run Python tests with `pytest` from the repository root; `pytest.ini` points to the retirement simulator tests.
 - Run Android unit tests from the Android Gradle root with `./gradlew :app:testDebugUnitTest`.
+- Run web tests with `npm test --prefix Sites/RetirementReadinessLab`.
 
 ## Related knowledge
 - Repository-local documentation should be treated as authoritative.
