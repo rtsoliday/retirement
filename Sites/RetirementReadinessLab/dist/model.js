@@ -1,9 +1,12 @@
-export const ENGINE_VERSION = '2026.09-observed-balances';
+export const ENGINE_VERSION = '2026.09-roth-social-security';
 export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
 export const DEFAULT_SEED = 20260429;
 export const FREE_SIMULATION_PATHS = 4;
 export const MAX_SIMULATION_PATHS = 10000;
 export const ALLOCATION_KEYS = ['stockUnder30x', 'stock30xTo35x', 'stock35xTo40x', 'stock40xTo45x', 'stock45xTo50x', 'stock50xOrMore'];
+export const FILING_STATUSES = ['Single', 'Married', 'HeadOfHousehold'];
+export const GENDERS = ['Male', 'Female'];
+export const SPENDING_PATH_MODELS = ['EmpiricalAgeDecline', 'Flat'];
 
 export function baseScenario() {
   return {
@@ -25,6 +28,9 @@ export function baseScenario() {
     numberOfSimulations: FREE_SIMULATION_PATHS, simulationPathsCustomized: false, seed: DEFAULT_SEED
   };
 }
+
+// Imported values must keep the primitive type of the matching default.
+const TYPE_TEMPLATE = baseScenario();
 
 export function sampleScenarios() {
   const base = baseScenario();
@@ -64,6 +70,18 @@ export function normalizeScenario(raw) {
   return result;
 }
 
+// Scenario IDs key selection, deletion and results, so each must be a distinct string.
+export function normalizeScenarios(list) {
+  const used = new Set();
+  return list.map((raw, i) => {
+    const s = normalizeScenario(raw);
+    let id = typeof raw?.id === 'string' || typeof raw?.id === 'number' ? String(raw.id).trim() : '';
+    if (!id || used.has(id)) { let n = i + 1; do id = `plan-imported-${n++}`; while (used.has(id)); }
+    used.add(id); s.id = id;
+    return s;
+  });
+}
+
 export function applyProSimulationDefault(s) {
   if (s.simulationPathsCustomized || s.numberOfSimulations !== FREE_SIMULATION_PATHS) return false;
   s.numberOfSimulations = MAX_SIMULATION_PATHS;
@@ -77,6 +95,14 @@ export function validateScenario(s) {
   function collect(value) { if (typeof value === 'number') allNumbers.push(value); else if (value && typeof value === 'object') Object.values(value).forEach(collect); }
   collect(s);
   if (allNumbers.some(v=>!Number.isFinite(v))) errors.push('Financial and percentage assumptions must be finite numbers.');
+  const wrongTypes=[];
+  (function compare(expected,actual,path){for(const [key,value] of Object.entries(expected)){if(value===null||Array.isArray(value))continue;const next=path?`${path}.${key}`:key;if(typeof value==='object'){if(actual?.[key]&&typeof actual[key]==='object')compare(value,actual[key],next);else wrongTypes.push(next);}else if(typeof actual?.[key]!==typeof value)wrongTypes.push(next);}})(TYPE_TEMPLATE,s,'');
+  if (wrongTypes.length) errors.push(`These assumptions have the wrong type: ${wrongTypes.join(', ')}.`);
+  if (!FILING_STATUSES.includes(h.filingStatus)) errors.push('Filing status must be Single, Married, or HeadOfHousehold.');
+  if (!GENDERS.includes(h.gender) || (h.filingStatus === 'Married' && !GENDERS.includes(h.spouseGender))) errors.push('Longevity table must be Male or Female.');
+  if (!SPENDING_PATH_MODELS.includes(sp.spendingPathModel)) errors.push('Spending path must be EmpiricalAgeDecline or Flat.');
+  // Mortality and life-expectancy tables are indexed by whole years.
+  if (![h.currentAge,h.retirementAge,h.targetEndAge,...(h.filingStatus==='Married'?[h.spouseCurrentAge]:[])].every(Number.isInteger)) errors.push('Ages must be whole numbers.');
   if (h.currentAge <= 0) errors.push('Current age must be positive.');
   if (h.retirementAge < h.currentAge) errors.push('Retirement age must be at least current age.');
   if (h.targetEndAge <= h.retirementAge || h.targetEndAge > 119) errors.push('Maximum modeling age must be after retirement and at most 119.');

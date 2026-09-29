@@ -44,12 +44,15 @@ export function grossWithdrawalForNetNeed(netNeed,annualSocialSecurity,status,ot
   for(let i=0;i<24;i++){const mid=(low+high)/2;if(netCash(mid)>=netNeed)high=mid;else low=mid;}
   return high;
 }
-export function rothConversionPlan(pretax,income,rateCap,status,inflation=1,seniors=0,taxYear=2026){
-  if(pretax<=0)return {amount:0,tax:0};
+// income excludes Social Security; converted dollars can make more of the benefit taxable.
+export function rothConversionPlan(pretax,income,rateCap,status,inflation=1,seniors=0,taxYear=2026,annualSocialSecurity=0){
+  const none={amount:0,tax:0,taxableSocialSecurityIncrease:0};
+  if(pretax<=0)return none;
   const idx=rates.findIndex(x=>Math.abs(x-rateCap)<.0001);
-  if(idx<0)return {amount:0,tax:0};
+  if(idx<0)return none;
   const limit=(brackets[status][idx+1]??Infinity)*Math.max(.0001,inflation);
+  const gross=x=>income+x+taxableSocialSecurity(income+x,annualSocialSecurity,status);
   let low=0,high=pretax;
-  if(taxableOrdinaryIncome(income+high,status,inflation,seniors,taxYear)>limit){for(let i=0;i<40;i++){const mid=(low+high)/2;if(taxableOrdinaryIncome(income+mid,status,inflation,seniors,taxYear)<=limit)low=mid;else high=mid;}high=low;}
-  return {amount:high,tax:Math.max(0,ordinaryIncomeTax(income+high,status,inflation,seniors,taxYear)-ordinaryIncomeTax(income,status,inflation,seniors,taxYear))};
+  if(taxableOrdinaryIncome(gross(high),status,inflation,seniors,taxYear)>limit){for(let i=0;i<40;i++){const mid=(low+high)/2;if(taxableOrdinaryIncome(gross(mid),status,inflation,seniors,taxYear)<=limit)low=mid;else high=mid;}high=low;}
+  return {amount:high,tax:Math.max(0,ordinaryIncomeTax(gross(high),status,inflation,seniors,taxYear)-ordinaryIncomeTax(gross(0),status,inflation,seniors,taxYear)),taxableSocialSecurityIncrease:gross(high)-gross(0)-high};
 }

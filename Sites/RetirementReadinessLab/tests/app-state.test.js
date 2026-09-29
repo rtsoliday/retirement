@@ -8,7 +8,7 @@ import {runSimulation} from '../dist/engine.js';
 
 // Execute the actual app and event handlers. Only browser IO is replaced;
 // workers stay pending so changes during calculations can be reproduced.
-function app(saved=null){
+function app(saved=null,{fetch=async()=>{throw new Error('offline');}}={}){
   const elements=new Map(),workers=[];
   let stored=saved===null?null:JSON.stringify(saved);
   function element(selector){
@@ -20,12 +20,12 @@ function app(saved=null){
     location:{search:'',pathname:'/',hash:''},history:{replaceState(){}},confirm:()=>true,
     localStorage:{getItem:()=>stored,setItem(key,value){stored=value;}},window:{addEventListener(){},scrollTo(){}},
     document:{querySelector:element,querySelectorAll:()=>[],addEventListener(){}},
-    chartCard:()=>'',mountCharts(){},disposeCharts(){},initializeSocialAuth:()=>new Promise(()=>{}),
+    chartCard:()=>'',mountCharts(){},disposeCharts(){},initializeSocialAuth:()=>new Promise(()=>{}),fetch,authHeaders:async()=>({}),
     Worker:class{constructor(){workers.push(this);}postMessage(data){this.data=data;}terminate(){this.terminated=true;}},
   });
   const source=readFileSync(new URL('../dist/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
-  vm.runInContext(source,context);
-  const api=vm.runInContext('({state,run,runLab,runDecision,results,dashboard,lab,reportText,current,persist})',context);
+  vm.runInContext(source.replace('function render(){','let renderCount=0;function render(){renderCount++;'),context);
+  const api=vm.runInContext('({state,run,runLab,runDecision,results,dashboard,lab,reportText,current,persist,loadAccess,renders:()=>renderCount})',context);
   return {...api,workers,saved:()=>JSON.parse(stored),change:(selector,target)=>element(selector).listeners.change({target}),
     click:(action,extra={})=>{const el={dataset:{action,...extra}};return element('#main').listeners.click({target:{closest:selector=>selector==='[data-action]'?el:null}});}};
 }
@@ -100,4 +100,24 @@ test('larger runs retain percentage summaries without the four-path warning',()=
   const a=app();a.state.access.tier='pro';a.current().numberOfSimulations=100;const r=runSimulation(a.current());a.state.results.set(a.current().id,r);
   assert.match(a.results(),/Monte Carlo readiness/);assert.match(a.results(),/\d+\.\d%/);assert.doesNotMatch(a.results(),/Sample preview only/);
   assert.equal(format.shareLabel(.75,4),'3 of 4');assert.equal(format.shareLabel(.75,100),'75.0%');
+});
+
+test('a failed access check on window focus keeps results when the tier is unchanged',async()=>{
+  const a=app(),pending=a.run();a.workers[0].onmessage({data:{type:'result',result:runSimulation(a.workers[0].data.scenario)}});await pending;
+  await a.loadAccess();assert.equal(a.state.results.size,1);assert.match(a.state.message,/Subscription status is unavailable/);
+  const renders=a.renders();await a.loadAccess();assert.equal(a.state.results.size,1);assert.equal(a.renders(),renders,'an unchanged check does not redraw open charts');
+});
+test('an access check that changes the tier still clears results computed under the old tier',async()=>{
+  const a=app(null,{fetch:async()=>({ok:true,json:async()=>({tier:'pro',maxPaths:10000,signedIn:true,checkoutAvailable:true,accountProvider:'chatgpt'})})});
+  const result=runSimulation(a.current()),pending=a.run();a.workers[0].onmessage({data:{type:'result',result}});await pending;
+  await a.loadAccess();assert.equal(a.state.access.tier,'pro');assert.equal(a.state.results.size,0);
+  const pro=a.run();assert.equal(a.workers[1].data.scenario.numberOfSimulations,10000);a.workers[1].onmessage({data:{type:'result',result}});await pro;
+  const renders=a.renders();await a.loadAccess();assert.equal(a.state.results.size,1);assert.equal(a.renders(),renders);
+});
+test('spending targets at the search limit are shown as a lower bound',()=>{
+  const a=app();a.state.access.tier='pro';
+  a.state.decision={targetReadiness:.8,simulationCount:180,earliestRetirementAge:55,safeAnnualSpending:250000,safeSpendingAtSearchLimit:true,safeSpendingSearchLimit:250000};
+  assert.match(a.lab(),/At least \$250,000/);assert.match(a.lab(),/search stops at \$250,000/);
+  a.state.decision={...a.state.decision,safeAnnualSpending:90000,safeSpendingAtSearchLimit:false};
+  assert.doesNotMatch(a.lab(),/At least|search stops/);assert.match(a.lab(),/\$90,000/);
 });

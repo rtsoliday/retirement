@@ -59,7 +59,7 @@ export function runOne(s,rng){
   const stockMean=monthly(s.market.stockMeanReturn),stockSd=sd(s.market.stockStdDev),bondMean=monthly(s.market.bondMeanReturn),bondSd=sd(s.market.bondStdDev);
   const seppEnd=Math.max(714,h.retirementAge*12+60),annualSepp=s.withdrawalStrategy.seppEligible?seppPayment(b.pretax,h.retirementAge):0;
   const primaryHorizon=h.targetEndAge-h.retirementAge,spouseHorizon=h.targetEndAge-spouseAtRet,horizon=Math.max(primaryHorizon,married?spouseHorizon:primaryHorizon);
-  const yearEnd=[sum(b)],chart=[sum(b)],incomeHistory=[];let annualMedicareIncome=0,failureAge=null,homeSold=false;
+  const yearEnd=[sum(b)],chart=[sum(b)],incomeHistory=[];let annualMedicareIncome=0,annualOrdinaryIncome=0,annualSocialSecurity=0,failureAge=null,homeSold=false;
   for(let m=0;m<horizon*12;m++){
     const age=h.retirementAge+Math.floor(m/12),spouseAge=spouseAtRet+Math.floor(m/12),ageMonths=h.retirementAge*12+m,spouseMonths=spouseAtRet*12+m,monthInYear=m%12;
     if(age>=houseDeath)break;
@@ -84,15 +84,15 @@ export function runOne(s,rng){
     const plan=withdrawalPlan(annualNeed,social*12,status,guaranteed*12+seppDistribution*12,b,cashFirst,taxIndex,seniors,taxYear,penalty);
     let portfolioWithdrawal=plan.monthlyGross;if(cashFirst){const cashDraw=Math.min(b.cash,portfolioWithdrawal);b.cash-=cashDraw;portfolioWithdrawal-=cashDraw;}withdrawStandard(b,portfolioWithdrawal);
     const surplus=Math.max(0,(plan.annualNet-annualNeed)/12);if(surplus>.01)b.cash+=surplus;
-    annualMedicareIncome+=plan.monthlyTaxable+seppDistribution+guaranteed+plan.annualTaxableSS/12;
-    if(s.rothConversion.enabled&&!seppActive&&monthInYear===11){const conversion=rothConversionPlan(b.pretax,annualMedicareIncome,s.rothConversion.marginalRateCap,status,taxIndex,seniors,taxYear);if(conversion.amount>0){b.pretax-=conversion.amount;b.roth+=conversion.amount;withdrawConversionTax(b,conversion.tax);annualMedicareIncome+=conversion.amount;}}
+    annualMedicareIncome+=plan.monthlyTaxable+seppDistribution+guaranteed+plan.annualTaxableSS/12;annualOrdinaryIncome+=plan.monthlyTaxable+seppDistribution+guaranteed;annualSocialSecurity+=social;
+    if(s.rothConversion.enabled&&!seppActive&&monthInYear===11){const conversion=rothConversionPlan(b.pretax,annualOrdinaryIncome,s.rothConversion.marginalRateCap,status,taxIndex,seniors,taxYear,annualSocialSecurity);if(conversion.amount>0){b.pretax-=conversion.amount;b.roth+=conversion.amount;withdrawConversionTax(b,conversion.tax);annualMedicareIncome+=conversion.amount+conversion.taxableSocialSecurityIncrease;}}
     if(!homeSold&&mortgageMonths>0){mortgageBalance=Math.max(0,mortgageBalance-mortgageBalance/mortgageMonths);mortgageMonths--;}
     if(sum(b)<0&&sum(b)>-.01)b.cash-=sum(b);
     if(sum(b)<0&&failureAge===null){if(!homeSold&&home>0){b.cash+=Math.max(0,home-mortgageBalance);home=0;mortgageBalance=0;mortgageMonths=0;homeSold=true;}if(sum(b)<0){failureAge=age;yearEnd.push(0);break;}}
     if(monthInYear===11){yearEnd.push(sum(b));chart.push(sum(b));}
     const inf=Math.max(monthly(-.05),rng.normal(infMean,infSd)),healthInf=Math.max(monthly(-.02),rng.normal(healthMean,healthSd)),nextFactor=spendingPath(s,m+1),change=nextFactor/Math.max(.0001,pathFactor);
     spending*=(1+inf)*change;rent*=1+inf;if(!homeSold)home*=1+inf;seniorRent*=1+inf;otherMonthly*=1+incomeGrowth;homeCosts*=(1+inf)*change;preMedicare*=1+healthInf;healthIndex*=1+healthInf;taxIndex*=1+inf;annualInf*=1+inf;pathFactor=nextFactor;
-    if(monthInYear===11){ssIndex*=Math.max(1,annualInf);annualInf=1;incomeHistory.push(annualMedicareIncome);annualMedicareIncome=0;}
+    if(monthInYear===11){ssIndex*=Math.max(1,annualInf);annualInf=1;incomeHistory.push(annualMedicareIncome);annualMedicareIncome=0;annualOrdinaryIncome=0;annualSocialSecurity=0;}
   }
   return {success:failureAge===null,failureAge,yearEnd,chart,survivedThroughAge:Math.max(h.retirementAge,Math.min(houseDeath-1,h.retirementAge+horizon))};
 }
@@ -117,19 +117,23 @@ export function estimateDecision(s,targetReadiness=.80,simulationCount=180,maxRe
   const last=Math.min(maxRetirementAge,h.targetEndAge-1,h.filingStatus==='Married'?h.currentAge+h.targetEndAge-h.spouseCurrentAge-1:Infinity);
   let earliestRetirementAge=null,earliestRetirementReadiness=null;
   for(let age=h.currentAge;age<=last;age++){
-    const variant=structuredClone(s);variant.household.retirementAge=age;variant.withdrawalStrategy.applyEarlyWithdrawalPenalty=age*12<714;variant.numberOfSimulations=count;variant.seed=s.seed+10000;
+    // Keep the plan's own early-withdrawal penalty setting so targets match a full run at that age.
+    const variant=structuredClone(s);variant.household.retirementAge=age;variant.numberOfSimulations=count;variant.seed=s.seed+10000;
     const readiness=runSimulation(variant,()=>{},{includePathPoints:false}).successProbability;
     if(readiness>=targetReadiness){earliestRetirementAge=age;earliestRetirementReadiness=readiness;break;}
   }
   function readinessFor(spending){const variant=structuredClone(s);variant.spending.annualBaseSpending=spending;variant.numberOfSimulations=count;variant.seed=s.seed+20000;return runSimulation(variant,()=>{},{includePathPoints:false}).successProbability;}
-  let safeAnnualSpending=null,safeSpendingReadiness=null;
+  let safeAnnualSpending=null,safeSpendingReadiness=null,safeSpendingAtSearchLimit=false;
+  const safeSpendingSearchLimit=Math.max(s.spending.annualBaseSpending*3,250000);
   if(readinessFor(0)>=targetReadiness){
-    const maxSpend=Math.max(s.spending.annualBaseSpending*3,250000);let low=0,high=Math.min(Math.max(s.spending.annualBaseSpending*1.5,40000),maxSpend),highReady=readinessFor(high);
+    const maxSpend=safeSpendingSearchLimit;let low=0,high=Math.min(Math.max(s.spending.annualBaseSpending*1.5,40000),maxSpend),highReady=readinessFor(high);
     while(highReady>=targetReadiness&&high<maxSpend){low=high;high=Math.min(high*1.35,maxSpend);highReady=readinessFor(high);}
-    if(highReady>=targetReadiness)low=high;else for(let i=0;i<11;i++){const mid=(low+high)/2;if(readinessFor(mid)>=targetReadiness)low=mid;else high=mid;}
+    // Reaching the limit is a lower bound, not the highest spending that meets the target.
+    if(highReady>=targetReadiness){low=high;safeSpendingAtSearchLimit=true;}else for(let i=0;i<11;i++){const mid=(low+high)/2;if(readinessFor(mid)>=targetReadiness)low=mid;else high=mid;}
     let candidate=Math.floor(low/500)*500;
     while(candidate>0&&readinessFor(candidate)<targetReadiness)candidate=Math.max(0,candidate-500);
     safeAnnualSpending=candidate;safeSpendingReadiness=readinessFor(candidate);
+    if(candidate<Math.floor(maxSpend/500)*500)safeSpendingAtSearchLimit=false;
   }
-  return {targetReadiness,simulationCount:count,earliestRetirementAge,earliestRetirementReadiness,safeAnnualSpending,safeSpendingReadiness};
+  return {targetReadiness,simulationCount:count,earliestRetirementAge,earliestRetirementReadiness,safeAnnualSpending,safeSpendingReadiness,safeSpendingAtSearchLimit,safeSpendingSearchLimit};
 }

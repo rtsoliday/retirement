@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {baseScenario,budgetEstimate,validateScenario,normalizeScenario,ROTH_CONVERSION_RATES} from '../dist/model.js';
+import {baseScenario,budgetEstimate,validateScenario,normalizeScenario,normalizeScenarios,ROTH_CONVERSION_RATES} from '../dist/model.js';
 import {runSimulation,estimateDecision} from '../dist/engine.js';
-import {taxableSocialSecurity,ordinaryIncomeTax} from '../dist/tax.js';
+import {taxableSocialSecurity,taxableOrdinaryIncome,ordinaryIncomeTax,rothConversionPlan} from '../dist/tax.js';
 import {annualBenefitAtClaimAge} from '../dist/social-security.js';
 
 // Android cashflow references with the same sample scenario and seed.
@@ -22,7 +22,45 @@ test('budget estimate uses fixed costs and monthly spending',()=>{const b=baseSc
 test('invalid retirement age is rejected before simulation',()=>{const s=baseScenario();s.household.retirementAge=49;assert.match(validateScenario(s).join(' '),/Retirement age/);});
 test('tax and benefit reference rules',()=>{assert.equal(taxableSocialSecurity(10000,30000,'Single'),0);assert.equal(ordinaryIncomeTax(16100,'Single',1,0,2026),0);assert.ok(Math.abs(annualBenefitAtClaimAge(30000,67)-30000)<.001);});
 
-test('Android parity: retirement and spending decision targets',()=>{const s=baseScenario();s.spending.annualBaseSpending=71000;const result=estimateDecision(s);assert.equal(result.earliestRetirementAge,55);assert.equal(result.safeAnnualSpending,250000);assert.equal(result.earliestRetirementReadiness,0.8055555555555556);});
+// Android forces the early-withdrawal penalty on for early ages; the web search keeps the plan's setting.
+test('retirement and spending decision targets keep the penalty setting and flag the spending search limit',()=>{
+  const s=baseScenario();s.spending.annualBaseSpending=71000;const result=estimateDecision(s);
+  assert.equal(result.earliestRetirementAge,55);assert.equal(result.earliestRetirementReadiness,0.8388888888888889);
+  assert.equal(result.safeAnnualSpending,250000);assert.equal(result.safeSpendingAtSearchLimit,true);assert.equal(result.safeSpendingSearchLimit,250000);
+  s.withdrawalStrategy.applyEarlyWithdrawalPenalty=true;const android=estimateDecision(s);
+  assert.equal(android.earliestRetirementAge,55);assert.equal(android.earliestRetirementReadiness,0.8055555555555556);
+});
+test('safe spending below the search limit is not flagged as a lower bound',()=>{
+  const s=baseScenario();s.household.currentAge=64;s.household.retirementAge=65;s.accounts={pretax:300000,roth:0,taxable:0,cash:0};
+  const result=estimateDecision(s,.8,60);
+  assert.ok(result.safeAnnualSpending!==null&&result.safeAnnualSpending<result.safeSpendingSearchLimit);assert.equal(result.safeSpendingAtSearchLimit,false);
+});
+
+test('ages must be whole numbers so mortality tables are never skipped',()=>{
+  for(const edit of [s=>s.household.retirementAge=62.5,s=>s.household.currentAge=50.5,s=>s.household.targetEndAge=100.5,s=>{s.household.filingStatus='Married';s.household.spouseCurrentAge=48.5;}]){
+    const s=baseScenario();edit(s);assert.match(validateScenario(s).join(' '),/Ages must be whole numbers/);assert.throws(()=>runSimulation(s),/Ages must be whole numbers/);
+  }
+  const single=baseScenario();single.household.spouseCurrentAge=48.5;assert.deepEqual(validateScenario(single),[]);
+});
+
+test('Roth conversions include Social Security that the conversion makes taxable',()=>{
+  const ss=30000,other=20000,plan=rothConversionPlan(1e6,other,.12,'Single',1,1,2026,ss);
+  const gross=x=>other+x+taxableSocialSecurity(other+x,ss,'Single');
+  assert.ok(Math.abs(plan.tax-(ordinaryIncomeTax(gross(plan.amount),'Single',1,1,2026)-ordinaryIncomeTax(gross(0),'Single',1,1,2026)))<.01);
+  assert.ok(plan.taxableSocialSecurityIncrease>0);assert.ok(Math.abs(plan.taxableSocialSecurityIncrease-(gross(plan.amount)-gross(0)-plan.amount))<.01);
+  assert.ok(taxableOrdinaryIncome(gross(plan.amount),'Single',1,1,2026)<=50400+.01,'conversion stays within the 12% bracket');
+  const noSS=rothConversionPlan(1e6,other,.12,'Single',1,1,2026);assert.equal(noSS.taxableSocialSecurityIncrease,0);assert.ok(noSS.amount>plan.amount);
+});
+
+test('imported scenarios need known choices, matching value types and distinct IDs',()=>{
+  for(const [edit,pattern] of [[s=>s.household.filingStatus='MarriedFilingJointly',/Filing status/],[s=>s.household.gender='Other',/Longevity table/],[s=>s.spending.spendingPathModel='Declining',/Spending path/],[s=>s.accounts.pretax='800000',/wrong type: accounts\.pretax/],[s=>s.longTermCare.enabled='yes',/wrong type: longTermCare\.enabled/]]){
+    const s=baseScenario();edit(s);assert.match(validateScenario(s).join(' '),pattern);
+  }
+  const single=baseScenario();single.household.spouseGender='Other';assert.deepEqual(validateScenario(single),[]);
+  const plans=normalizeScenarios([{name:'A'},{name:'B'},{id:'keep',name:'C'},{id:'keep',name:'D'},{id:7,name:'E'}]);
+  assert.deepEqual(plans.map(p=>p.id),['plan-imported-1','plan-imported-2','keep','plan-imported-4','7']);
+  for(const p of plans)assert.deepEqual(validateScenario(p),[]);
+});
 
 test('Android and legacy JSON scenarios can be imported',()=>{const android=normalizeScenario({id:'android',household:{currentAge:60,retirementAge:65},accounts:{pretax:120000,roth:0,taxable:0,cash:0},spending:{annualBaseSpending:50000},socialSecurity:{annualBenefitAt67:30000}});assert.equal(android.accounts.pretax,120000);assert.equal(android.accounts.roth,0);const legacy=normalizeScenario({id:'legacy',currentAge:50,retirementAge:67,annualSpending:75000,pretaxBalance:800000,rothBalance:100000,cashBalance:50000,socialSecurityAt67:30000});assert.equal(legacy.spending.annualBaseSpending,75000);assert.equal(legacy.accounts.cash,50000);});
 
