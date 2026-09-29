@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {baseScenario,budgetEstimate,validateScenario,normalizeScenario,normalizeScenarios,ROTH_CONVERSION_RATES} from '../dist/model.js';
+import {baseScenario,sampleScenarios,budgetEstimate,validateScenario,normalizeScenario,normalizeScenarios,ROTH_CONVERSION_RATES,DEFAULT_SEED} from '../dist/model.js';
 import {runSimulation,estimateDecision} from '../dist/engine.js';
 import {taxableSocialSecurity,taxableOrdinaryIncome,ordinaryIncomeTax,rothConversionPlan} from '../dist/tax.js';
 import {annualBenefitAtClaimAge} from '../dist/social-security.js';
+
+// Seed of the Android reference snapshots below; the site default seed differs.
+const REFERENCE_SEED=20260429;
 
 // Seeded web cashflow snapshots; starting balances retain the Android references.
 // Corrected tax timing and Medicare estimates intentionally change endings.
@@ -18,7 +21,7 @@ const cases=[
   ['home',s=>{Object.assign(s.accounts,{pretax:100000,roth:0,cash:0});s.home.currentValue=500000;},0,-2341.10536489225,278445.629460946,80],
   ['fifty paths',s=>{s.numberOfSimulations=50;},.98,24464017.210152686,6074093.048540814,78]
 ];
-for(const [name,edit,success,ending,starting,failure] of cases){test(`Seeded web regression: ${name}`,()=>{const s=baseScenario();s.numberOfSimulations=1;edit(s);const r=runSimulation(s);assert.equal(r.successProbability,success);assert.ok(Math.abs(r.medianEndingBalance-Math.max(0,ending))<.01,`${r.medianEndingBalance} != ${ending}`);assert.ok(Math.abs(r.balanceBands[0].median-starting)<.01);assert.equal(r.medianFailureAge,failure);});}
+for(const [name,edit,success,ending,starting,failure] of cases){test(`Seeded web regression: ${name}`,()=>{const s=baseScenario();s.seed=REFERENCE_SEED;s.numberOfSimulations=1;edit(s);const r=runSimulation(s);assert.equal(r.successProbability,success);assert.ok(Math.abs(r.medianEndingBalance-Math.max(0,ending))<.01,`${r.medianEndingBalance} != ${ending}`);assert.ok(Math.abs(r.balanceBands[0].median-starting)<.01);assert.equal(r.medianFailureAge,failure);});}
 
 test('budget estimate uses fixed costs and monthly spending',()=>{const b=baseScenario().budget;b.annualPropertyTaxes=4000;b.annualHomeInsurance=2000;b.monthlyBudgets=[{month:'2026-01',checkingSavingsBills:[{monthlyAmount:1000}],creditCardBills:[{monthlyAmount:500}],cashAndAtmWithdrawals:100}];assert.equal(budgetEstimate(b),25200);});
 test('invalid retirement age is rejected before simulation',()=>{const s=baseScenario();s.household.retirementAge=49;assert.match(validateScenario(s).join(' '),/Retirement age/);});
@@ -26,7 +29,7 @@ test('tax and benefit reference rules',()=>{assert.equal(taxableSocialSecurity(1
 
 // Android forces the early-withdrawal penalty on for early ages; the web search keeps the plan's setting.
 test('retirement and spending decision targets keep the penalty setting and flag the spending search limit',()=>{
-  const s=baseScenario();s.spending.annualBaseSpending=71000;const result=estimateDecision(s);
+  const s=baseScenario();s.seed=REFERENCE_SEED;s.spending.annualBaseSpending=71000;const result=estimateDecision(s);
   assert.equal(result.earliestRetirementAge,55);assert.equal(result.earliestRetirementReadiness,0.8388888888888889);
   assert.equal(result.safeAnnualSpending,250000);assert.equal(result.safeSpendingAtSearchLimit,true);assert.equal(result.safeSpendingSearchLimit,250000);
   s.withdrawalStrategy.applyEarlyWithdrawalPenalty=true;const withPenalty=estimateDecision(s);
@@ -74,4 +77,11 @@ test('Roth conversion cap accepts only supported brackets when enabled',()=>{
   for(const rate of ROTH_CONVERSION_RATES){s.rothConversion.marginalRateCap=rate;assert.deepEqual(validateScenario(s),[]);}
   for(const rate of [.18,.23,0,.40]){s.rothConversion.marginalRateCap=rate;assert.match(validateScenario(s).join(' '),/Roth conversion cap/);}
   s.rothConversion.enabled=false;assert.deepEqual(validateScenario(s),[]);
+});
+
+test('every sample plan shows at least one shortfall in the four-path free preview',()=>{
+  for(const s of sampleScenarios()){
+    assert.equal(s.seed,DEFAULT_SEED);assert.equal(s.numberOfSimulations,4);
+    const r=runSimulation(s);assert.ok(r.successProbability<1,`${s.name}: ${r.successProbability*4} of 4 without a shortfall`);
+  }
 });

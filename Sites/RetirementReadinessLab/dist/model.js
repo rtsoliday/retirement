@@ -1,6 +1,8 @@
 export const ENGINE_VERSION = '2026.09-cumulative-tax';
 export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
-export const DEFAULT_SEED = 20260429;
+// Chosen so each sample plan's four-path preview includes at least one shortfall.
+// Android still uses 20260429.
+export const DEFAULT_SEED = 20260549;
 export const FREE_SIMULATION_PATHS = 4;
 export const MAX_SIMULATION_PATHS = 10000;
 export const ALLOCATION_KEYS = ['stockUnder30x', 'stock30xTo35x', 'stock35xTo40x', 'stock40xTo45x', 'stock45xTo50x', 'stock50xOrMore'];

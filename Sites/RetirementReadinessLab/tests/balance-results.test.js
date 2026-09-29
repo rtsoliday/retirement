@@ -4,6 +4,9 @@ import {buildBalanceBands} from '../dist/chart-data.js';
 import {baseScenario} from '../dist/model.js';
 import {runSimulation,runOne,JavaRandom} from '../dist/engine.js';
 
+// Seed of the reference snapshots below; the site default seed differs.
+const REFERENCE_SEED=20260429;
+
 test('bands exclude stopped paths, record failure as zero at its age, and show shrinking samples',()=>{
   const bands=buildBalanceBands([
     {chart:[100,90,80],failureAge:66,survivedThroughAge:100},
@@ -26,7 +29,7 @@ test('a shortfall in the first month ends at retirement age with zero downside a
   const path=runOne(s,new JavaRandom(s.seed));assert.equal(path.yearEnd.at(-1),0);assert.equal(path.yearEnd.length,2);
 });
 test('successful lifetime balances stop at last living age rather than model cap',()=>{
-  const s=baseScenario();s.numberOfSimulations=1;
+  const s=baseScenario();s.seed=REFERENCE_SEED;s.numberOfSimulations=1;
   const path=runOne(s,new JavaRandom(s.seed)),r=runSimulation(s);
   assert.equal(path.success,true);assert.ok(path.survivedThroughAge<s.household.targetEndAge);
   assert.equal(r.balanceBands.at(-1).age,path.survivedThroughAge);
@@ -34,7 +37,7 @@ test('successful lifetime balances stop at last living age rather than model cap
   assert.equal(r.medianEndingBalance,path.yearEnd.at(-1));
 });
 test('mixed simulation bands are nonnegative, do not outlive sampled lifetimes, and retain original failure statistics',()=>{
-  const s=baseScenario();s.numberOfSimulations=50;
+  const s=baseScenario();s.seed=REFERENCE_SEED;s.numberOfSimulations=50;
   const r=runSimulation(s);assert.equal(r.successProbability,.98);assert.equal(r.medianFailureAge,78);
   assert.ok(r.balanceBands.at(-1).age<=r.notFailedByAge.at(-1).age);
   assert.ok(r.balanceBands.at(-1).age<s.household.targetEndAge);

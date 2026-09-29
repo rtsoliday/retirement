@@ -143,8 +143,9 @@ test('unchanged runs still publish results and complete all comparison rows',asy
 test('four-path outcomes use counts and a visible warning in free and Pro views and reports',()=>{
   for(const tier of ['free','pro']){
     const a=app();a.state.access.tier=tier;const r=runSimulation(a.current());a.state.results.set(a.current().id,r);a.state.labResults=[{label:'Current plan',result:r}];
-    for(const html of [a.results(),a.dashboard(),a.lab()]){assert.match(html,/4 of 4/);assert.match(html,/Sample preview only/);assert.doesNotMatch(html,/100\.0%/);}
-    const report=a.reportText(a.current(),r);assert.match(report,/4 of 4/);assert.match(report,/SAMPLE PREVIEW ONLY/);assert.doesNotMatch(report,/Modeled readiness.*100\.0%/);
+    const label=format.readinessLabel(r),percent=`${(100*r.successProbability).toFixed(1)}%`;assert.match(label,/^\d of 4$/);
+    for(const html of [a.results(),a.dashboard(),a.lab()]){assert.ok(html.includes(label),label);assert.match(html,/Sample preview only/);assert.ok(!html.includes(percent),percent);}
+    const report=a.reportText(a.current(),r);assert.ok(report.includes(`Lifetimes without a portfolio shortfall: ${label}`));assert.match(report,/SAMPLE PREVIEW ONLY/);assert.doesNotMatch(report,/Modeled readiness.*100\.0%/);
   }
 });
 test('larger runs retain percentage summaries without the four-path warning',()=>{
@@ -329,4 +330,12 @@ test('account changes during linking cannot install the earlier account customer
   const pending=a.linkAccounts();await new Promise(setImmediate);identity.accountKey='firebase:b';a.syncAuthState();
   finish(Response.json({linked:true,billingCustomerId:'cus_old'}));await assert.rejects(pending,/signed-in account changed/);
   assert.equal(session.get('retirement-billing-reference'),'{}');assert.equal(a.isPro(),false);
+});
+
+test('welcome illustration is fixed decoration and never reflects the visitor plan',()=>{
+  const poor=model.baseScenario();poor.accounts={pretax:1,roth:0,taxable:0,cash:0};
+  const fan=html=>html.match(/<svg viewBox="0 0 420 248"[\s\S]*?<\/svg>/)[0];
+  const sample=fan(app().dashboard()),own=fan(app({scenarios:[poor],selectedId:poor.id}).dashboard());
+  assert.equal(own,sample);assert.equal((sample.match(/class="fan-path /g)||[]).length,30);
+  assert.match(sample,/not a simulation or a forecast of your plan/);
 });
