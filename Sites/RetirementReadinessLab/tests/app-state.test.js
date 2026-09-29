@@ -8,7 +8,7 @@ import {runSimulation} from '../dist/engine.js';
 
 // Execute the actual app and event handlers. Only browser IO is replaced;
 // workers stay pending so changes during calculations can be reproduced.
-function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={fail:false}}={}){
+function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={fail:false},clock={now:Date.now()},session=new Map(),location={search:'',pathname:'/',hash:''},identity={accountKey:null},params=URLSearchParams}={}){
   const elements=new Map(),workers=[];
   let stored=saved===null?null:JSON.stringify(saved);
   function element(selector){
@@ -16,16 +16,17 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
     if(!elements.has(selector))elements.set(selector,{innerHTML:'',textContent:'',dataset:{},listeners:{},classList:{toggle(){},remove(){}},addEventListener(name,fn){this.listeners[name]=fn;},querySelectorAll(){return [];},setAttribute(){},focus(){},scrollIntoView(){},insertAdjacentHTML(){},remove(){elements.delete(selector);}});
     return elements.get(selector);
   }
-  const context=vm.createContext({...model,...format,structuredClone,Intl,URLSearchParams,URL,console,
-    location:{search:'',pathname:'/',hash:''},history:{replaceState(){}},confirm:()=>true,
+  const context=vm.createContext({...model,...format,structuredClone,Intl,URLSearchParams:params,URL,console,Date:class extends Date{static now(){return clock.now;}},
+    location,history:{replaceState(_state,_title,url){const next=new URL(url,'https://example.test');location.search=next.search;location.hash=next.hash;}},confirm:()=>true,
+    sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value)},socialState:()=>({...identity}),
     localStorage:{getItem:()=>stored,setItem(key,value){if(storage.fail)throw new Error('QuotaExceededError');stored=value;}},window:{addEventListener(){},scrollTo(){}},
     document:{querySelector:element,querySelectorAll:()=>[],addEventListener(){}},
     chartCard:()=>'',mountCharts(){},disposeCharts(){},initializeSocialAuth:()=>new Promise(()=>{}),fetch,authHeaders:async()=>({}),
     Worker:class{constructor(){workers.push(this);}postMessage(data){this.data=data;}terminate(){this.terminated=true;}},
   });
-  const source=readFileSync(new URL('../dist/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
+  const source=readFileSync(new URL('../dist/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replaceAll('import.meta.url',JSON.stringify(new URL('../dist/app.js',import.meta.url).href));
   vm.runInContext(source.replace('function render(){','let renderCount=0;function render(){renderCount++;'),context);
-  const api=vm.runInContext('({state,run,runLab,runDecision,results,dashboard,lab,budget,billingView,reportText,current,persist,loadAccess,renders:()=>renderCount})',context);
+  const api=vm.runInContext('({state,run,runLab,runDecision,results,dashboard,lab,budget,billingView,reportText,current,persist,loadAccess,isPro,effectivePaths,syncAuthState,linkAccounts,renders:()=>renderCount})',context);
   return {...api,workers,element,saved:()=>JSON.parse(stored),change:(selector,target)=>element(selector).listeners.change({target}),
     click:(action,extra={})=>{const el={dataset:{action,...extra}};return element('#main').listeners.click({target:{closest:selector=>selector==='[data-action]'?el:null}});}};
 }
@@ -156,10 +157,10 @@ test('a failed access check on window focus keeps results when the tier is uncha
   await a.loadAccess();assert.equal(a.state.results.size,1);assert.match(a.state.message,/Subscription status is unavailable/);
   const renders=a.renders();await a.loadAccess();assert.equal(a.state.results.size,1);assert.equal(a.renders(),renders,'an unchanged check does not redraw open charts');
 });
-test('an access check that changes the tier still clears results computed under the old tier',async()=>{
+test('an access check that changes the tier preserves completed results and updates future runs',async()=>{
   const a=app(null,{fetch:async()=>({ok:true,json:async()=>({tier:'pro',maxPaths:10000,signedIn:true,checkoutAvailable:true,accountProvider:'chatgpt'})})});
   const result=runSimulation(a.current()),pending=a.run();a.workers[0].onmessage({data:{type:'result',result}});await pending;
-  await a.loadAccess();assert.equal(a.state.access.tier,'pro');assert.equal(a.state.results.size,0);
+  await a.loadAccess();assert.equal(a.state.access.tier,'pro');assert.equal(a.state.results.size,1);
   const pro=a.run();assert.equal(a.workers[1].data.scenario.numberOfSimulations,10000);a.workers[1].onmessage({data:{type:'result',result}});await pro;
   const renders=a.renders();await a.loadAccess();assert.equal(a.state.results.size,1);assert.equal(a.renders(),renders);
 });
@@ -169,4 +170,57 @@ test('spending targets at the search limit are shown as a lower bound',()=>{
   assert.match(a.lab(),/At least \$250,000/);assert.match(a.lab(),/search stops at \$250,000/);
   a.state.decision={...a.state.decision,safeAnnualSpending:90000,safeSpendingAtSearchLimit:false};
   assert.doesNotMatch(a.lab(),/At least|search stops/);assert.match(a.lab(),/\$90,000/);
+});
+
+test('transient billing failures retain verified Pro briefly and never discard results',async()=>{
+  for(const failure of ['network','502']){
+    const clock={now:1000};let failing=false;
+    const a=app(null,{clock,fetch:async()=>{if(failing){if(failure==='network')throw Error('offline');return Response.json({accountKey:'user-a',error:'Temporary outage'},{status:502});}return Response.json({tier:'pro',signedIn:true,accountKey:'user-a',maxPaths:10000});}});
+    await a.loadAccess();a.state.results.set(a.current().id,runSimulation({...a.current(),numberOfSimulations:4}));seedExploration(a);failing=true;
+    await a.loadAccess();assert.equal(a.isPro(),true);assert.equal(a.state.results.size,1);assert.ok(a.state.decision);assert.match(a.state.message,/last verified Pro/);
+    clock.now+=5*60*1000;assert.equal(a.isPro(),false);assert.equal(a.effectivePaths(),4);
+    await a.loadAccess();assert.equal(a.state.access.tier,'free');assert.equal(a.state.results.size,1);assert.ok(a.state.decision);
+    failing=false;await a.loadAccess();assert.equal(a.isPro(),true);assert.equal(a.state.message,'');
+  }
+});
+
+test('confirmed expiration, sign-out and authentication failure end Pro without deleting results',async()=>{
+  for(const reply of [{tier:'free',signedIn:true,accountKey:'user-a'},{tier:'free',signedIn:false},{error:'Sign in again',status:401}]){
+    let next={tier:'pro',signedIn:true,accountKey:'user-a'};
+    const a=app(null,{fetch:async()=>Response.json(next,{status:next.status||200})});await a.loadAccess();
+    a.state.results.set(a.current().id,runSimulation({...a.current(),numberOfSimulations:4}));seedExploration(a);next=reply;await a.loadAccess();
+    assert.equal(a.isPro(),false);assert.equal(a.state.results.size,1);assert.ok(a.state.decision);
+  }
+});
+
+test('a different identity cannot inherit grace after its billing check fails',async()=>{
+  let next={tier:'pro',signedIn:true,accountKey:'firebase:a'};
+  const identity={accountKey:'firebase:a'},a=app(null,{identity,fetch:async()=>Response.json(next,{status:next.status||200})});
+  a.syncAuthState();await a.loadAccess();identity.accountKey='firebase:b';a.syncAuthState();
+  next={accountKey:'firebase:b',status:502};await a.loadAccess();assert.equal(a.isPro(),false);
+});
+
+test('server identity changes and stale overlapping responses cannot restore another account access',async()=>{
+  let next={tier:'pro',signedIn:true,accountKey:'a'};
+  const a=app(null,{fetch:async()=>Response.json(next,{status:next.status||200})});await a.loadAccess();
+  next={accountKey:'b',status:502};await a.loadAccess();assert.equal(a.isPro(),false);
+  const resolvers=[],b=app(null,{fetch:()=>new Promise(resolve=>resolvers.push(resolve))});
+  const old=b.loadAccess(),recent=b.loadAccess();await new Promise(setImmediate);
+  resolvers[1](Response.json({tier:'free',signedIn:false}));await recent;
+  resolvers[0](Response.json({tier:'pro',signedIn:true,accountKey:'old'}));await old;assert.equal(b.isPro(),false);
+});
+
+test('verified checkout customer reference survives URL cleanup and reload',async()=>{
+  const session=new Map(),location={search:'?checkout=success&session_id=cs_live_12345678&keep=1',pathname:'/',hash:''},requests=[];
+  const fetch=async(url,options)=>{requests.push({url,options});return Response.json({tier:'pro',signedIn:true,accountKey:'a',billingCustomerId:'cus_123',billingPortalAvailable:true});};
+  const a=app(null,{session,location,fetch});await a.loadAccess();assert.match(requests[0].url,/session_id=cs_live_12345678/);assert.equal(location.search,'?keep=1');
+  await a.loadAccess();assert.equal(requests[1].options.headers['x-retirement-customer'],'cus_123');assert.doesNotMatch(requests[1].url,/session_id/);
+  const b=app(null,{session,fetch});await b.loadAccess();assert.equal(requests[2].options.headers['x-retirement-customer'],'cus_123');
+});
+
+test('account-link query cleanup works without URLSearchParams.size',async()=>{
+  class OlderParams extends URLSearchParams{get size(){return undefined;}}
+  const location={search:'?link=google&keep=1',pathname:'/',hash:'#billing'};
+  const a=app(null,{location,params:OlderParams,fetch:async()=>Response.json({linked:true})});await a.linkAccounts();
+  assert.equal(location.search,'?keep=1');assert.equal(location.hash,'#billing');
 });

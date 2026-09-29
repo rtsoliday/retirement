@@ -2,8 +2,9 @@
   "name": "retirement-readiness-lab-sites",
   "private": true,
   "type": "module",
+  "engines": { "node": ">=22" },
   "scripts": {
-    "test": "node --test tests/*.test.js",
+    "test": "node scripts/test.mjs",
     "build:sites": "node scripts/build-sites.mjs"
   }
 }

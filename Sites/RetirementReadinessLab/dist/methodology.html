@@ -41,6 +41,10 @@
         <h2>Other important assumptions</h2>
         <ul>
           <li>Investment returns, inflation, spending, healthcare costs, and longevity are modeled from your inputs and built-in assumptions. Actual conditions may differ substantially.</li>
+          <li>Before retirement, the model grows the balances you enter using the assumed returns. It does not add future savings contributions.</li>
+          <li>Taxable brokerage balances receive investment returns, but the model does not calculate capital-gains or dividend taxes or tax on brokerage withdrawals. This can overstate after-tax funds available from those accounts.</li>
+          <li>Ordinary spending withdrawals use pretax savings first, then Roth savings, then taxable brokerage savings, and finally cash. The optional drawdown strategy uses cash first during qualifying market declines. Roth-conversion taxes use cash, taxable savings, Roth savings, then pretax savings.</li>
+          <li>Enter pension or annuity income in today's dollars. The annual increase applies from today, including the years before its payment start age. If you instead enter a future payment amount, this assumption can overstate that income.</li>
           <li>The Social Security estimate uses the benefit you enter at age 67 and simplified claiming, spouse, and survivor calculations. It is not an official benefit determination.</li>
           <li>Income tax is charged as taxable income accumulates within each modeled year, using that year's brackets and deductions. The model does not reproduce withholding or estimated-tax payment dates.</li>
           <li>Medicare surcharges use modeled income from two years earlier when available. For the first two years, the planner estimates income from spending, benefits, and available pretax savings; it does not have your past tax returns. Roth withdrawals do not count as ordinary income in this estimate.</li>

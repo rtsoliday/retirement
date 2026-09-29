@@ -17,6 +17,7 @@ const calls = [];
 const stripeEnv = { ASSETS: assets, STRIPE_SECRET_KEY: 'sk_live_fake', STRIPE_PRO_MONTHLY_PRICE_ID: 'price_test_monthly', STRIPE_PRO_YEARLY_PRICE_ID: 'price_test_yearly', STRIPE_PRO_LIVE_MONTHLY_PRICE_ID: 'price_monthly', STRIPE_PRO_LIVE_YEARLY_PRICE_ID: 'price_yearly', STRIPE_FETCH: async (url, init) => {
   const parsed = new URL(url); calls.push({ path: parsed.pathname, search: parsed.searchParams, body: init.body, method: init.method });
   if (parsed.pathname === '/v1/customers/search') return Response.json({ data: [customer], has_more: false });
+  if (parsed.pathname === '/v1/customers/cus_123') return Response.json(customer);
   if (parsed.pathname === '/v1/subscriptions') return Response.json({ data: [subscription] });
   if (parsed.pathname === '/v1/checkout/sessions/cs_test_12345678') return Response.json({ client_reference_id: 'user-123', customer: customer.id, subscription: subscription.id });
   if (parsed.pathname === '/v1/subscriptions/sub_123') return Response.json(subscription);
@@ -123,6 +124,32 @@ test('past-due and canceled customers retain portal access without Pro entitleme
   const env={...stripeEnv,STRIPE_FETCH:async()=>Response.json({data:[]})};
   const result=await (await worker.fetch(request('/api/billing/status',{user:'new-user'}),env)).json();
   assert.equal(result.billingPortalAvailable,false);
+});
+
+test('checkout and direct customer references work while search has no matching record',async()=>{
+  const env={...stripeEnv,STRIPE_FETCH:async(url,init)=>new URL(url).pathname==='/v1/customers/search'?Response.json({data:[]}):stripeEnv.STRIPE_FETCH(url,init)};
+  const first=await (await worker.fetch(request('/api/billing/status?session_id=cs_live_12345678',{user:'user-123'}),{...env,STRIPE_FETCH:async(url,init)=>new URL(url).pathname.includes('/checkout/sessions/')?Response.json({client_reference_id:'user-123',customer:'cus_123',subscription:'sub_123'}):env.STRIPE_FETCH(url,init)})).json();
+  assert.equal(first.tier,'pro');assert.equal(first.billingCustomerId,'cus_123');
+  const headers={'oai-authenticated-user-id':'user-123','x-retirement-customer':first.billingCustomerId};
+  const later=await (await worker.fetch(new Request(site+'/api/billing/status',{headers}),env)).json();assert.equal(later.tier,'pro');
+  const portal=await worker.fetch(new Request(site+'/api/billing/portal',{method:'POST',headers:{...headers,Origin:site}}),env);assert.equal(portal.status,200);
+  const checkout=await worker.fetch(new Request(site+'/api/billing/checkout',{method:'POST',headers:{...headers,Origin:site,'Content-Type':'application/json'},body:JSON.stringify({interval:'monthly'})}),env);assert.equal(checkout.status,409);
+});
+
+test('untrusted customer references cannot grant access or open someone else billing',async()=>{
+  const env={...stripeEnv,STRIPE_FETCH:async(url,init)=>new URL(url).pathname==='/v1/customers/search'?Response.json({data:[]}):stripeEnv.STRIPE_FETCH(url,init)};
+  const headers={'oai-authenticated-user-id':'other-user','x-retirement-customer':'cus_123',Origin:site};
+  const status=await (await worker.fetch(new Request(site+'/api/billing/status',{headers}),env)).json();assert.equal(status.tier,'free');assert.equal(status.billingCustomerId,null);
+  const portal=await worker.fetch(new Request(site+'/api/billing/portal',{method:'POST',headers}),env);assert.equal(portal.status,404);
+  const expired={...env,STRIPE_FETCH:async(url,init)=>new URL(url).pathname==='/v1/subscriptions'?Response.json({data:[{...subscription,status:'canceled'}]}):env.STRIPE_FETCH(url,init)};
+  const ended=await billingAccess(expired,'user-123',null,'cus_123');assert.equal(ended.pro,false);assert.equal(ended.customerId,'cus_123');
+});
+
+test('deleted, missing and reassigned customer references fall back without granting access',async()=>{
+  for(const customerResponse of [Response.json({deleted:true,id:'cus_123'}),Response.json({error:'missing'},{status:404}),Response.json({...customer,metadata:{retirement_site_user_id:'new-owner'}})]){
+    const env={...stripeEnv,STRIPE_FETCH:async(url)=>new URL(url).pathname==='/v1/customers/cus_123'?customerResponse:Response.json({data:[]})};
+    assert.equal((await billingAccess(env,'user-123',null,'cus_123')).pro,false);
+  }
 });
 
 test('Checkout and billing portal return only expected Stripe destinations', async () => {

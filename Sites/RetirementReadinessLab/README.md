@@ -20,14 +20,18 @@ The web app defaults to four local Monte Carlo paths for anonymous and free user
 
 ## Verify
 
-From the repository root:
+Use Node.js 22 or newer. The test runner enumerates test files explicitly, including on Windows. From the repository root:
 
 ```bash
 npm test --prefix Sites/RetirementReadinessLab
 python -m http.server 4173 --directory Sites/RetirementReadinessLab/dist
 ```
 
-The Node tests include seeded web output snapshots, Android starting-balance references, independent annual cash-flow checks, malformed-import and failed-save cases, and authenticated billing tests with mocked Stripe responses. The browser app remains buildless in `dist/`. `npm run build:sites` packages its files with a small Worker that protects `/admin` and proxies Cloudflare Analytics requests; publish `.sites-build/` as the Sites artifact.
+The Node tests include seeded web output snapshots, Android starting-balance references, independent annual cash-flow checks, malformed-import and failed-save cases, and authenticated billing tests with mocked Stripe responses. Billing regression cases cover search delays, outages, cancellation, changed identities, stale responses, and checkout recovery. The browser app remains buildless in `dist/`. `npm run build:sites` packages its files with a small Worker that protects `/admin` and proxies Cloudflare Analytics requests; publish `.sites-build/` as the Sites artifact. The build places the complete browser JavaScript graph in a content-hashed directory. The simulation worker resolves against the same app release, so modules cannot be mixed across deployments. An old open tab whose release is no longer hosted will ask the user to reload if a worker cannot load.
+
+### Publishing source of truth
+
+Edit this directory's tracked files. The ignored `.sites-source/` directory is the separate Sites publishing checkout, not another working source. Before publication, synchronize `.openai/`, `dist/`, `scripts/`, `tests/`, `worker/`, `.gitignore`, `package.json`, and this README into it. Build from that synchronized checkout, verify the artifact against the source, and publish its pushed commit and matching archive. Do not edit `.sites-source/` independently or recursively copy it into itself. `.sites-build/` is generated output and is rebuilt for every release.
 
 ## Public model disclosures
 
@@ -41,7 +45,9 @@ To activate live figures, create a Cloudflare API token scoped to this zone with
 
 ## Pro billing setup
 
-The Sites Worker grants complimentary Pro access to the verified site owner and associates paying subscribers with a Stripe Customer by verified ChatGPT or Firebase account ID. Google users can sign in independently through Firebase after the provider setup below, and visitors can explicitly link them with an existing ChatGPT account. All scenario data and calculations stay in the browser. Stripe receives the user ID and billing details, not financial assumptions. The worker checks subscriber status with Stripe on each access check; owner access does not require a Stripe call. Existing billing customers retain Manage subscription access even when a past-due, unpaid, or canceled subscription no longer grants Pro. No local entitlement database or webhook is required. Customer Search can be briefly delayed after checkout; the return session is verified directly to cover that interval.
+The Sites Worker grants complimentary Pro access to the verified site owner and associates paying subscribers with a Stripe Customer by verified ChatGPT or Firebase account ID. Google users can sign in independently through Firebase after the provider setup below, and visitors can explicitly link them with an existing ChatGPT account. All scenario data and calculations stay in the browser. Stripe receives the user ID and billing details, not financial assumptions. The worker checks subscriber status with Stripe on each access check; owner access does not require a Stripe call. Existing billing customers retain Manage billing access even when no subscription grants Pro, including after an abandoned checkout. No local entitlement database or webhook is required.
+
+After verifying a checkout, the browser keeps a customer lookup reference in session storage. Every use requires server-side verification that the current authenticated account owns that Stripe customer, followed by a current subscription check. This avoids Customer Search delays without trusting a browser entitlement. Unverified checkout references remain in the URL for retry. A transient check failure preserves previously confirmed Pro access for at most five minutes from the last successful check in the current page session. Confirmed cancellation, authentication rejection, or a known account change ends that access immediately. Billing changes never clear completed calculation results; results still need recalculation after a page reload.
 
 To enable Checkout, create monthly and yearly recurring Prices for the same Pro product in Stripe, configure its billing portal, and set these Sites variables: `STRIPE_SECRET_KEY` (secret), `STRIPE_PRO_MONTHLY_PRICE_ID`, and `STRIPE_PRO_YEARLY_PRICE_ID` (test prices), plus `STRIPE_PRO_LIVE_MONTHLY_PRICE_ID` and `STRIPE_PRO_LIVE_YEARLY_PRICE_ID` (live prices). The Worker selects the matching price pair from the secret key's mode and disables Checkout if that pair is missing. The plan screen offers $9.99 per month and $79 per year; Stripe Checkout confirms the selected price before payment. While the key is in Stripe test mode, Checkout and billing are available only to the signed-in Site owner; other visitors remain on the free preview. With a live key, anonymous visitors can use the Sign in with ChatGPT link before upgrading. The signed-in account can manage its subscription through Stripe Billing Portal. Checkouts, billing status, and portal session creation have server-side authentication; no Stripe secret is included in browser files.
 

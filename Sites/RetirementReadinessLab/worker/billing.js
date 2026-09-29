@@ -33,7 +33,7 @@ function allowedOrigin(request) { return request.headers.get('origin') === new U
 function safeStripeUrl(value, host) {
   try { const url = new URL(value); return url.protocol === 'https:' && url.hostname === host ? url.href : null; } catch { return null; }
 }
-async function stripe(env, path, params = null, method = 'GET', idempotencyKey = null) {
+async function stripe(env, path, params = null, method = 'GET', idempotencyKey = null, allowMissing = false) {
   const url = new URL(`https://api.stripe.com/v1/${path}`);
   if (method === 'GET' && params) url.search = new URLSearchParams(params).toString();
   const headers = { Authorization: `Bearer ${env.STRIPE_SECRET_KEY}` };
@@ -43,6 +43,7 @@ async function stripe(env, path, params = null, method = 'GET', idempotencyKey =
     method, headers, body: method === 'GET' ? undefined : new URLSearchParams(params).toString(),
     signal: AbortSignal.timeout(10000),
   });
+  if (allowMissing && response.status === 404) return null;
   if (!response.ok) throw new Error('Stripe request failed');
   return response.json();
 }
@@ -63,28 +64,36 @@ async function activeSubscription(env, customerId) {
   const result = await stripe(env, 'subscriptions', { customer: customerId, status: 'all', limit: '100' });
   return (result.data || []).find(s => ACTIVE_STATUSES.has(s.status) && hasProPrice(s, env)) || null;
 }
-async function access(env, value, sessionId = null) {
+async function access(env, value, sessionId = null, customerHint = null) {
   const user = asPrincipal(value);
+  // A browser reference is a lookup hint, never proof of ownership or payment.
+  async function verifiedCustomer(id) {
+    if (typeof id !== 'string' || !/^cus_[A-Za-z0-9]{1,200}$/.test(id)) return null;
+    const customer = await stripe(env, `customers/${id}`, null, 'GET', null, true);
+    return customer && !customer.deleted && customer.metadata?.[metadataKey(user)] === user.id ? customer : null;
+  }
+  let knownCustomer = null;
   if (sessionId && /^cs_(?:test_|live_)?[A-Za-z0-9]{8,200}$/.test(sessionId)) {
-    const session = await stripe(env, `checkout/sessions/${sessionId}`);
-    if (session.client_reference_id === reference(user) && session.subscription) {
-      const sub = await stripe(env, `subscriptions/${session.subscription}`);
-      if (ACTIVE_STATUSES.has(sub.status) && hasProPrice(sub, env)) return { pro: true, customerId: session.customer };
+    const session = await stripe(env, `checkout/sessions/${sessionId}`, null, 'GET', null, true);
+    if (session?.client_reference_id === reference(user)) {
+      knownCustomer = await verifiedCustomer(session.customer);
     }
   }
+  knownCustomer ||= await verifiedCustomer(customerHint);
+  if (knownCustomer) return { pro: Boolean(await activeSubscription(env, knownCustomer.id)), customerId: knownCustomer.id };
   const matches = await customers(env, user);
   for (const customer of matches) if (await activeSubscription(env, customer.id)) return { pro: true, customerId: customer.id };
   return { pro: false, customerId: matches[0]?.id || null };
 }
 async function status(request, env, user, isOwner = false) {
   if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
-  if (isOwnerAccount(user) || (isOwner && user?.kind === 'chatgpt')) return json({ tier: 'pro', maxPaths: PRO_PATHS, signedIn: true, checkoutAvailable: false, accountProvider: user.provider, ownerAccess: true });
+  if (isOwnerAccount(user) || (isOwner && user?.kind === 'chatgpt')) return json({ tier: 'pro', maxPaths: PRO_PATHS, signedIn: true, checkoutAvailable: false, accountKey: reference(user), accountProvider: user.provider, ownerAccess: true });
   const enabled = configured(env);
-  if (!enabled || !user) return json({ tier: 'free', maxPaths: FREE_PATHS, signedIn: Boolean(user), checkoutAvailable: enabled, accountProvider: user?.provider || null });
+  if (!enabled || !user) return json({ tier: 'free', maxPaths: FREE_PATHS, signedIn: Boolean(user), checkoutAvailable: enabled, accountKey: user ? reference(user) : null, accountProvider: user?.provider || null });
   try {
-    const result = await access(env, user, new URL(request.url).searchParams.get('session_id'));
-    return json({ tier: result.pro ? 'pro' : 'free', maxPaths: result.pro ? PRO_PATHS : FREE_PATHS, signedIn: true, checkoutAvailable: true, billingPortalAvailable: Boolean(result.customerId), accountProvider: user.provider });
-  } catch { return json({ tier: 'free', maxPaths: FREE_PATHS, signedIn: true, checkoutAvailable: false, accountProvider: user.provider, error: 'Could not verify subscription. Please retry.' }, 502); }
+    const result = await access(env, user, new URL(request.url).searchParams.get('session_id'), request.headers.get('x-retirement-customer'));
+    return json({ tier: result.pro ? 'pro' : 'free', maxPaths: result.pro ? PRO_PATHS : FREE_PATHS, signedIn: true, checkoutAvailable: true, billingPortalAvailable: Boolean(result.customerId), billingCustomerId: result.customerId, accountKey: reference(user), accountProvider: user.provider });
+  } catch { return json({ signedIn: true, accountKey: reference(user), accountProvider: user.provider, error: 'Could not verify subscription. Please retry.' }, 502); }
 }
 async function checkout(request, env, user, isOwner = false) {
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
@@ -97,7 +106,7 @@ async function checkout(request, env, user, isOwner = false) {
   const priceId = priceIds(env)[interval];
   if (!priceId || !['monthly', 'yearly'].includes(interval)) return json({ error: 'Choose monthly or yearly billing' }, 400);
   try {
-    const prior = await access(env, user);
+    const prior = await access(env, user, null, request.headers.get('x-retirement-customer'));
     if (prior.pro) return json({ error: 'This account already has Pro access' }, 409);
     const customer = prior.customerId || (await stripe(env, 'customers', { [`metadata[${metadataKey(user)}]`]: user.id }, 'POST', `retirement-${user.kind}-${user.id}`)).id;
     const origin = new URL(request.url).origin;
@@ -119,7 +128,7 @@ async function portal(request, env, user) {
   if (!user) return json({ error: 'Sign in to manage billing' }, 401);
   if (!configured(env)) return json({ error: 'Billing is not configured yet' }, 503);
   try {
-    const account = await access(env, user);
+    const account = await access(env, user, null, request.headers.get('x-retirement-customer'));
     if (!account.customerId) return json({ error: 'No billing account was found' }, 404);
     const session = await stripe(env, 'billing_portal/sessions', { customer: account.customerId, return_url: `${new URL(request.url).origin}/` }, 'POST');
     const url = safeStripeUrl(session.url, 'billing.stripe.com');

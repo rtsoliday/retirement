@@ -14,7 +14,14 @@ const state={scenarios:Array.isArray(saved?.scenarios)&&saved.scenarios.length?n
 if(!state.scenarios.some(s=>s.id===state.selectedId))state.selectedId=state.scenarios[0].id;
 state.hasStartedPlan=hasSavedScenarios&&(saved.hasStartedPlan??true);
 function current(){return state.scenarios.find(s=>s.id===state.selectedId)||state.scenarios[0];}
-function isPro(){return state.access.tier==='pro';}
+const ACCESS_GRACE_MS=5*60*1000;
+let accessConfirmedAt=0,accessRequest=0,billingReference={};
+try{const savedReference=JSON.parse(sessionStorage.getItem('retirement-billing-reference'));if(typeof savedReference?.customerId==='string'&&/^cus_[A-Za-z0-9]{1,200}$/.test(savedReference.customerId))billingReference={customerId:savedReference.customerId};}catch{}
+function saveBillingReference(){try{sessionStorage.setItem('retirement-billing-reference',JSON.stringify(billingReference));}catch{}}
+function isPro(){return state.access.tier==='pro'&&(!state.accessStale||Date.now()-accessConfirmedAt<ACCESS_GRACE_MS);}
+async function billingHeaders(){return {...await authHeaders(),...(billingReference.customerId?{'x-retirement-customer':billingReference.customerId}:{})};}
+function resetBillingIdentity(){accessRequest++;accessConfirmedAt=0;billingReference={};saveBillingReference();state.access={tier:'free',maxPaths:FREE_SIMULATION_PATHS,signedIn:false,checkoutAvailable:false};state.accessStale=false;}
+function syncAuthState(){const next=socialState();if(state.auth.accountKey!==undefined&&state.auth.accountKey!==next.accountKey)resetBillingIdentity();state.auth=next;}
 function effectivePaths(s=current()){return isPro()?Math.max(FREE_SIMULATION_PATHS,Math.min(MAX_SIMULATION_PATHS,Number(s.numberOfSimulations)||FREE_SIMULATION_PATHS)):FREE_SIMULATION_PATHS;}
 function simulationScenario(s=current()){const copy=deep(s);copy.numberOfSimulations=effectivePaths(s);copy.seed=DEFAULT_SEED;return copy;}
 function persist(markStarted=true){if(markStarted)state.hasStartedPlan=true;try{localStorage.setItem(storageKey,JSON.stringify({scenarios:state.scenarios,selectedId:state.selectedId,hasStartedPlan:state.hasStartedPlan}));if(state.message===state.storageError)state.message='';state.storageError='';return true;}catch{state.storageError='Error: Changes could not be saved in browser storage. Export a backup to keep your scenarios before closing this page.';state.message=state.storageError;return false;}}
@@ -57,7 +64,7 @@ const schema=[
 const assumptionHelp={
   'accounts.pretax':'Traditional 401(k), IRA, and similar tax-deferred balances. The model treats withdrawals from this balance as taxable income.',
   'accounts.roth':'Roth retirement account balances. The model treats withdrawals from this balance as tax-free.',
-  'accounts.taxable':'Brokerage investments outside retirement accounts. The model includes them in invested savings and can draw on them for spending.',
+  'accounts.taxable':'Brokerage investments outside retirement accounts. The model includes them in invested savings and can draw on them for spending. It does not calculate taxes on brokerage gains, dividends, or withdrawals.',
   'accounts.cash':'Cash reserve kept apart from invested savings. It can help cover withdrawals during modeled market declines.',
   'spending.annualBaseSpending':'Your yearly living costs in today\'s dollars excluding housing and healthcare which are entered separately below.',
   'spending.generalInflationMean':'The average yearly increase assumed for general living and housing costs.',
@@ -81,7 +88,7 @@ const assumptionHelp={
   'spending.lowPortfolioSpendingReduction':'The model reduces base spending by this percentage while total savings are below half their value at retirement.',
   'socialSecurity.annualBenefitAt67':'Enter an annual Social Security estimate at age 67 in today’s dollars. The model adjusts it for the claim age below and applies its own future inflation.',
   'socialSecurity.spouseClaimAge':'The spouse’s modeled claiming age. Spousal or survivor payments may begin later if other conditions are not met.',
-  'guaranteedIncome.annualIncome':'Annual pension or annuity income, separate from Social Security. It begins at the income start age.',
+  'guaranteedIncome.annualIncome':'Annual pension or annuity income in today’s dollars, separate from Social Security. The annual increase applies from today, including years before payments begin at the income start age.',
   'guaranteedIncome.annualIncrease':'Yearly growth rate for the pension or annuity amount entered above.',
   'guaranteedIncome.survivorPercent':'For a married plan, the share of guaranteed income retained by the spouse after the primary person dies.',
   'home.currentValue':'The home is not counted as spendable savings initially. If the portfolio runs out, the model sells it, pays the remaining mortgage, and adds rent.',
@@ -188,13 +195,13 @@ function billingView(){
     if(signOutActions.length)account+=`<div class="actions account-actions">${signOutActions.join('')}</div>`;
   }
   const choices=`<div class="billing-options"><div class="billing-option"><strong>$9.99 <small>/ month</small></strong>${a.checkoutAvailable&&a.signedIn?'<button class="primary" data-action="checkout" data-interval="monthly">Choose monthly</button>':''}</div><div class="billing-option"><strong>$79 <small>/ year</small></strong>${a.checkoutAvailable&&a.signedIn?'<button class="primary" data-action="checkout" data-interval="yearly">Choose yearly</button>':''}</div></div>`;
-  const portalAction=a.billingPortalAvailable?'<div class="actions"><button class="secondary" data-action="billing-portal">Manage subscription</button></div>':'';
+  const portalAction=a.billingPortalAvailable?'<div class="actions"><button class="secondary" data-action="billing-portal">Manage billing</button></div>':'';
   const proActions=isPro()?`<span class="tag">${a.ownerAccess?'Owner access':'Active on this account'}</span><div class="field billing-paths"><label for="billing-path-count">Paths for the next full run</label><input id="billing-path-count" type="number" inputmode="numeric" min="4" max="${MAX_SIMULATION_PATHS}" step="1" data-field="numberOfSimulations" data-type="number" value="${escapeHTML(current().numberOfSimulations)}"></div>${portalAction}`:`${portalAction}${choices}${!a.checkoutAvailable?'<p class="form-note">Paid access is not configured yet. Stripe confirms the final price before payment.</p>':''}`;
-  return `${pageHead('Plans & billing','Choose the number of Monte Carlo paths for your plan.')}${notice()}${card('Your account',account,'account-card')}<div class="grid two">${isPro()?'':card('Free preview',`<div class="metric-value">4 paths</div><p>A quick look at possible lifetimes. The preview uses only four simulations.</p><p>Your scenarios and calculations stay on this device.</p>`)}${card('Pro',`<div class="metric-value">${isPro()?'10,000 paths by default':'Up to 10,000 paths'}</div><p>${isPro()?'Adjust the path count for a full run or use planning targets.':'Choose a higher path count for full runs and comparisons, and use planning targets.'} Calculations still run on your device.</p>${proActions}`)}</div><p class="billing-footnote">Subscriptions renew automatically until canceled. Manage cancellation in Plans &amp; billing → Manage subscription; Stripe shows the effective date. <a href="./terms.html#subscriptions">Subscription terms</a> · <a href="./support.html#refunds">Refund requests</a> · <a href="./privacy.html">Privacy</a> · <a href="./support.html">Contact support</a></p><p class="billing-footnote">Subscriptions are linked to the account used to sign in. Link accounts explicitly to share a subscription. Stripe handles payment details; this Site does not receive card numbers or your retirement scenarios. Browser-side calculation limits can be bypassed by changing local code.</p>`;
+  return `${pageHead('Plans & billing','Choose the number of Monte Carlo paths for your plan.')}${notice()}${card('Your account',account,'account-card')}<div class="grid two">${isPro()?'':card('Free preview',`<div class="metric-value">4 paths</div><p>A quick look at possible lifetimes. The preview uses only four simulations.</p><p>Your scenarios and calculations stay on this device.</p>`)}${card('Pro',`<div class="metric-value">${isPro()?'10,000 paths by default':'Up to 10,000 paths'}</div><p>${isPro()?'Adjust the path count for a full run or use planning targets.':'Choose a higher path count for full runs and comparisons, and use planning targets.'} Calculations still run on your device.</p>${proActions}`)}</div><p class="billing-footnote">Subscriptions renew automatically until canceled. Manage cancellation in Plans &amp; billing → Manage billing; Stripe shows the effective date. <a href="./terms.html#subscriptions">Subscription terms</a> · <a href="./support.html#refunds">Refund requests</a> · <a href="./privacy.html">Privacy</a> · <a href="./support.html">Contact support</a></p><p class="billing-footnote">Subscriptions are linked to the account used to sign in. Link accounts explicitly to share a subscription. Stripe handles payment details; this Site does not receive card numbers or your retirement scenarios. Browser-side calculation limits can be bypassed by changing local code.</p>`;
 }
 function reports(){const text=reportText(current(),result());return `${pageHead('Monte Carlo reports & backup','Export the current plan, its simulation assumptions, and its results.',`<button class="secondary" data-action="print">Print / save PDF</button>`)}${notice()}<div class="grid two">${card('Current plan report',`<div class="actions"><button class="secondary" data-action="download-report">Download text</button><button class="secondary" data-action="copy-report">Copy report</button></div><pre class="report-text">${escapeHTML(text)}</pre>`)}${card('Scenario backup',`<p>Save all plans in one JSON file or restore a previous backup.</p><div class="actions"><button class="primary" data-action="export-backup">Export JSON</button><button class="secondary" data-action="import-backup">Import JSON</button></div><p class="form-note">Imports web backups or Android scenario JSON arrays. Import replaces the plans saved in this browser, so export a backup first if you want to keep them.</p>`)}</div>`;}
 function render(){disposeCharts();const details=$('#advanced-model');if(details)state.advancedOpen=details.open;const allocation=$('#allocation-settings');if(allocation)state.allocationOpen=allocation.open;const select=$('#scenario-select');select.innerHTML=state.scenarios.map(s=>`<option value="${escapeHTML(s.id)}" ${s.id===state.selectedId?'selected':''}>${escapeHTML(s.name)}</option>`).join('');$('#run-button').disabled=state.busy;$('#run-button').textContent=state.busy?'Calculating…':'Run simulation';document.querySelectorAll('#navigation button').forEach(b=>{const active=b.dataset.view===state.view;b.classList.toggle('active',active);if(active)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});$('#page-location').textContent=currentViewLabel();$('#result-state').textContent=state.busy?'Simulation running':result()?'Results up to date':'Ready to simulate';$('#main').innerHTML=({dashboard,setup,budget,scenarios,lab,results,reports,billing:billingView}[state.view]||dashboard)();mountCharts($('#main'),result(),current().household.retirementAge);}
-function runWorker(s,task='simulation'){return new Promise((resolve,reject)=>{const worker=new Worker('./worker.js',{type:'module'});worker.onmessage=e=>{worker.terminate();e.data.type==='result'?resolve(e.data.result):reject(new Error(e.data.message));};worker.onerror=e=>{worker.terminate();reject(new Error(e.message||'Calculation failed'));};worker.postMessage({scenario:s,task});});}
+function runWorker(s,task='simulation'){return new Promise((resolve,reject)=>{const worker=new Worker(new URL('./worker.js',import.meta.url),{type:'module'});worker.onmessage=e=>{worker.terminate();e.data.type==='result'?resolve(e.data.result):reject(new Error(e.data.message));};worker.onerror=e=>{worker.terminate();reject(new Error((e.message||'Calculation failed')+'. Reload this page to load the latest calculator, then try again.'));};worker.postMessage({scenario:s,task});});}
 async function run(){
   if(state.busy)return;
   const s=simulationScenario(),errors=validateScenario(s);
@@ -247,7 +254,7 @@ $('#main').addEventListener('click',async e=>{const runPlan=e.target.closest('[d
       else if(a==='social-link-provider')await linkSocialProvider(el.dataset.provider);
       else if(a==='social-link-accounts')await linkAccounts();
       else if(a==='social-signout')await signOutSocial();
-      state.auth=socialState();
+      syncAuthState();
       await loadAccess({force:true});
       if(a.includes('link'))setMessage('Sign-in methods linked to the same subscription.');
       else if(a==='social-signout')setMessage('Signed out of Google.');
@@ -266,7 +273,7 @@ $('#main').addEventListener('click',async e=>{const runPlan=e.target.closest('[d
   if(a==='housing-assumptions'){state.setupSection=3;state.view='setup';render();window.scrollTo(0,0);}
   if(a==='apply-budget'){try{applyBudgetEstimate(s);state.results.delete(s.id);invalidateExploration();persist();setMessage('Budget estimate applied. Run the plan to refresh results.');}catch(error){setMessage('Error: '+error.message);}}
   if(a==='run-lab')await runLab();
-  if(a==='checkout'||a==='billing-portal'){el.disabled=true;try{const response=await fetch(a==='checkout'?'/api/billing/checkout':'/api/billing/portal',{method:'POST',credentials:'same-origin',headers:{...(await authHeaders()),...(a==='checkout'?{'Content-Type':'application/json'}:{})},...(a==='checkout'?{body:JSON.stringify({interval:el.dataset.interval})}:{})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Billing is unavailable.');const url=new URL(data.url);if(url.protocol!=='https:'||url.hostname!==(a==='checkout'?'checkout.stripe.com':'billing.stripe.com'))throw new Error('Unexpected billing link.');location.assign(url.href);}catch(error){el.disabled=false;setMessage('Error: '+error.message);}return;}
+  if(a==='checkout'||a==='billing-portal'){el.disabled=true;try{const response=await fetch(a==='checkout'?'/api/billing/checkout':'/api/billing/portal',{method:'POST',credentials:'same-origin',headers:{...(await billingHeaders()),...(a==='checkout'?{'Content-Type':'application/json'}:{})},...(a==='checkout'?{body:JSON.stringify({interval:el.dataset.interval})}:{})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Billing is unavailable.');const url=new URL(data.url);if(url.protocol!=='https:'||url.hostname!==(a==='checkout'?'checkout.stripe.com':'billing.stripe.com'))throw new Error('Unexpected billing link.');location.assign(url.href);}catch(error){el.disabled=false;setMessage('Error: '+error.message);}return;}
   if(a==='run-decision')await runDecision();
   if(a==='download-report')download('retirement-report.txt',reportText(s,result()),'text/plain');
   if(a==='copy-report'){try{await navigator.clipboard.writeText(reportText(s,result()));setMessage('Report copied.');}catch{setMessage('Error: Clipboard access is unavailable. Download the text report instead.');}}
@@ -287,29 +294,57 @@ async function linkAccounts(){
   const data=await response.json();
   if(!response.ok)throw new Error(data.error||'Could not link accounts.');
   const query=new URLSearchParams(location.search);
-  if(query.has('link')){query.delete('link');history.replaceState(null,'',location.pathname+(query.size?'?'+query:'')+location.hash);}
+  if(query.has('link')){query.delete('link');history.replaceState(null,'',location.pathname+(query.toString()?'?'+query:'')+location.hash);}
 }
 const ACCESS_UNAVAILABLE='Subscription status is unavailable. The free preview remains available.';
-// Results are cleared only when the tier changes, and the page is redrawn only when access or its
-// message changes, so a routine check on window focus keeps results and open charts.
+// Billing checks govern future runs. Completed results belong to the local plan
+// and survive outages, upgrades, expiration and sign-out.
 async function loadAccess({force=false}={}){
-  const before=JSON.stringify(state.access),oldTier=state.access.tier,query=new URLSearchParams(location.search);let message=null,rerender=force;
-  try{const sessionId=query.get('session_id');const response=await fetch('/api/billing/status'+(sessionId?'?session_id='+encodeURIComponent(sessionId):''),{credentials:'same-origin',cache:'no-store',headers:await authHeaders()});const access=await response.json();if(!response.ok)throw new Error(access.error||'Subscription check failed');state.access=access;if(access.tier==='pro'){let changed=false;for(const scenario of state.scenarios)changed=applyProSimulationDefault(scenario)||changed;if(changed){persist(false);rerender=true;}}if(query.get('checkout')==='success')message=access.tier==='pro'?'Pro is active for this account.':'Payment is being confirmed. Refresh your plan in a moment.';else if(query.get('checkout')==='canceled')message='Checkout was canceled.';if(query.has('checkout')||query.has('session_id'))history.replaceState(null,'',location.pathname+location.hash);}
-  catch{state.access={tier:'free',maxPaths:FREE_SIMULATION_PATHS,signedIn:false,checkoutAvailable:false};message=ACCESS_UNAVAILABLE;}
-  if(state.access.tier!==oldTier){state.results.clear();invalidateExploration();rerender=true;}
+  const requestId=++accessRequest,before=JSON.stringify(state.access),query=new URLSearchParams(location.search);let message=null,rerender=force;
+  try{
+    const sessionId=query.get('session_id');
+    const response=await fetch('/api/billing/status'+(sessionId?'?session_id='+encodeURIComponent(sessionId):''),{credentials:'same-origin',cache:'no-store',headers:await billingHeaders()});
+    const access=await response.json();
+    if(requestId!==accessRequest)return;
+    if(!response.ok){
+      // Authentication failure or a different server-confirmed identity cannot
+      // inherit an earlier account's grace period.
+      if(response.status===401||response.status===403||(access.accountKey&&access.accountKey!==state.access.accountKey)){
+        resetBillingIdentity();
+        setMessage('Sign in again to verify your plan. Your completed results are still available.');return;
+      }
+      throw new Error(access.error||'Subscription check failed');
+    }
+    if(!['free','pro'].includes(access.tier))throw new Error('Invalid subscription response');
+    state.access=access;state.accessStale=false;accessConfirmedAt=Date.now();
+    billingReference=access.billingCustomerId?{customerId:access.billingCustomerId}:{};saveBillingReference();
+    if(access.tier==='pro'){let changed=false;for(const scenario of state.scenarios)changed=applyProSimulationDefault(scenario)||changed;if(changed){persist(false);rerender=true;}}
+    if(query.get('checkout')==='success')message=access.tier==='pro'?'Pro is active for this account.':'Payment is being confirmed. Refresh your plan in a moment.';
+    else if(query.get('checkout')==='canceled')message='Checkout was canceled.';
+    else if(state.message===ACCESS_UNAVAILABLE||state.message===ACCESS_RETRY)message='';
+    // Retain an unverified checkout reference for another attempt. Once the
+    // customer is verified, later requests use its direct, ownership-checked ID.
+    if(!sessionId||access.billingCustomerId){query.delete('checkout');query.delete('session_id');const search=query.toString();history.replaceState(null,'',location.pathname+(search?'?'+search:'')+location.hash);}
+  }catch{
+    if(requestId!==accessRequest)return;
+    state.accessStale=true;
+    if(isPro())message=ACCESS_RETRY;
+    else{state.access={tier:'free',maxPaths:FREE_SIMULATION_PATHS,signedIn:state.access.signedIn,checkoutAvailable:false};message=ACCESS_UNAVAILABLE;}
+  }
   if(JSON.stringify(state.access)!==before)rerender=true;
   if(message!==null&&message!==state.message){state.message=message;rerender=true;}
   if(rerender)render();
 }
+const ACCESS_RETRY='Subscription status is temporarily unavailable. Your last verified Pro access is available for up to five minutes; your completed results are kept.';
 async function bootAuth(){
-  try{await initializeSocialAuth(()=>{state.auth=socialState();loadAccess({force:true});});state.auth=socialState();}
+  try{await initializeSocialAuth(()=>{syncAuthState();loadAccess({force:true});});syncAuthState();}
   catch{state.auth=socialState();state.message='Google sign-in is temporarily unavailable. ChatGPT sign-in still works.';}
   const accountQuery=new URLSearchParams(location.search);
   if(accountQuery.has('link')||accountQuery.has('account')||location.hash==='#billing'){
     state.view='billing';
     if(accountQuery.has('link'))state.message='To share a subscription, use the account-linking button below after both sign-ins are active.';
     accountQuery.delete('account');
-    history.replaceState(null,'',location.pathname+(accountQuery.size?'?'+accountQuery:'')+location.hash);
+    history.replaceState(null,'',location.pathname+(accountQuery.toString()?'?'+accountQuery:'')+location.hash);
   }
   await loadAccess({force:true});
 }

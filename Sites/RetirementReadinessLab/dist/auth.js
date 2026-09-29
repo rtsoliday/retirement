@@ -35,7 +35,7 @@ export async function initializeSocialAuth(onChange) {
   });
 }
 export function socialState() {
-  return { configured, chatgptSignedIn, signedIn: Boolean(user), linkedProviders: user?.providerData.map(p => p.providerId) || [], enabledProviders: providers };
+  return { configured, chatgptSignedIn, signedIn: Boolean(user), accountKey: user ? `firebase:${user.uid}` : null, linkedProviders: user?.providerData.map(p => p.providerId) || [], enabledProviders: providers };
 }
 export async function authHeaders() {
   return user ? { Authorization: `Bearer ${await user.getIdToken()}` } : {};
