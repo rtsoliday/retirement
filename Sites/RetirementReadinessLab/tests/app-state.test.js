@@ -8,8 +8,9 @@ import {runSimulation} from '../dist/engine.js';
 
 // Execute the actual app and event handlers. Only browser IO is replaced;
 // workers stay pending so changes during calculations can be reproduced.
-function app(){
+function app(saved=null){
   const elements=new Map(),workers=[];
+  let stored=saved===null?null:JSON.stringify(saved);
   function element(selector){
     if(['#advanced-model','#allocation-settings'].includes(selector))return null;
     if(!elements.has(selector))elements.set(selector,{innerHTML:'',textContent:'',dataset:{},listeners:{},classList:{toggle(){},remove(){}},addEventListener(name,fn){this.listeners[name]=fn;},querySelectorAll(){return [];},setAttribute(){},focus(){},scrollIntoView(){},insertAdjacentHTML(){}});
@@ -17,19 +18,48 @@ function app(){
   }
   const context=vm.createContext({...model,...format,structuredClone,Intl,URLSearchParams,URL,console,
     location:{search:'',pathname:'/',hash:''},history:{replaceState(){}},confirm:()=>true,
-    localStorage:{getItem:()=>null,setItem(){}},window:{addEventListener(){},scrollTo(){}},
+    localStorage:{getItem:()=>stored,setItem(key,value){stored=value;}},window:{addEventListener(){},scrollTo(){}},
     document:{querySelector:element,querySelectorAll:()=>[],addEventListener(){}},
     chartCard:()=>'',mountCharts(){},disposeCharts(){},initializeSocialAuth:()=>new Promise(()=>{}),
     Worker:class{constructor(){workers.push(this);}postMessage(data){this.data=data;}terminate(){this.terminated=true;}},
   });
   const source=readFileSync(new URL('../dist/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
   vm.runInContext(source,context);
-  const api=vm.runInContext('({state,run,runLab,runDecision,results,dashboard,lab,reportText,current})',context);
-  return {...api,workers,change:(selector,target)=>element(selector).listeners.change({target}),
+  const api=vm.runInContext('({state,run,runLab,runDecision,results,dashboard,lab,reportText,current,persist})',context);
+  return {...api,workers,saved:()=>JSON.parse(stored),change:(selector,target)=>element(selector).listeners.change({target}),
     click:(action,extra={})=>{const el={dataset:{action,...extra}};return element('#main').listeners.click({target:{closest:selector=>selector==='[data-action]'?el:null}});}};
 }
 function seedExploration(a){a.state.labResults=[{label:'Old plan',result:null}];a.state.decision={targetReadiness:.8,simulationCount:180};}
 function assertCleared(a){assert.equal(a.state.labResults,null);assert.equal(a.state.decision,null);}
+
+test('first visit leads with starting actions and an explicitly illustrative chart',()=>{
+  const a=app(),html=a.dashboard();
+  assert.match(html,/Explore how long your retirement savings could last/);
+  assert.match(html,/Build my forecast/);assert.match(html,/Explore a sample plan/);
+  assert.match(html,/Illustrative paths only/);assert.match(html,/Your financial inputs stay in your browser/);
+  assert.match(html,/Free preview · 4 simulated lifetimes/);assert.match(html,/Sample plan at a glance/);
+  assert.ok(html.indexOf('Build my forecast')<html.indexOf('overview-upgrade-title'));
+  assert.equal(a.saved(),null);
+});
+test('starting a plan opens assumptions and survives reload without replacing scenarios',async()=>{
+  const a=app(),before=JSON.stringify(a.state.scenarios);
+  await a.click('start-plan');assert.equal(a.state.view,'setup');assert.equal(JSON.stringify(a.state.scenarios),before);
+  const restored=app(a.saved());assert.match(restored.dashboard(),/Continue my plan/);
+  assert.doesNotMatch(restored.dashboard(),/Explore a sample plan/);
+  assert.equal(JSON.stringify(restored.state.scenarios),before);
+});
+test('existing backups resume the selected plan and escape its name',()=>{
+  const plans=model.sampleScenarios();plans[1].name='<b>My plan</b>';
+  const a=app({scenarios:plans,selectedId:plans[1].id});
+  assert.equal(a.current().id,plans[1].id);assert.match(a.dashboard(),/Continue my plan/);
+  assert.match(a.dashboard(),/&lt;b&gt;My plan&lt;\/b&gt;/);assert.doesNotMatch(a.dashboard(),/<b>My plan<\/b>/);
+});
+test('automatic Pro defaults preserve the first-visit state across reloads',()=>{
+  const a=app();a.state.access.tier='pro';a.state.scenarios.forEach(model.applyProSimulationDefault);a.persist(false);
+  const restored=app(a.saved());restored.state.access.tier='pro';const html=restored.dashboard();
+  assert.match(html,/Build my forecast/);assert.match(html,/Pro · Up to 10,000/);
+  assert.doesNotMatch(html,/overview-upgrade-title|Free preview · 4 simulated lifetimes/);
+});
 
 test('both scenario selectors discard prior comparisons and targets',async()=>{
   const a=app();seedExploration(a);await a.click('select-scenario',{id:'later-retirement'});assert.equal(a.current().id,'later-retirement');assertCleared(a);
