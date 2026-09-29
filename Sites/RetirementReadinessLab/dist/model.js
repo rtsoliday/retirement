@@ -169,7 +169,7 @@ export function scenarioWarnings(s) {
   if(!s.healthcare.includeMedicarePremiums)notes.push('Medicare premiums are excluded.');
   if(!s.longTermCare.enabled)notes.push('Long-term care risk is excluded.');
   if(s.socialSecurity.annualBenefitAt67<=0)notes.push('No Social Security benefit is entered.');
-  if(s.numberOfSimulations===4)notes.push('Four paths are only a preview. Results move in 25% steps and are not reliable for decisions. Use many more paths for serious comparisons.');
+  if(s.numberOfSimulations===4)notes.push('Four paths are only a preview. Use many more paths for serious comparisons and retirement decisions.');
   else if(s.numberOfSimulations<500)notes.push('Fewer than 500 paths can make comparisons unstable. Use more paths before relying on small differences.');
   return notes;
 }

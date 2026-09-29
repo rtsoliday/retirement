@@ -1,0 +1,73 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import {readFileSync} from 'node:fs';
+import * as model from '../dist/model.js';
+import * as format from '../dist/result-format.js';
+import {runSimulation} from '../dist/engine.js';
+
+// Execute the actual app and event handlers. Only browser IO is replaced;
+// workers stay pending so changes during calculations can be reproduced.
+function app(){
+  const elements=new Map(),workers=[];
+  function element(selector){
+    if(['#advanced-model','#allocation-settings'].includes(selector))return null;
+    if(!elements.has(selector))elements.set(selector,{innerHTML:'',textContent:'',dataset:{},listeners:{},classList:{toggle(){},remove(){}},addEventListener(name,fn){this.listeners[name]=fn;},querySelectorAll(){return [];},setAttribute(){},focus(){},scrollIntoView(){},insertAdjacentHTML(){}});
+    return elements.get(selector);
+  }
+  const context=vm.createContext({...model,...format,structuredClone,Intl,URLSearchParams,URL,console,
+    location:{search:'',pathname:'/',hash:''},history:{replaceState(){}},confirm:()=>true,
+    localStorage:{getItem:()=>null,setItem(){}},window:{addEventListener(){},scrollTo(){}},
+    document:{querySelector:element,querySelectorAll:()=>[],addEventListener(){}},
+    chartCard:()=>'',mountCharts(){},disposeCharts(){},initializeSocialAuth:()=>new Promise(()=>{}),
+    Worker:class{constructor(){workers.push(this);}postMessage(data){this.data=data;}terminate(){this.terminated=true;}},
+  });
+  const source=readFileSync(new URL('../dist/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
+  vm.runInContext(source,context);
+  const api=vm.runInContext('({state,run,runLab,runDecision,results,dashboard,lab,reportText,current})',context);
+  return {...api,workers,change:(selector,target)=>element(selector).listeners.change({target}),
+    click:(action,extra={})=>{const el={dataset:{action,...extra}};return element('#main').listeners.click({target:{closest:selector=>selector==='[data-action]'?el:null}});}};
+}
+function seedExploration(a){a.state.labResults=[{label:'Old plan',result:null}];a.state.decision={targetReadiness:.8,simulationCount:180};}
+function assertCleared(a){assert.equal(a.state.labResults,null);assert.equal(a.state.decision,null);}
+
+test('both scenario selectors discard prior comparisons and targets',async()=>{
+  const a=app();seedExploration(a);await a.click('select-scenario',{id:'later-retirement'});assert.equal(a.current().id,'later-retirement');assertCleared(a);
+  seedExploration(a);a.change('#scenario-select',{value:'base-plan'});assert.equal(a.current().id,'base-plan');assertCleared(a);
+});
+test('reset, duplicate, delete and backup replacement invalidate exploration',async()=>{
+  const a=app();for(const action of ['reset-assumptions','new-scenario','delete-scenario']){seedExploration(a);await a.click(action,{id:a.current().id});assertCleared(a);}
+  seedExploration(a);await a.change('#import-file',{files:[{text:async()=>JSON.stringify([model.baseScenario()])}],value:'backup.json'});assertCleared(a);
+});
+test('switching plans while a comparison worker runs cannot restore old rows',async()=>{
+  const a=app(),pending=a.runLab();assert.equal(a.workers.length,1);
+  await a.click('select-scenario',{id:'later-retirement'});
+  a.workers[0].onmessage({data:{type:'result',result:runSimulation(a.workers[0].data.scenario)}});
+  await pending;assertCleared(a);assert.equal(a.workers.length,1);assert.equal(a.state.busy,false);assert.doesNotMatch(a.lab(),/Comparisons ready|Old plan/);
+});
+test('an input edit during simulation discards the obsolete result',async()=>{
+  const a=app(),pending=a.run();a.change('#main',{dataset:{field:'spending.annualBaseSpending',type:'money'},value:'90000'});
+  a.workers[0].onmessage({data:{type:'result',result:runSimulation(a.workers[0].data.scenario)}});
+  await pending;assert.equal(a.state.results.size,0);assert.equal(a.current().spending.annualBaseSpending,90000);assert.equal(a.state.busy,false);
+});
+test('resetting a plan while target search runs discards its old targets',async()=>{
+  const a=app();a.state.access.tier='pro';const pending=a.runDecision();await a.click('reset-assumptions');
+  a.workers[0].onmessage({data:{type:'result',result:{earliestRetirementAge:55}}});await pending;assertCleared(a);assert.equal(a.state.busy,false);
+});
+test('unchanged runs still publish results and complete all comparison rows',async()=>{
+  const a=app(),pending=a.run();a.workers[0].onmessage({data:{type:'result',result:runSimulation(a.workers[0].data.scenario)}});await pending;assert.equal(a.state.results.size,1);
+  const lab=a.runLab();for(let i=1;i<=7;i++){const w=a.workers[i];assert.ok(w);w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});await Promise.resolve();}
+  await lab;assert.equal(a.state.labResults.length,7);assert.equal(a.state.busy,false);
+});
+test('four-path outcomes use counts and a visible warning in free and Pro views and reports',()=>{
+  for(const tier of ['free','pro']){
+    const a=app();a.state.access.tier=tier;const r=runSimulation(a.current());a.state.results.set(a.current().id,r);a.state.labResults=[{label:'Current plan',result:r}];
+    for(const html of [a.results(),a.dashboard(),a.lab()]){assert.match(html,/4 of 4/);assert.match(html,/Sample preview only/);assert.doesNotMatch(html,/100\.0%/);}
+    const report=a.reportText(a.current(),r);assert.match(report,/4 of 4/);assert.match(report,/SAMPLE PREVIEW ONLY/);assert.doesNotMatch(report,/Modeled readiness.*100\.0%/);
+  }
+});
+test('larger runs retain percentage summaries without the four-path warning',()=>{
+  const a=app();a.state.access.tier='pro';a.current().numberOfSimulations=100;const r=runSimulation(a.current());a.state.results.set(a.current().id,r);
+  assert.match(a.results(),/Monte Carlo readiness/);assert.match(a.results(),/\d+\.\d%/);assert.doesNotMatch(a.results(),/Sample preview only/);
+  assert.equal(format.shareLabel(.75,4),'3 of 4');assert.equal(format.shareLabel(.75,100),'75.0%');
+});

@@ -8,7 +8,7 @@ This repository contains five separate programs. Each program's code, data, and 
 | Mortgage vs. investment calculator | Python desktop (Tkinter) | [`Python/mortgage_investment/`](Python/mortgage_investment/) |
 | Fidelity fund ranker | Python command line | [`Python/fidelity_fund_ranker/`](Python/fidelity_fund_ranker/) |
 | Retirement Readiness Lab | Native Android | [`Android/RetirementReadinessLab/`](Android/RetirementReadinessLab/) |
-| Retirement Readiness Lab for Sites | Browser | [`Sites/RetirementReadinessLab/`](Sites/RetirementReadinessLab/) |
+| Retirement Forecast - Monte Carlo Simulator | Browser | [`Sites/RetirementReadinessLab/`](Sites/RetirementReadinessLab/) |
 
 See each program's README for requirements and run commands. The Python retirement simulator, Android app, and Sites page are separate implementations of the retirement planning concept.
 

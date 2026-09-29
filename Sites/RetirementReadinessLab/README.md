@@ -1,10 +1,10 @@
-# Retirement Readiness Lab for Sites
+# Retirement Forecast - Monte Carlo Simulator for Sites
 
 A browser port of the native Android app in `../../Android/RetirementReadinessLab/`. The web app runs as a static Sites page. Scenarios and calculations stay in the browser; no scenario data is sent to a server. Export JSON to retain plans outside browser storage.
 
 ## Included
 
-- A focused five-section assumptions editor, grouped navigation, mobile menu, and overview with direct links to the planning workflow. Inputs save without interrupting keyboard entry; simulations open the results view.
+- A focused five-section assumptions editor, grouped navigation, mobile menu, and overview with direct links to the planning workflow. Free visitors see a priced Pro comparison on Overview and a four-path explanation beside the readiness result; Pro visitors see neither upgrade prompt. Inputs save without interrupting keyboard entry; simulations open the results view.
 
 - Editable household, accounts, spending, income, Social Security, housing, healthcare, market, Roth conversion, and withdrawal assumptions. Spouse settings appear for married households; the maximum modeling age is in advanced settings and is not a lifespan prediction. Explanations beside all accounts, spending, income, Social Security, housing, healthcare, market, and withdrawal inputs open on click or tap and close with Escape. Stock-allocation settings start collapsed, and the age-67 benefit input links to the official my Social Security account.
 - Statement-based budget: monthly card purchases, direct bank spending, and cash withdrawals; per-month deductions for annual bills and housing/health premiums modeled separately; annual bills added once; optional retirement spending adjustment; calculation breakdown and explicit application to the plan. Duplicate months and excessive deductions are blocked. Uses the latest 12 months, with a short-sample warning. Draft edits preserve the applied spending and home-sale cost assumptions. Existing budgets and JSON backups remain compatible.
@@ -15,7 +15,7 @@ A browser port of the native Android app in `../../Android/RetirementReadinessLa
 - Balance summaries count failed endings as $0. Age-based balance bands use only observed paths through death or failure (including a zero at the failure age), show sample counts, and do not pad to the maximum modeling age. This reporting behavior intentionally differs from Android’s carried-forward balance bands; readiness and failure ages keep the same cashflow calculations.
 - Results charts and tables, text report, browser print/PDF, JSON backup and restore. Android scenario arrays can be imported.
 
-The web app defaults to four local Monte Carlo paths for anonymous and free users. Signed-in Pro subscribers default to 10,000 local paths and can choose a smaller count. The numeric seed is fixed and hidden; imports normalize old seeds to the fixed value. Four-path results move in 25% steps and are for preview only. The browser code is public and can be modified by a determined visitor, so this is a product access control rather than tamper-proof metering. Monthly budget editing uses category totals; imported line items remain in JSON until that category is edited. New budget adjustment fields are specific to the web app and may not be used by the Android app. The web result view currently omits Android's funding-threshold summary card. Results are recalculated after a page reload rather than stored.
+The web app defaults to four local Monte Carlo paths for anonymous and free users. Signed-in Pro subscribers default to 10,000 local paths and can choose a smaller count. The numeric seed is fixed and hidden; imports normalize old seeds to the fixed value. Four-path results are for preview only. Their outcome summaries, comparison rows, chart inspection, and reports show counts rather than readiness percentages, with a small-sample warning even for Pro accounts running four paths. The browser code is public and can be modified by a determined visitor, so this is a product access control rather than tamper-proof metering. Monthly budget editing uses category totals; imported line items remain in JSON until that category is edited. New budget adjustment fields are specific to the web app and may not be used by the Android app. The web result view currently omits Android's funding-threshold summary card. Results are recalculated after a page reload rather than stored.
 
 ## Verify
 
@@ -30,7 +30,7 @@ The Node tests include fixed outputs captured from the Android simulator and opt
 
 ## Public model disclosures
 
-The overview shows an educational-use disclosure below planning notes, and results show it below failure ages. Assumptions and budget show a shorter U.S.-only scope note. The scenario lab and reports omit the on-page disclosure. dist/methodology.html explains the readiness metric, 2026 U.S. federal model basis, important exclusions, and local scenario storage. Exported text reports repeat the disclosure. The linked repository license governs reuse of code; it is not visitor Terms of Use.
+The overview shows an educational-use disclosure below planning notes, and results show it below failure ages. Assumptions and budget show a shorter U.S.-only scope note. The scenario lab and reports omit the on-page disclosure. dist/methodology.html explains the readiness metric, 2026 U.S. federal model basis, important exclusions, and local scenario storage. Exported text reports repeat the disclosure. The public dist/license.html page reproduces the repository’s proprietary notice and does not link to GitHub. It governs reuse of code and content; it is not visitor Terms of Use.
 
 ## Owner traffic dashboard
 
@@ -55,3 +55,9 @@ Google uses Firebase Authentication, separate from Sites' built-in ChatGPT sign-
 To activate Google, create a Firebase project and web app in the [Firebase console](https://console.firebase.google.com/), enable **Authentication → Sign-in method → Google**, and add `retirementforecast.us`, `www.retirementforecast.us`, and `retirement-readiness-lab-web.rtsoliday123.chatgpt.site` to Firebase Authentication's authorized domains. In the Sites environment set these **public** web-app config values from Firebase project settings: `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID`, and `FIREBASE_APP_ID`. Set `FIREBASE_GOOGLE_ENABLED=true` only after the Google provider and authorized domains are ready. Redeploy the current Site version after changing environment variables.
 
 Test Google sign-in on the custom domain and the `chatgpt.site` origin before relying on it: sign in, start and cancel Checkout, then use a test subscription to verify the 10,000-path entitlement and portal access. Test existing ChatGPT Pro subscribers before and after explicit linking. The Worker token tests use generated signing keys and fake Stripe responses; they do not replace a live provider and Stripe test. If Firebase config is absent, or the Google enabled flag is false, the Google button stays hidden and existing ChatGPT billing continues to work.
+
+## Launch safeguards and customer help
+
+Scenario selection, reset, import, and assumption changes clear comparison and target results. A calculation revision guard discards worker responses for plans changed during a run. UI regression tests exercise the real app handlers with a minimal DOM/worker harness.
+
+Public `support.html`, `privacy.html`, and `terms.html` pages are linked from the footer and Plans & billing. Support is `rtsoliday@gmail.com`; refund requests are reviewed individually without an automatic refund promise. Cancellation instructions defer to the effective date shown in Stripe’s configured portal. The privacy notice describes local scenarios separately from authentication, billing, support email, and hosting traffic.

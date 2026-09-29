@@ -6,14 +6,19 @@
   <meta name="theme-color" content="#0e463c">
   <meta name="description" content="Explore U.S. retirement plans with Monte Carlo simulations of market returns, inflation, healthcare costs, and longevity.">
   <meta name="author" content="Robert Soliday">
-  <title>Retirement Readiness Lab | Monte Carlo retirement simulations</title>
-  <link rel="stylesheet" href="./style.css">
+  <title>Retirement Forecast - Monte Carlo Simulator</title>
+  <meta property="og:title" content="Retirement Forecast - Monte Carlo Simulator">
+  <meta name="application-name" content="Retirement Forecast - Monte Carlo Simulator">
+  <link rel="icon" type="image/svg+xml" href="./forecast-fan.svg?v=33">
+  <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png?v=33">
+  <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png?v=33">
+  <link rel="stylesheet" href="./style.css?v=33">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
 <div class="shell">
     <aside class="sidebar">
-      <div class="brand"><div class="brand-icon">R<span>↗</span></div><div><strong>Retirement <br>Readiness Lab</strong><small>Monte Carlo planner</small></div></div>
+      <div class="brand" aria-label="Retirement Forecast - Monte Carlo Simulator"><img class="brand-icon" src="./forecast-fan.svg?v=33" alt=""><div class="brand-name"><strong>Retirement<br>Forecast</strong><small>Monte Carlo Simulator</small></div></div>
       <button id="menu-toggle" class="secondary" aria-expanded="false" aria-controls="navigation">Menu ☰</button>
     <nav aria-label="Main navigation" id="navigation">
       <span class="nav-group">Your plan</span>
@@ -33,10 +38,10 @@
     <div class="workspace">
       <header class="topbar"><div class="topline"><span id="page-location" class="eyebrow">Overview</span><span class="privacy">● Saved on this device</span></div><div class="topactions"><div class="scenario-select-wrap"><label for="scenario-select">Current scenario</label><select id="scenario-select"></select></div><span id="result-state" class="run-state">Ready to simulate</span><button id="run-button" class="primary">Run simulation</button></div></header>
       <main id="main" tabindex="-1"></main>
-      <footer><span>© 2026 Robert Soliday. All rights reserved. <a href="https://github.com/rtsoliday/retirement/blob/master/LICENSE" rel="license noopener noreferrer" target="_blank">License terms</a></span><span>For U.S. retirement planning only. Educational estimates, not advice or guarantees. <a href="./methodology.html">Model scope &amp; limitations</a></span></footer>
+      <footer><span>© 2026 Robert Soliday. All rights reserved. <a href="./license.html" rel="license">License terms</a></span><span>For U.S. retirement planning only. Educational estimates, not advice or guarantees. <a href="./methodology.html">Model scope &amp; limitations</a></span><nav class="footer-links" aria-label="Support and policies"><a href="./support.html">Support</a><a href="./privacy.html">Privacy</a><a href="./terms.html">Terms of use</a><a href="./license.html" rel="license">Code license</a><a href="./methodology.html">Model scope</a></nav></footer>
     </div>
   </div>
   <input type="file" id="import-file" accept="application/json,.json" hidden>
-  <script type="module" src="./app.js"></script>
+  <script type="module" src="./app.js?v=33"></script>
 </body>
 </html>

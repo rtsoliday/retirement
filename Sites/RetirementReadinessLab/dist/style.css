@@ -125,3 +125,29 @@ button:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #4c
 
 /* Sign-in and account-linking controls. */
 .account-card{margin-bottom:18px}.account-card p{font-size:.84rem;line-height:1.6}.account-actions{margin-top:14px}.account-actions .secondary{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:10px 14px}.account-actions .subtle{padding:10px 14px}
+
+/* Pro discovery on Overview and beside free readiness results. */
+.upgrade-card{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(250px,.6fr);gap:28px;align-items:center;padding:25px 28px;border:1px solid #c9dfd3;border-radius:12px;background:#fff;box-shadow:0 3px 14px #20374808}
+.upgrade-eyebrow{display:block;color:#866026;font-size:.69rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+.upgrade-card h2{margin:8px 0 9px;color:#244e43;font-size:clamp(1.15rem,2vw,1.55rem);letter-spacing:-.035em}
+.upgrade-copy p{max-width:64ch;margin:0;color:#536b61;font-size:.83rem;line-height:1.6}
+.upgrade-offer{display:grid;gap:7px;padding-left:24px;border-left:1px solid #dce9e1;color:#365a4d}
+.upgrade-offer strong{font-size:.94rem}.upgrade-offer span{font-size:.84rem;font-weight:700}.upgrade-offer .primary{margin-top:8px;width:max-content}
+.upgrade-offer small,.readiness-upgrade small{color:#687b70;font-size:.71rem;line-height:1.5}
+.readiness-upgrade{display:grid;gap:10px;margin-top:22px;padding-top:20px;border-top:1px solid #dde8df}
+.readiness-upgrade strong{font-size:.82rem;color:#285e4c}.readiness-upgrade p{margin:0;font-size:.79rem;line-height:1.55;color:#566e60}
+.readiness-upgrade .primary{width:100%}
+@media(max-width:800px){.upgrade-card{grid-template-columns:1fr;gap:20px}.upgrade-offer{padding:18px 0 0;border-left:0;border-top:1px solid #dce9e1}}
+@media(max-width:480px){.upgrade-card{padding:22px}.upgrade-offer .primary{width:100%}}
+@media print{.upgrade-card,.readiness-upgrade{display:none!important}}
+
+/* Forecast fan brand mark. */
+.brand-icon{display:block;object-fit:contain;padding:0;letter-spacing:normal;background:transparent;border-radius:0}
+.brand-name{display:block;min-width:0}
+.brand-name strong{display:block}
+.disclosure-brand .brand-name small{display:block;margin-top:2px;color:#d5e8e2;font-size:.7rem;font-weight:500}
+
+/* Small-sample interpretation stays visible in print and exports. */
+.preview-warning{padding:15px 18px;margin:16px 0;border:1px solid #decfa8;border-radius:9px;background:#fff9ea;color:#594722;font-size:.83rem;line-height:1.6}
+.preview-warning p{margin:6px 0 0}.feature-card .preview-warning{max-width:54ch}.footer-links{display:flex;flex-wrap:wrap;gap:8px 16px}.disclosure-main a{overflow-wrap:anywhere}
+@media print{.preview-warning{background:white;border-color:#777;color:#222}}

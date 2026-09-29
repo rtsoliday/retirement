@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-label="Five branching forecast paths">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#e5f3ef"/>
+      <stop offset="1" stop-color="#edf3f8"/>
+    </linearGradient>
+  </defs>
+  <rect width="160" height="160" rx="37" fill="url(#background)"/>
+  <g fill="none" stroke="#13758a" stroke-width="7" stroke-linecap="round">
+    <path d="M23 80h22q36-12 88-59"/>
+    <path d="M45 80q45-16 88-31"/>
+    <path d="M45 80h88"/>
+    <path d="M45 80q45 16 88 31"/>
+    <path d="M45 80q36 12 88 59"/>
+  </g>
+  <g fill="#ec9b49">
+    <circle cx="133" cy="21" r="5"/>
+    <circle cx="133" cy="49" r="5"/>
+    <circle cx="133" cy="80" r="5"/>
+    <circle cx="133" cy="111" r="5"/>
+    <circle cx="133" cy="139" r="5"/>
+  </g>
+</svg>

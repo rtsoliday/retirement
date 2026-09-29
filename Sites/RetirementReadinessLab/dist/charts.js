@@ -1,3 +1,4 @@
+import {isPreviewResult,shareLabel} from './result-format.js';
 import {pathBounds,valueToFraction,fractionToValue} from './chart-data.js';
 const colors={funded:'#176b5b',alive:'#b27615',success:'#288445',strong:'#38bd60',failure:'#7f1d1d',clear:'#e53935',mean:'#25333e',range:'#dceee6'};
 const compact=v=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',notation:'compact',maximumFractionDigits:1}).format(v);
@@ -22,6 +23,8 @@ export function mountCharts(root,result,retirementAge){
 }
 function mount(el,result,age,dialog=null){
   const type=el.dataset.plot,canvas=el.querySelector('canvas'),ctx=canvas.getContext('2d'),slider=el.querySelector('input[type=range]'),output=el.querySelector('output');
+  const preview=isPreviewResult(result),count=result.provenance.simulationCount;
+  if(preview){el.querySelector('.chart-caption').textContent+=' Sample preview only: four lifetimes cannot estimate retirement readiness.';canvas.setAttribute('aria-label',canvas.getAttribute('aria-label')+' Sample preview only: four lifetimes.');}
   const survival=result.notFailedByAge||[],bands=result.balanceBands||[],points=result.pathPoints||[],mean=result.meanPath||[],bounds=pathBounds(points,mean),log=type==='paths';
   const start=age,end=type==='survival'?(survival.at(-1)?.age??age):type==='bands'?(bands.at(-1)?.age??age):age+bounds.maxYear;
   const min=log?bounds.min:type==='bands'?Math.min(0,...bands.map(p=>p.pessimistic)):0,max=log?bounds.max:type==='survival'?1:Math.max(1,...bands.map(p=>p.optimistic))*1.04;
@@ -31,15 +34,15 @@ function mount(el,result,age,dialog=null){
   const inset={left:68,right:16,top:22,bottom:44};
   const span=()=>({w:Math.max(1,width-inset.left-inset.right),h:Math.max(1,height-inset.top-inset.bottom)});
   function constrain(){const {w,h}=span();offsetX=Math.max(w*(1-scale),Math.min(0,offsetX));offsetY=Math.max(h*(1-scale),Math.min(0,offsetY));}
-  function description(a){if(type==='survival'){const p=survival.find(p=>p.age===a);return p?`Age ${a} · Still funded ${(100*p.notFailedShare).toFixed(1)}% · Still alive ${(100*p.aliveShare).toFixed(1)}%`:'';}if(type==='bands'){const p=bands.find(p=>p.age===a);return p?`Age ${a} · ${p.pathCount} ${p.pathCount===1?'path':'paths'} · Median ${money(p.median)} · 10th–90th ${money(p.pessimistic)}–${money(p.optimistic)}`:'';}const p=mean.find(p=>p.yearsInRetirement===a-age);return `Age ${a} · ${p?'Mean '+money(p.balance):'No positive balances observed'}`;}
+  function description(a){if(type==='survival'){const p=survival.find(p=>p.age===a);return p?`Age ${a} · Still funded ${shareLabel(p.notFailedShare,count)} · Still alive ${shareLabel(p.aliveShare,count)}`:'';}if(type==='bands'){const p=bands.find(p=>p.age===a);return p?`Age ${a} · ${p.pathCount} ${p.pathCount===1?'path':'paths'} · Median ${money(p.median)} · 10th–90th ${money(p.pessimistic)}–${money(p.optimistic)}`:'';}const p=mean.find(p=>p.yearsInRetirement===a-age);return `Age ${a} · ${p?'Mean '+money(p.balance):'No positive balances observed'}`;}
   function draw(){
     const {w,h}=span(),x=a=>inset.left+(a-start)/Math.max(1,end-start)*w*scale+offsetX,y=v=>inset.top+(1-valueToFraction(v,min,max,log))*h*scale+offsetY;
     ctx.clearRect(0,0,width,height);ctx.fillStyle='#fff';ctx.fillRect(0,0,width,height);ctx.font='11px system-ui';ctx.lineWidth=1;
-    for(let i=0;i<5;i++){const py=inset.top+h-i*h/4,f=1-(py-inset.top-offsetY)/(h*scale),v=fractionToValue(f,min,max,log);ctx.strokeStyle='#e2e8e9';ctx.beginPath();ctx.moveTo(inset.left,py);ctx.lineTo(inset.left+w,py);ctx.stroke();ctx.fillStyle='#60757d';ctx.textAlign='right';ctx.fillText(type==='survival'?Math.round(v*100)+'%':compact(v),inset.left-9,py+4);}
+    for(let i=0;i<5;i++){const py=inset.top+h-i*h/4,f=1-(py-inset.top-offsetY)/(h*scale),v=fractionToValue(f,min,max,log);ctx.strokeStyle='#e2e8e9';ctx.beginPath();ctx.moveTo(inset.left,py);ctx.lineTo(inset.left+w,py);ctx.stroke();ctx.fillStyle='#60757d';ctx.textAlign='right';ctx.fillText(type==='survival'?(preview?String(Math.round(v*count)):Math.round(v*100)+'%'):compact(v),inset.left-9,py+4);}
     const ageLow=start-offsetX/(w*scale)*(end-start),ageHigh=start+(w-offsetX)/(w*scale)*(end-start),interval=(ageHigh-ageLow)>35&&width<520?10:5;
     const ticks=[Math.ceil(ageLow),...Array.from({length:Math.max(0,Math.floor(ageHigh/interval)-Math.ceil(ageLow/interval)+1)},(_,i)=>(Math.ceil(ageLow/interval)+i)*interval),Math.floor(ageHigh)];let last=-Infinity;
     ctx.textAlign='center';for(const a of [...new Set(ticks)].sort((a,b)=>a-b)){const px=x(a);if(px-last<30)continue;last=px;ctx.fillStyle='#60757d';ctx.fillText(String(a),px,inset.top+h+19);}
-    ctx.fillText('Age',inset.left+w/2,height-5);ctx.textAlign='left';ctx.fillText(type==='survival'?'Share of simulated lifetimes':log?'Portfolio balance · log scale':'Portfolio balance · linear scale',inset.left,12);
+    ctx.fillText('Age',inset.left+w/2,height-5);ctx.textAlign='left';ctx.fillText(type==='survival'?(preview?'Sample lifetimes (out of '+count+')':'Share of simulated lifetimes'):log?'Portfolio balance · log scale':'Portfolio balance · linear scale',inset.left,12);
     ctx.save();ctx.beginPath();ctx.rect(inset.left,inset.top,w,h);ctx.clip();
     function line(rows,xKey,yKey,color,dashed=false){ctx.strokeStyle=color;ctx.lineWidth=2;ctx.setLineDash(dashed?[6,4]:[]);ctx.beginPath();rows.forEach((p,i)=>{const px=x(xKey(p)),py=y(p[yKey]);i?ctx.lineTo(px,py):ctx.moveTo(px,py);});ctx.stroke();ctx.setLineDash([]);if(rows.length===1){ctx.fillStyle=color;ctx.beginPath();ctx.arc(x(xKey(rows[0])),y(rows[0][yKey]),3,0,Math.PI*2);ctx.fill();}}
     if(type==='survival'){line(survival,p=>p.age,'notFailedShare',colors.funded);line(survival,p=>p.age,'aliveShare',colors.alive,true);}
