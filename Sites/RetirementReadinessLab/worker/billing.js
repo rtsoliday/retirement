@@ -1,6 +1,6 @@
 // Stripe grants subscriber access; verified owner identities have complimentary Pro access.
 // Financial scenarios never reach this Worker.
-import { chatgptPrincipal, firebasePrincipal, principal as requestPrincipal, OWNER_CHATGPT_USER_ID, OWNER_GOOGLE_EMAIL, OWNER_FIREBASE_UID } from './auth.js';
+import { chatgptPrincipal, firebasePrincipal, principal as requestPrincipal, IdentityKeysUnavailableError, OWNER_CHATGPT_USER_ID, OWNER_GOOGLE_EMAIL, OWNER_FIREBASE_UID } from './auth.js';
 const FREE_PATHS = 4;
 const PRO_PATHS = 10000;
 const ACTIVE_STATUSES = new Set(['active', 'trialing']);
@@ -10,6 +10,12 @@ function json(body, status = 200) {
     'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
   } });
+}
+function authenticationFailure(error, message) {
+  // Do not return an identity or entitlement from an unverified token.
+  return error instanceof IdentityKeysUnavailableError
+    ? json({ error: 'Identity verification is temporarily unavailable. Please retry.' }, 503)
+    : json({ error: message }, 401);
 }
 function priceIds(env) {
   const key = env.STRIPE_SECRET_KEY || '';
@@ -143,7 +149,7 @@ async function linkAccounts(request, env) {
   const chatgpt = chatgptPrincipal(request);
   if (!chatgpt) return json({ error: 'Sign in with ChatGPT before linking accounts' }, 401);
   let firebase;
-  try { firebase = await firebasePrincipal(request, env); } catch { return json({ error: 'Sign in with Google again' }, 401); }
+  try { firebase = await firebasePrincipal(request, env); } catch (error) { return authenticationFailure(error, 'Sign in with Google again'); }
   if (!firebase) return json({ error: 'Sign in with Google before linking accounts' }, 401);
   try {
     const [chatgptMatches, firebaseMatches] = await Promise.all([customers(env, chatgpt), customers(env, firebase)]);
@@ -173,7 +179,7 @@ async function linkAccounts(request, env) {
 }
 export async function billing(request, env, pathname, isOwner = false) {
   let user;
-  try { user = await requestPrincipal(request, env); } catch { return json({ error: 'Sign in again to verify your account' }, 401); }
+  try { user = await requestPrincipal(request, env); } catch (error) { return authenticationFailure(error, 'Sign in again to verify your account'); }
   if (/^(sk|rk)_test_/.test(env.STRIPE_SECRET_KEY || '') && !isOwnerAccount(user) && !(isOwner && user?.kind === 'chatgpt')) {
     if (pathname === '/api/billing/status') return json({ tier: 'free', maxPaths: FREE_PATHS, signedIn: Boolean(user), checkoutAvailable: false, accountProvider: user?.provider || null });
     return json({ error: 'Test billing is available only to the site owner' }, 403);

@@ -238,6 +238,24 @@ test('initial Stripe outages retain authenticated identity and the stored custom
   assert.ok(requests.every(r=>r.headers['x-retirement-customer']==='cus_123'));
 });
 
+test('identity-service 503 preserves verified Google access only for the remaining grace period',async()=>{
+  let failing=false;const session=new Map(),clock={now:1000};
+  const fetch=async()=>failing?Response.json({error:'Identity verification is temporarily unavailable. Please retry.'},{status:503}):Response.json({tier:'pro',signedIn:true,accountKey:'firebase:a',accountProvider:'google',billingCustomerId:'cus_paid'});
+  const a=app(null,{fetch,session,clock});await a.loadAccess();
+  const result=runSimulation({...a.current(),numberOfSimulations:4});a.state.results.set(a.current().id,result);
+  failing=true;a.advanceTime(60000);
+  for(let i=0;i<2;i++){
+    await a.loadAccess();assert.equal(a.isPro(),true);assert.equal(a.state.access.signedIn,true);assert.equal(a.state.access.accountKey,'firebase:a');
+    assert.doesNotMatch(a.state.message,/Sign in again/);assert.equal(JSON.parse(session.get('retirement-billing-reference')).customerId,'cus_paid');
+  }
+  a.advanceTime(240000);assert.equal(a.isPro(),false);assert.equal(a.state.results.get(a.current().id),result);
+  await a.loadAccess();assert.equal(a.state.access.accountKey,'firebase:a');assert.equal(JSON.parse(session.get('retirement-billing-reference')).customerId,'cus_paid');
+  failing=false;await a.loadAccess();assert.equal(a.isPro(),true);assert.equal(a.state.message,'');
+  // A new page has no confirmed entitlement; the same outage cannot grant Pro.
+  failing=true;const fresh=app(null,{fetch,session});await fresh.loadAccess();assert.equal(fresh.isPro(),false);
+  assert.equal(fresh.state.access.accountKey,undefined);assert.equal(JSON.parse(session.get('retirement-billing-reference')).customerId,'cus_paid');
+});
+
 test('repeated outages preserve known identity for Free and expired Pro access',async()=>{
   for(const tier of ['free','pro'])for(const failure of ['network','502']){
     let failing=false;const clock={now:1000},session=new Map();

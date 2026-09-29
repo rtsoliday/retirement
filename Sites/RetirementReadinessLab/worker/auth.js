@@ -7,6 +7,12 @@ const encoder = new TextDecoder();
 let cachedKeys = new Map();
 let cacheUntil = 0;
 
+// Key-service failures cannot establish whether a token is valid or invalid.
+// Keep them distinct from rejected credentials at the HTTP boundary.
+export class IdentityKeysUnavailableError extends Error {
+  constructor() { super('Identity verification is temporarily unavailable. Please retry.'); this.name = 'IdentityKeysUnavailableError'; }
+}
+
 function decodePart(part) {
   if (!/^[A-Za-z0-9_-]+$/.test(part)) throw new Error('Invalid identity token');
   const value = part.replace(/-/g, '+').replace(/_/g, '/');
@@ -18,20 +24,24 @@ function firebaseConfigured(env) {
 }
 async function firebaseKey(kid, env) {
   if (!env.FIREBASE_JWKS_FETCH && Date.now() < cacheUntil && cachedKeys.has(kid)) return cachedKeys.get(kid);
-  const response = await (env.FIREBASE_JWKS_FETCH || fetch)(JWKS_URL, { signal: AbortSignal.timeout(10000) });
-  if (!response.ok) throw new Error('Identity keys unavailable');
-  const payload = await response.json();
-  if (!Array.isArray(payload.keys)) throw new Error('Identity keys unavailable');
   const next = new Map();
-  for (const jwk of payload.keys) {
-    if (jwk.kty !== 'RSA' || (jwk.alg && jwk.alg !== 'RS256') || typeof jwk.kid !== 'string') continue;
-    next.set(jwk.kid, await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']));
-  }
-  if (!env.FIREBASE_JWKS_FETCH) {
-    cachedKeys = next;
-    const maxAge = Number(response.headers.get('cache-control')?.match(/max-age=(\d+)/)?.[1] || 300);
-    cacheUntil = Date.now() + Math.min(Math.max(maxAge, 60), 3600) * 1000;
-  }
+  try {
+    const response = await (env.FIREBASE_JWKS_FETCH || fetch)(JWKS_URL, { signal: AbortSignal.timeout(10000) });
+    if (!response.ok) throw new Error('Identity keys unavailable');
+    const payload = await response.json();
+    if (!Array.isArray(payload?.keys)) throw new Error('Invalid identity keys response');
+    for (const jwk of payload.keys) {
+      if (!jwk || jwk.kty !== 'RSA' || (jwk.alg && jwk.alg !== 'RS256') || typeof jwk.kid !== 'string' || !jwk.kid) continue;
+      next.set(jwk.kid, await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']));
+    }
+    if (!next.size) throw new Error('No usable identity keys');
+    if (!env.FIREBASE_JWKS_FETCH) {
+      cachedKeys = next;
+      const maxAge = Number(response.headers.get('cache-control')?.match(/max-age=(\d+)/)?.[1] || 300);
+      cacheUntil = Date.now() + Math.min(Math.max(maxAge, 60), 3600) * 1000;
+    }
+  } catch { throw new IdentityKeysUnavailableError(); }
+  // A successfully loaded key set that excludes this token's key is a rejection.
   const key = next.get(kid);
   if (!key) throw new Error('Unrecognized identity key');
   return key;

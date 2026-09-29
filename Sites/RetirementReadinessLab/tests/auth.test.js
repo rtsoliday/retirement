@@ -119,6 +119,52 @@ test('forged, expired, wrong-project and unsupported tokens never fall back to C
   assert.equal(fixture.writes.length, 0);
 });
 
+test('Google key-service failures return 503 without asserting identity or calling Stripe',async()=>{
+  const bearer=await token();
+  const failures=[
+    async()=>{throw new TypeError('Network unreachable');},
+    async()=>{throw new DOMException('Timed out','TimeoutError');},
+    async()=>new Response('Unavailable',{status:503}),
+    async()=>new Response('invalid JSON'),
+    async()=>Response.json({keys:null}),
+    async()=>Response.json({keys:[]}),
+    async()=>Response.json({keys:[{kty:'RSA',alg:'RS256',kid:'test-kid'}]}),
+  ];
+  for(const unavailable of failures)for(const route of ['status','checkout','portal','link']){
+    const fixture=stripeFixture();fixture.env.FIREBASE_JWKS_FETCH=unavailable;
+    const response=await worker.fetch(request(`/api/billing/${route}`,{user:'chatgpt-user',bearer,method:route==='status'?'GET':'POST',...(route==='checkout'?{body:{interval:'monthly'}}:{})}),fixture.env);
+    assert.equal(response.status,503,route);const data=await response.json();
+    assert.deepEqual(Object.keys(data),['error']);assert.match(data.error,/temporarily unavailable/);assert.doesNotMatch(data.error,/Sign in again/);
+    assert.equal(response.headers.get('cache-control'),'no-store');assert.equal(fixture.writes.length,0);
+  }
+});
+
+test('a key-service outage during the second account-link verification also returns 503',async()=>{
+  const fixture=stripeFixture();let checks=0;
+  fixture.env.FIREBASE_JWKS_FETCH=async()=>++checks===1?Response.json({keys:[jwk]}):new Response('Unavailable',{status:503});
+  const response=await worker.fetch(request('/api/billing/link',{user:'chatgpt-user',bearer:await token(),method:'POST'}),fixture.env);
+  assert.equal(checks,2);assert.equal(response.status,503);assert.equal(fixture.writes.length,0);
+});
+
+test('invalid claims and unknown signing keys remain authentication failures',async()=>{
+  const fixture=stripeFixture();let lookups=0;
+  fixture.env.FIREBASE_JWKS_FETCH=async()=>{lookups++;throw Error('Unavailable');};
+  for(const bearer of [await token({exp:1}),await token({aud:'wrong-project'}),'not.a.token']){
+    const response=await worker.fetch(request('/api/billing/status',{user:'chatgpt-user',bearer}),fixture.env);assert.equal(response.status,401);
+  }
+  assert.equal(lookups,0);
+  fixture.env.FIREBASE_JWKS_FETCH=async()=>Response.json({keys:[{...jwk,kid:'different-key'}]});
+  const response=await worker.fetch(request('/api/billing/status',{user:'chatgpt-user',bearer:await token()}),fixture.env);
+  assert.equal(response.status,401);assert.equal(fixture.writes.length,0);
+});
+
+test('ChatGPT-only billing continues without Google keys during a key-service outage',async()=>{
+  const fixture=stripeFixture([{id:'cus_paid',metadata:{retirement_site_user_id:'chatgpt-user'},paid:true}]);let lookups=0;
+  fixture.env.FIREBASE_JWKS_FETCH=async()=>{lookups++;throw Error('Unavailable');};
+  const response=await worker.fetch(request('/api/billing/status',{user:'chatgpt-user'}),fixture.env);
+  assert.equal(response.status,200);assert.equal((await response.json()).tier,'pro');assert.equal(lookups,0);
+});
+
 test('account linking requires both identities and same origin, then shares one paid customer', async () => {
   const fixture = stripeFixture([{ id: 'cus_paid', metadata: { retirement_site_user_id: 'chatgpt-user' }, paid: true }]);
   const bearer = await token();
