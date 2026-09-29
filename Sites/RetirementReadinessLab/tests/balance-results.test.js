@@ -37,7 +37,7 @@ test('successful lifetime balances stop at last living age rather than model cap
   assert.equal(r.medianEndingBalance,path.yearEnd.at(-1));
 });
 test('mixed simulation bands are nonnegative, do not outlive sampled lifetimes, and retain original failure statistics',()=>{
-  const s=baseScenario();s.seed=REFERENCE_SEED;s.numberOfSimulations=50;
+  const s=baseScenario();s.household.currentAge=50;s.seed=REFERENCE_SEED;s.numberOfSimulations=50;
   const r=runSimulation(s);assert.equal(r.successProbability,.98);assert.equal(r.medianFailureAge,78);
   assert.ok(r.balanceBands.at(-1).age<=r.notFailedByAge.at(-1).age);
   assert.ok(r.balanceBands.at(-1).age<s.household.targetEndAge);

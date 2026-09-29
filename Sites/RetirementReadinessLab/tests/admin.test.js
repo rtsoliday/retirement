@@ -1,3 +1,5 @@
+import vm from 'node:vm';
+import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker, { analyticsQuery, normalizeDaily, utcWindow } from '../worker/index.js';
@@ -76,4 +78,29 @@ test('query uses a fixed zone and server generated dates', () => {
   assert.deepEqual(utcWindow(7, new Date('2026-09-28T12:00:00Z')), { start: '2026-09-22', end: '2026-09-29' });
   assert.match(analyticsQuery('2026-09-22', '2026-09-29'), /19fc99ed5a9bc17308d434c3c7d959aa/);
   assert.equal(normalizeDaily([], 7, new Date('2026-09-28T12:00:00Z')).length, 7);
+});
+
+
+function adminBrowser(){
+  const elements=new Map();
+  const element=key=>{if(!elements.has(key))elements.set(key,{textContent:'',hidden:true,disabled:false,classList:{toggle(){}},listeners:{},setAttribute(){},addEventListener(event,fn){this.listeners[event]=fn;},replaceChildren(){},append(){},dataset:{}});return elements.get(key);};
+  const days=[7,30].map(n=>({...element('days'+n),dataset:{days:String(n)}})),pending=[];
+  const context=vm.createContext({Intl,Date,fetch:url=>new Promise((resolve,reject)=>pending.push({url,resolve,reject})),document:{querySelector:element,querySelectorAll:()=>days,createElement:()=>({dataset:{},style:{},setAttribute(){},append(){}})}});
+  vm.runInContext(readFileSync(new URL('../dist/admin.js',import.meta.url),'utf8'),context);
+  const data=n=>({series:[{date:'2026-09-29',pageViews:n,uniqueIps:n}],pageViews:n,peakDailyUniqueIps:n,start:'2026-09-29'});
+  return {element,days,pending,data};
+}
+
+test('stale analytics successes, HTTP errors and network errors cannot replace the selected range',async()=>{
+  for(const outcome of ['success','http','network']){
+    const a=adminBrowser();a.days[1].listeners.click();a.pending[1].resolve(Response.json(a.data(30)));await new Promise(setImmediate);
+    if(outcome==='network')a.pending[0].reject(Error('offline'));else a.pending[0].resolve(outcome==='success'?Response.json(a.data(7)):Response.json({error:'old failure'},{status:502}));
+    await new Promise(setImmediate);assert.equal(a.element('#total-views').textContent,'30');assert.equal(a.element('#dashboard').hidden,false);assert.equal(a.element('#status').textContent,'Cloudflare traffic loaded.');
+  }
+});
+
+test('a stale analytics completion cannot reenable refresh while the latest request is pending',async()=>{
+  const a=adminBrowser();a.days[1].listeners.click();a.pending[0].resolve(Response.json(a.data(7)));await new Promise(setImmediate);
+  assert.equal(a.element('#refresh').disabled,true);assert.equal(a.element('#total-views').textContent,'');
+  a.pending[1].resolve(Response.json(a.data(30)));await new Promise(setImmediate);assert.equal(a.element('#refresh').disabled,false);
 });

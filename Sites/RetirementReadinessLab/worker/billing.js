@@ -86,10 +86,10 @@ async function access(env, value, sessionId = null, customerHint = null) {
     }
   }
   knownCustomer ||= await verifiedCustomer(customerHint);
-  if (knownCustomer) return { pro: Boolean(await activeSubscription(env, knownCustomer.id)), customerId: knownCustomer.id };
+  if (knownCustomer && await activeSubscription(env, knownCustomer.id)) return { pro: true, customerId: knownCustomer.id };
   const matches = await customers(env, user);
-  for (const customer of matches) if (await activeSubscription(env, customer.id)) return { pro: true, customerId: customer.id };
-  return { pro: false, customerId: matches[0]?.id || null };
+  for (const customer of matches) if (customer.id !== knownCustomer?.id && await activeSubscription(env, customer.id)) return { pro: true, customerId: customer.id };
+  return { pro: false, customerId: knownCustomer?.id || matches[0]?.id || null };
 }
 async function status(request, env, user, isOwner = false) {
   if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
@@ -153,15 +153,21 @@ async function linkAccounts(request, env) {
   if (!firebase) return json({ error: 'Sign in with Google before linking accounts' }, 401);
   try {
     const [chatgptMatches, firebaseMatches] = await Promise.all([customers(env, chatgpt), customers(env, firebase)]);
-    const chatgptCustomer = chatgptMatches[0], firebaseCustomer = firebaseMatches[0];
-    let chosen = chatgptCustomer || firebaseCustomer;
-    let other = null;
-    if (chatgptCustomer && firebaseCustomer && chatgptCustomer.id !== firebaseCustomer.id) {
-      const [chatgptPro, firebasePro] = await Promise.all([activeSubscription(env, chatgptCustomer.id), activeSubscription(env, firebaseCustomer.id)]);
-      if (chatgptPro && firebasePro) return json({ error: 'Both accounts have subscriptions. Contact support before linking them.' }, 409);
-      chosen = firebasePro ? firebaseCustomer : chatgptCustomer;
-      other = chosen.id === chatgptCustomer.id ? firebaseCustomer : chatgptCustomer;
+    // Stripe Search may lag behind Checkout or a metadata change. Include
+    // direct hints only after verifying ownership by either authenticated user.
+    const hints=[request.headers.get('x-retirement-customer'),...(request.headers.get('x-retirement-link-customers')||'').split(',')];
+    const direct=[];
+    for(const id of [...new Set(hints)].filter(id=>typeof id==='string'&&/^cus_[A-Za-z0-9]{1,200}$/.test(id)).slice(0,5)){
+      const customer=await stripe(env,`customers/${id}`,null,'GET',null,true);
+      if(customer&&!customer.deleted&&(customer.metadata?.[metadataKey(chatgpt)]===chatgpt.id||customer.metadata?.[metadataKey(firebase)]===firebase.id))direct.push(customer);
     }
+    const matches = [...new Map([...chatgptMatches, ...firebaseMatches,...direct].map(c => [c.id, c])).values()];
+    const paid = [];
+    // Search order does not identify the customer's subscription. Check every
+    // record, including duplicates left behind by abandoned checkouts.
+    for (const customer of matches) if (await activeSubscription(env, customer.id)) paid.push(customer);
+    if (paid.length > 1) return json({ error: 'Multiple billing accounts have subscriptions. Contact support before linking them.' }, 409);
+    let chosen = paid[0] || matches[0];
     if (!chosen) {
       chosen = await stripe(env, 'customers', {
         'metadata[retirement_site_user_id]': chatgpt.id,
@@ -173,7 +179,14 @@ async function linkAccounts(request, env) {
         'metadata[retirement_firebase_uid]': firebase.id,
       }, 'POST');
     }
-    if (other) await stripe(env, `customers/${other.id}`, { [`metadata[${other.id === chatgptCustomer.id ? 'retirement_site_user_id' : 'retirement_firebase_uid'}]`]: '' }, 'POST');
+    // Remove only these verified identities from the other, unpaid records.
+    for (const customer of matches) {
+      if (customer.id === chosen.id) continue;
+      const params = {};
+      if (customer.metadata?.retirement_site_user_id === chatgpt.id) params['metadata[retirement_site_user_id]'] = '';
+      if (customer.metadata?.retirement_firebase_uid === firebase.id) params['metadata[retirement_firebase_uid]'] = '';
+      if (Object.keys(params).length) await stripe(env, `customers/${customer.id}`, params, 'POST');
+    }
     return json({ linked: true, billingCustomerId: chosen.id });
   } catch { return json({ error: 'Could not link accounts. Please try again.' }, 502); }
 }

@@ -8,27 +8,28 @@ import {runSimulation} from '../dist/engine.js';
 
 // Execute the actual app and event handlers. Only browser IO is replaced;
 // workers stay pending so changes during calculations can be reproduced.
-function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={fail:false},clock={now:Date.now()},session=new Map(),location={search:'',pathname:'/',hash:''},identity={accountKey:null},params=URLSearchParams}={}){
-  const elements=new Map(),workers=[],timers=new Map();let nextTimer=0;
-  let stored=saved===null?null:JSON.stringify(saved);
+function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={fail:false},clock={now:Date.now()},session=new Map(),location={search:'',pathname:'/',hash:''},identity={accountKey:null},params=URLSearchParams,confirm=()=>true,rawStorage}={}){
+  const elements=new Map(),workers=[],timers=new Map(),downloadBlobs=new Map(),downloads=[];let nextTimer=0;
+  let stored=rawStorage===undefined?(saved===null?null:JSON.stringify(saved)):rawStorage;
   function element(selector){
     if(['#advanced-model','#allocation-settings'].includes(selector))return null;
     if(!elements.has(selector))elements.set(selector,{innerHTML:'',textContent:'',dataset:{},listeners:{},classList:{toggle(){},remove(){}},addEventListener(name,fn){this.listeners[name]=fn;},querySelectorAll(){return [];},setAttribute(){},focus(){},scrollIntoView(){},insertAdjacentHTML(){},remove(){elements.delete(selector);}});
     return elements.get(selector);
   }
-  const context=vm.createContext({...model,...format,structuredClone,Intl,URLSearchParams:params,URL,console,Date:class extends Date{static now(){return clock.now;}},
-    location,history:{replaceState(_state,_title,url){const next=new URL(url,'https://example.test');location.search=next.search;location.hash=next.hash;}},confirm:()=>true,
+  const document={activeElement:null,querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement(){return {click(){downloads.push({name:this.download,blob:downloadBlobs.get(this.href)});}};}};
+  const context=vm.createContext({...model,...format,structuredClone,Intl,URLSearchParams:params,Blob,URL:class extends URL{static createObjectURL(blob){const url='blob:test-'+downloadBlobs.size;downloadBlobs.set(url,blob);return url;}static revokeObjectURL(url){downloadBlobs.delete(url);}},console,Date:class extends Date{static now(){return clock.now;}},
+    location,history:{replaceState(_state,_title,url){const next=new URL(url,'https://example.test');location.search=next.search;location.hash=next.hash;}},confirm,
     setTimeout(fn,delay){const id=++nextTimer;timers.set(id,{fn,at:clock.now+delay});return id;},clearTimeout(id){timers.delete(id);},
     sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value)},socialState:()=>({...identity}),
     localStorage:{getItem:()=>stored,setItem(key,value){if(storage.fail)throw new Error('QuotaExceededError');stored=value;}},window:{addEventListener(){},scrollTo(){}},
-    document:{querySelector:element,querySelectorAll:()=>[],addEventListener(){}},
+    document,
     chartCard:()=>'',mountCharts(){},disposeCharts(){},initializeSocialAuth:()=>new Promise(()=>{}),fetch,authHeaders:async()=>({}),
     Worker:class{constructor(){workers.push(this);}postMessage(data){this.data=data;}terminate(){this.terminated=true;}},
   });
   const source=readFileSync(new URL('../dist/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replaceAll('import.meta.url',JSON.stringify(new URL('../dist/app.js',import.meta.url).href));
-  vm.runInContext(source.replace('function render(){','let renderCount=0;function render(){renderCount++;'),context);
-  const api=vm.runInContext('({state,run,runLab,runDecision,results,dashboard,lab,budget,billingView,reportText,current,persist,loadAccess,isPro,effectivePaths,syncAuthState,linkAccounts,renders:()=>renderCount})',context);
-  return {...api,workers,element,timers,advanceTime(ms){clock.now+=ms;for(const [id,timer] of [...timers])if(timer.at<=clock.now){timers.delete(id);timer.fn();}},saved:()=>JSON.parse(stored),change:(selector,target)=>element(selector).listeners.change({target}),
+  vm.runInContext(source.replace('function render({preserveEditor=false}={}){','let renderCount=0;function render({preserveEditor=false}={}){renderCount++;'),context);
+  const api=vm.runInContext('({state,setup,run,runLab,runDecision,results,dashboard,lab,budget,billingView,reportText,current,persist,loadAccess,isPro,effectivePaths,syncAuthState,linkAccounts,renders:()=>renderCount})',context);
+  return {...api,workers,element,timers,document,downloads,stored:()=>stored,advanceTime(ms){clock.now+=ms;for(const [id,timer] of [...timers])if(timer.at<=clock.now){timers.delete(id);timer.fn();}},saved:()=>JSON.parse(stored),change:(selector,target)=>element(selector).listeners.change({target}),
     click:(action,extra={})=>{const el={dataset:{action,...extra}};return element('#main').listeners.click({target:{closest:selector=>selector==='[data-action]'?el:null}});}};
 }
 function seedExploration(a){a.state.labResults=[{label:'Old plan',result:null}];a.state.decision={targetReadiness:.8,simulationCount:180};}
@@ -42,6 +43,148 @@ test('malformed backup structures cannot replace saved scenarios',async()=>{
     await a.change('#import-file',{files:[{text:async()=>JSON.stringify([bad])}],value:'backup.json'});
     assert.match(a.state.message,/Error:/);assert.equal(JSON.stringify(a.state.scenarios),before);assert.deepEqual(a.saved(),original);
     assert.doesNotThrow(()=>a.budget());assert.doesNotThrow(()=>a.reportText(a.current()));
+  }
+});
+
+test('malformed scenario entries and sections cannot be hidden by defaults during import',async()=>{
+  const entries=[null,42,'invalid',true,[],{household:null},{accounts:[]},{budget:'invalid'},{household:null,currentAge:50}];
+  for(const bad of entries){
+    const original={scenarios:model.sampleScenarios(),selectedId:'base-plan'},a=app(original),before=JSON.stringify(a.state.scenarios);
+    await a.change('#import-file',{files:[{text:async()=>JSON.stringify([model.baseScenario(),bad])}],value:'backup.json'});
+    assert.match(a.state.message,/Error:/);assert.equal(JSON.stringify(a.state.scenarios),before);assert.deepEqual(a.saved(),original);
+  }
+});
+
+test('corrupt saved scenario structures do not crash startup or get overwritten by Pro defaults',()=>{
+  const original={scenarios:[null],selectedId:'old'},a=app(original);
+  assert.match(a.state.message,/Saved plans could not be loaded/);
+  a.state.scenarios.forEach(model.applyProSimulationDefault);assert.equal(a.persist(false),false);
+  assert.deepEqual(a.saved(),original);
+});
+
+test('unreadable saved plans survive navigation and edits until replacement is explicitly confirmed',async()=>{
+  const original={scenarios:[model.baseScenario(),null],selectedId:'base-plan'};
+  let approved=false;
+  const a=app(original,{confirm:()=>approved});
+  await a.click('start-plan');
+  await a.click('select-scenario',{id:'later-retirement'});
+  a.change('#scenario-select',{value:'base-plan'});
+  a.change('#main',{dataset:{field:'accounts.pretax',type:'money'},value:'123456'});
+  a.change('#main',{dataset:{budget:'annualPropertyTaxes'},value:'1000'});
+  assert.deepEqual(a.saved(),original);
+  assert.match(a.dashboard(),/export-unreadable-backup/);
+  assert.match(a.dashboard(),/replace-unreadable-plans/);
+  await a.click('replace-unreadable-plans');
+  assert.deepEqual(a.saved(),original);
+  approved=true;await a.click('replace-unreadable-plans');
+  assert.equal(a.saved().scenarios[0].accounts.pretax,123456);
+  assert.equal(a.saved().scenarios[0].budget.annualPropertyTaxes,1000);
+  assert.doesNotMatch(a.dashboard(),/Saved plans could not be loaded/);
+});
+
+test('failed recovery replacement preserves the unreadable backup and can be retried',async()=>{
+  const original={scenarios:[null]},storage={fail:true},a=app(original,{storage});
+  await a.click('replace-unreadable-plans');
+  assert.deepEqual(a.saved(),original);
+  assert.match(a.dashboard(),/could not be saved/);
+  assert.match(a.dashboard(),/replace-unreadable-plans/);
+  storage.fail=false;await a.click('replace-unreadable-plans');
+  assert.equal(a.saved().scenarios.length,3);
+  assert.doesNotMatch(a.dashboard(),/could not be saved|replace-unreadable-plans/);
+});
+
+test('recovery export preserves the exact original backup even when JSON parsing fails',async()=>{
+  const rawStorage='  {"scenarios": [broken JSON\n',a=app(null,{rawStorage});
+  await a.click('start-plan');await a.click('export-unreadable-backup');
+  assert.equal(a.downloads.length,1);
+  assert.equal(a.downloads[0].name,'retirement-unreadable-backup.json');
+  assert.equal(await a.downloads[0].blob.text(),rawStorage);
+  assert.equal(a.stored(),rawStorage);
+});
+
+test('a valid explicit import can replace unreadable saved plans',async()=>{
+  const a=app({scenarios:[null]}),s=model.baseScenario();s.id='recovered';
+  await a.change('#import-file',{files:[{text:async()=>JSON.stringify([s])}],value:'backup.json'});
+  assert.equal(a.saved().scenarios[0].id,'recovered');
+  assert.doesNotMatch(a.dashboard(),/Saved plans could not be loaded/);
+});
+
+test('stored budgets and primitive types are checked before any view can render them',()=>{
+  const edits=[s=>s.budget.monthlyBudgets=null,s=>s.budget.monthlyBudgets=[null],s=>s.budget.monthlyBudgets=[{month:'2026-01',creditCardBills:[null]}],s=>s.budget.monthlyBudgets=[{month:'2026-01',checkingSavingsBills:{}}],s=>s.accounts.pretax='800000',s=>s.spending.annualBaseSpending=null];
+  for(const edit of edits){
+    const bad=model.baseScenario();edit(bad);
+    const original={scenarios:[model.baseScenario(),bad],selectedId:bad.id},a=app(original);
+    assert.match(a.state.message,/Saved plans could not be loaded/);
+    assert.doesNotThrow(()=>a.budget());assert.doesNotThrow(()=>a.reportText(a.current()));
+    a.state.scenarios.forEach(model.applyProSimulationDefault);assert.equal(a.persist(false),false);
+    assert.deepEqual(a.saved(),original);
+  }
+  for(const original of [{scenarios:null},{scenarios:[]},{}]){
+    const a=app(original);assert.match(a.state.message,/Saved plans could not be loaded/);
+    assert.equal(a.persist(false),false);assert.deepEqual(a.saved(),original);
+  }
+});
+
+test('safe stored drafts can still be loaded and corrected without losing their edits',()=>{
+  const s=model.baseScenario();s.household.retirementAge=59;
+  s.budget.monthlyBudgets=[{month:'',creditCardBills:[{monthlyAmount:-100}],adjustments:{mortgage:200}}];
+  const original={scenarios:[s],selectedId:s.id},a=app(original);
+  assert.equal(a.state.message,'');assert.deepEqual(JSON.parse(JSON.stringify(a.current())),s);
+  assert.doesNotThrow(()=>a.budget());assert.doesNotThrow(()=>a.reportText(a.current()));
+  assert.equal(a.current().household.retirementAge,59);
+});
+
+test('calculation updates preserve focused drafts through success and failure until change commits them',async()=>{
+  for(const task of ['run','runDecision','runLab'])for(const outcome of ['result','error'])for(const dataset of [{field:'accounts.pretax',type:'money'},{budget:'annualPropertyTaxes'},{month:'0',part:'credit'}]){
+    const a=app();a.state.access.tier='pro';a.current().numberOfSimulations=4;
+    a.state.view=dataset.field?'setup':'budget';a.state.setupSection=1;
+    a.current().budget.monthlyBudgets=[{month:'2026-01',creditCardBills:[]}];
+    const main=a.element('#main');let html=main.innerHTML;
+    Object.defineProperty(main,'innerHTML',{get:()=>html,set(value){html=value;a.document.activeElement=null;}});
+    const editor={tagName:'INPUT',type:'number',id:'live-editor',dataset,value:'123456',focus(){a.document.activeElement=this;}};
+    const replacement=a.element('#live-editor');replacement.type='number';
+    let retained;replacement.replaceWith=node=>{retained=node;};
+    const pending=a[task]();a.document.activeElement=editor;
+    const workerCount=task==='runLab'?7:1;
+    for(let i=0;i<workerCount;i++){
+      const worker=a.workers[i];assert.ok(worker);
+      worker.onmessage({data:outcome==='error'?{type:'error',message:'Test calculation failure'}:{type:'result',result:task==='runDecision'?{targetReadiness:.8,simulationCount:180}:runSimulation(worker.data.scenario)}});
+      await Promise.resolve();
+      assert.equal(a.document.activeElement,editor);assert.equal(retained,editor);assert.equal(editor.value,'123456');
+    }
+    await pending;assert.equal(a.document.activeElement,editor);assert.equal(a.state.busy,false);
+    assert.equal(a.current().accounts.pretax,800000);assert.equal(a.current().budget.annualPropertyTaxes,0);
+    a.change('#main',editor);
+    const s=a.saved().scenarios[0];
+    assert.equal(dataset.field?s.accounts.pretax:dataset.budget?s.budget.annualPropertyTaxes:s.budget.monthlyBudgets[0].creditCardBills[0].monthlyAmount,123456);
+    if(dataset.field){assert.equal(a.state.results.size,0);assertCleared(a);}
+  }
+});
+
+test('background billing renders retain the original live editor and its uncommitted value',async()=>{
+  for(const access of [
+    {tier:'pro',maxPaths:10000,signedIn:true,accountKey:'user'},
+    {tier:'free',maxPaths:4,signedIn:false,checkoutAvailable:true},
+    {error:'unauthorized'},
+  ])for(const dataset of [{field:'accounts.pretax',type:'money'},{budget:'annualPropertyTaxes'},{month:'0',part:'credit'}]){
+    let finish;const a=app(null,{fetch:()=>new Promise(resolve=>{finish=resolve;})});
+    a.state.view=dataset.field?'setup':'budget';a.state.setupSection=1;
+    a.current().budget.monthlyBudgets=[{month:'2026-01',creditCardBills:[]}];
+    const main=a.element('#main');let html=main.innerHTML;
+    // Replacing the page disconnects its focused input, as in a browser.
+    Object.defineProperty(main,'innerHTML',{get:()=>html,set(value){html=value;a.document.activeElement=null;}});
+    const details={tagName:'DETAILS',open:false};
+    const editor={tagName:'INPUT',type:'number',id:'live-editor',dataset,value:'123456',parentElement:details,focus(){a.document.activeElement=this;}};
+    const replacement=a.element('#live-editor');replacement.type='number';
+    let retained;replacement.replaceWith=node=>{retained=node;};
+    const pending=a.loadAccess({force:true});
+    while(!finish)await Promise.resolve();
+    a.document.activeElement=editor;
+    finish(Response.json(access,{status:access.error?401:200}));await pending;
+    assert.equal(details.open,true);assert.equal(retained,editor);assert.equal(a.document.activeElement,editor);assert.equal(editor.value,'123456');
+    a.change('#main',editor);
+    const s=a.saved().scenarios[0];
+    assert.equal(dataset.field?s.accounts.pretax:dataset.budget?s.budget.annualPropertyTaxes:s.budget.monthlyBudgets[0].creditCardBills[0].monthlyAmount,123456);
   }
 });
 
@@ -152,6 +295,26 @@ test('larger runs retain percentage summaries without the four-path warning',()=
   const a=app();a.state.access.tier='pro';a.current().numberOfSimulations=100;const r=runSimulation(a.current());a.state.results.set(a.current().id,r);
   assert.match(a.results(),/Monte Carlo readiness/);assert.match(a.results(),/\d+\.\d%/);assert.doesNotMatch(a.results(),/Sample preview only/);
   assert.equal(format.shareLabel(.75,4),'3 of 4');assert.equal(format.shareLabel(.75,100),'75.0%');
+});
+
+test('retained reports and comparisons keep their actual counts across upgrades and expiration',async()=>{
+  for(const [completedCount,nextTier,nextCount] of [[4,'pro',10000],[150,'free',4]]){
+    const a=app(null,{fetch:async()=>Response.json({tier:nextTier,signedIn:true,accountKey:'user-a'})});
+    a.state.access.tier=completedCount>4?'pro':'free';
+    a.current().numberOfSimulations=completedCount;
+    const r=runSimulation(a.current());a.state.results.set(a.current().id,r);
+    a.state.labResults=[{label:'Current plan',result:r}];
+    await a.loadAccess();
+    const report=a.reportText(a.current(),r);
+    assert.ok(report.includes(`Simulation paths: ${completedCount}; fixed comparison sequence`));
+    assert.ok(report.includes(`  Simulation paths: ${completedCount}\n`));
+    assert.ok(report.includes(`Paths for next run: ${nextCount}`));
+    const html=a.lab();
+    assert.ok(html.includes(`Each comparison runs ${completedCount} Monte Carlo paths`));
+    assert.ok(html.includes(completedCount===4?'Samples without shortfall':'Modeled readiness'));
+    assert.equal(html.includes('Sample preview only'),completedCount===4);
+    assert.equal(a.state.results.get(a.current().id),r);
+  }
 });
 
 test('a failed access check on window focus keeps results when the tier is unchanged',async()=>{
@@ -338,4 +501,36 @@ test('welcome illustration is fixed decoration and never reflects the visitor pl
   const sample=fan(app().dashboard()),own=fan(app({scenarios:[poor],selectedId:poor.id}).dashboard());
   assert.equal(own,sample);assert.equal((sample.match(/class="fan-path /g)||[]).length,30);
   assert.match(sample,/not a simulation or a forecast of your plan/);
+});
+
+
+test('timing editors offer 0-11 month selectors and save months in backups and reports',()=>{
+  const a=app();
+  for(const [section,years,months] of [[0,'household.retirementAge','household.retirementAgeMonths'],[2,'guaranteedIncome.startAge','guaranteedIncome.startAgeMonths'],[3,'longTermCare.averageDurationYears','longTermCare.averageDurationMonths']]){
+    a.state.setupSection=section;const html=a.setup();
+    assert.match(html,new RegExp(`data-field="${years}" data-type="number"`));
+    assert.match(html,new RegExp(`<select[^>]+data-field="${months}" data-type="month">`));
+    assert.match(html,/<option value="0" selected>0<\/option>/);assert.match(html,/<option value="11" >11<\/option>/);
+    a.change('#main',{dataset:{field:months,type:'month'},value:'6'});
+  }
+  const s=a.saved().scenarios[0];assert.equal(s.household.retirementAgeMonths,6);assert.equal(s.guaranteedIncome.startAgeMonths,6);assert.equal(s.longTermCare.averageDurationMonths,6);
+  assert.match(a.reportText(a.current()),/Retirement age extra months: 6/);assert.match(a.dashboard(),/67 years 6 months/);
+});
+
+test('changing retirement months discards pending calculations and exploration results',async()=>{
+  const a=app();seedExploration(a);const pending=a.run();
+  a.change('#main',{dataset:{field:'household.retirementAgeMonths',type:'month'},value:'6'});
+  a.workers[0].onmessage({data:{type:'result',result:runSimulation(a.workers[0].data.scenario)}});await pending;
+  assert.equal(a.state.results.size,0);assertCleared(a);
+});
+
+test('explicit linking retains paid-customer hints across Google sign-in and unpaid status checks',async()=>{
+  const identity={accountKey:null},session=new Map(),requests=[];let reply={tier:'pro',signedIn:true,accountKey:'chatgpt-a',billingCustomerId:'cus_paid'};
+  const fetch=async(url,options)=>{requests.push({url,options});return Response.json(url==='/api/billing/link'?{linked:true,billingCustomerId:'cus_paid'}:reply);};
+  const a=app(null,{identity,session,fetch});a.syncAuthState();await a.loadAccess();
+  identity.accountKey='firebase:a';a.syncAuthState();reply={tier:'free',signedIn:true,accountKey:'firebase:a',billingCustomerId:'cus_draft'};await a.loadAccess();
+  await a.linkAccounts();const headers=requests.find(r=>r.url==='/api/billing/link').options.headers;
+  assert.equal(headers['x-retirement-customer'],'cus_draft');assert.match(headers['x-retirement-link-customers'],/cus_paid/);
+  // The lookup hints also survive a sign-in redirect/reload of the page.
+  const b=app(null,{identity,session,fetch});await b.linkAccounts();assert.match(requests.at(-1).options.headers['x-retirement-link-customers'],/cus_paid/);
 });

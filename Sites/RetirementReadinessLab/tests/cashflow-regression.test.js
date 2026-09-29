@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {baseScenario,validateScenario} from '../dist/model.js';
+import {baseScenario,validateScenario,applyBudgetEstimate} from '../dist/model.js';
 import {runOne,runSimulation} from '../dist/engine.js';
 import {ordinaryIncomeTax,taxableSocialSecurity} from '../dist/tax.js';
 import {retirementBenefitFactor} from '../dist/social-security.js';
@@ -82,6 +82,61 @@ test('mortgage payments stop at the end of the loan term during care',()=>{
   near(ending(s,{nextDouble:()=>0,normal:()=>0}),94000);
 });
 
+test('full-household care sells the home before expenses, pays its mortgage and releases equity once',()=>{
+  const s=flatPlan(65,2);s.accounts.roth=300000;s.home.currentValue=500000;
+  s.budget.annualPropertyTaxes=10000;s.budget.annualHomeInsurance=2000;
+  s.budget.monthlyBudgets=[{month:'2026-01',checkingSavingsBills:[],creditCardBills:[]}];
+  applyBudgetEstimate(s);
+  Object.assign(s.mortgage,{monthlyPayment:2000,yearsLeft:20,currentBalance:100000});
+  s.longTermCare.enabled=true;
+  const path=runOne(s,{nextDouble:()=>.1,normal:()=>0});
+  // Death is capped at 67 and care starts immediately. No mortgage, home bills,
+  // or replacement rent remain; the $400,000 equity earns 2% in cash.
+  near(path.yearEnd[1],200000+400000*1.02);
+  near(path.yearEnd[2],100000+400000*1.02**2);
+});
+
+test('home equity can fund the first month of care even with no starting financial accounts',()=>{
+  const s=flatPlan(65);s.accounts.roth=0;s.home.currentValue=200000;
+  Object.assign(s.mortgage,{monthlyPayment:1000,yearsLeft:10,currentBalance:50000});
+  s.longTermCare.enabled=true;
+  let cash=150000;for(let m=0;m<12;m++)cash=cash*Math.pow(1.02,1/12)-100000/12;
+  const path=runOne(s,{nextDouble:()=>0,normal:()=>0});
+  assert.equal(path.success,true);near(path.yearEnd[1],cash);
+});
+
+test('two living spouses in care sell the home without adding replacement rent',()=>{
+  const s=flatPlan(65);Object.assign(s.household,{filingStatus:'Married',spouseCurrentAge:65});
+  s.accounts.roth=500000;s.home.currentValue=500000;
+  Object.assign(s.mortgage,{monthlyPayment:2000,yearsLeft:20,currentBalance:100000});
+  s.longTermCare.enabled=true;
+  near(ending(s,{nextDouble:()=>0,normal:()=>0}),500000-200000+400000*1.02);
+});
+
+test('a spouse outside care keeps the home and its mortgage and budgeted carrying costs',()=>{
+  const s=flatPlan(65);Object.assign(s.household,{filingStatus:'Married',spouseCurrentAge:65});
+  s.accounts.roth=300000;s.spending.annualBaseSpending=12000;s.home.currentValue=500000;
+  Object.assign(s.budget,{isAppliedToAnnualBaseSpending:true,appliedAnnualHomeCosts:12000});
+  Object.assign(s.mortgage,{monthlyPayment:1000,yearsLeft:1,currentBalance:12000});
+  s.longTermCare.enabled=true;
+  const draws=[0,.999999,0,.999999];
+  near(ending(s,{nextDouble:()=>draws.shift(),normal:()=>0}),176000);
+});
+
+test('the home sells when the last surviving spouse enters care, after being retained for that spouse',()=>{
+  const s=flatPlan(65,3);Object.assign(s.household,{filingStatus:'Married',spouseCurrentAge:65});
+  s.accounts.roth=500000;s.home.currentValue=500000;
+  Object.assign(s.mortgage,{monthlyPayment:1000,yearsLeft:10,currentBalance:120000});
+  Object.assign(s.longTermCare,{enabled:true,averageDurationYears:1});
+  const draws=[.999999,0,.999999,.999999,0,0,0];
+  const path=runOne(s,{nextDouble:()=>draws.shift(),normal:()=>0});
+  // Primary dies at 67, spouse at 68. At 65 neither is in care; at 66 only
+  // the primary is. At 67 the surviving spouse is in care and the house sells.
+  near(path.yearEnd[1],500000-30000-12000);
+  near(path.yearEnd[2],500000-2*(30000+12000)-100000);
+  near(path.yearEnd[3],path.yearEnd[2]-100000+(500000-96000)*1.02);
+});
+
 test('the entered age-67 benefit is preserved across birth cohorts',()=>{
   for(const age of [67,70,75,85]){
     const s=flatPlan(age);s.spending.annualBaseSpending=40000;s.socialSecurity.annualBenefitAt67=30000;
@@ -125,4 +180,100 @@ test('Medicare still charges a surcharge for high taxable pension income',()=>{
   s.healthcare.includeMedicarePremiums=true;
   const premium=(202.90+38.99+202.90+37.50)*12;
   near(ending(s),100000+150000-200000-premium-ordinaryIncomeTax(150000,'Single',1,1,2026));
+});
+
+test('Medicare retains the lookback filing status for two years after a spouse dies',()=>{
+  const s=flatPlan(65,7);Object.assign(s.household,{filingStatus:'Married',spouseCurrentAge:65});
+  s.accounts.roth=2000000;s.spending.annualBaseSpending=250000;
+  Object.assign(s.guaranteedIncome,{annualIncome:200000,startAge:65,annualIncrease:0,survivorPercent:1});
+  s.healthcare.includeMedicarePremiums=true;
+  const rng=()=>{let calls=0;return {nextDouble:()=>++calls===3?0:.999999,normal:()=>0};};
+  const withMedicare=runOne(s,rng());s.healthcare.includeMedicarePremiums=false;
+  const withoutMedicare=runOne(s,rng());
+  const charges=withMedicare.yearEnd.map((balance,i)=>withoutMedicare.yearEnd[i]-balance);
+  const basic=(202.90+38.99)*12,singleHigh=(202.90+38.99+324.60+60.40)*12;
+  for(let year=1;year<=7;year++)near(charges[year]-charges[year-1],year<=3?basic*2:year<=5?basic:singleHigh);
+});
+
+test('initial Medicare estimates follow cash-first triggers and cap spending covered by cash',()=>{
+  for(const [cashFirst,cash,trigger,surcharge] of [[true,1000000,.01,0],[true,1000000,-.01,385],[false,1000000,.01,385],[true,10000,.01,385]]){
+    const s=flatPlan(65,3);s.accounts={pretax:1000000,roth:0,taxable:0,cash};
+    s.spending.annualBaseSpending=150000;s.healthcare.includeMedicarePremiums=true;
+    Object.assign(s.withdrawalStrategy,{useCashReserveDuringDrawdowns:cashFirst,drawdownTrigger:trigger});
+    const path=runOne(s,fullLife);
+    if(cashFirst&&cash===1000000&&trigger>0){
+      let expectedCash=cash;const growth=Math.pow(1.02,1/12),premium=(202.90+38.99)*12;
+      for(let month=1;month<=36;month++){
+        expectedCash=expectedCash*growth-(150000+premium)/12;
+        if(month%12===0)near(path.yearEnd[month/12],1000000+expectedCash);
+      }
+    }else{
+      // These cases really use pretax withdrawals: the initial estimate must
+      // still charge the high-income tier rather than suppressing all IRMAA.
+      const basic=structuredClone(s);basic.healthcare.includeMedicarePremiums=false;
+      const noPremium=runOne(basic,fullLife);
+      assert.ok(noPremium.yearEnd[1]-path.yearEnd[1]>(202.90+38.99+surcharge)*12);
+    }
+  }
+});
+
+
+test('an underwater care-triggered sale pays the full mortgage instead of forgiving debt',()=>{
+  const s=flatPlan(65);s.spending.annualBaseSpending=0;s.accounts={pretax:0,roth:0,taxable:0,cash:200000};
+  s.home.currentValue=100000;Object.assign(s.mortgage,{currentBalance:200000,monthlyPayment:1000,yearsLeft:10});
+  Object.assign(s.longTermCare,{enabled:true,annualCost:0});
+  near(ending(s,{nextDouble:()=>0,normal:()=>0}),102000);
+});
+
+test('an underwater sale funds its remaining payoff from pretax with ordinary tax',()=>{
+  const s=flatPlan(65);s.spending.annualBaseSpending=0;s.accounts={pretax:200000,roth:0,taxable:0,cash:0};
+  s.home.currentValue=100000;Object.assign(s.mortgage,{currentBalance:200000,monthlyPayment:1000,yearsLeft:10});
+  Object.assign(s.longTermCare,{enabled:true,annualCost:0});
+  const balance=ending(s,{nextDouble:()=>0,normal:()=>0}),draw=200000-balance;
+  near(draw-ordinaryIncomeTax(draw,'Single',1,1,2026),100000);
+});
+
+test('an unaffordable underwater sale fails even with no other care expenses',()=>{
+  const s=flatPlan(65);s.accounts.roth=0;s.spending.annualBaseSpending=0;s.home.currentValue=100000;
+  Object.assign(s.mortgage,{currentBalance:200000,monthlyPayment:1000,yearsLeft:10});
+  Object.assign(s.longTermCare,{enabled:true,annualCost:0});
+  const path=runOne(s,{nextDouble:()=>0,normal:()=>0});assert.equal(path.success,false);assert.equal(path.failureAge,65);
+});
+
+test('a care duration of one year and six months charges eighteen months',()=>{
+  const s=flatPlan(65,2);s.spending.annualBaseSpending=0;s.accounts.roth=500000;
+  Object.assign(s.longTermCare,{enabled:true,annualCost:100000,averageDurationYears:1,averageDurationMonths:6});
+  near(ending(s,{nextDouble:()=>.1,normal:()=>0}),350000);
+});
+
+test('pension starts at the selected month rather than the next birthday',()=>{
+  const s=flatPlan(65,2);s.spending.annualBaseSpending=0;
+  Object.assign(s.guaranteedIncome,{annualIncome:12000,startAge:65,startAgeMonths:6});
+  let cash=0;for(let m=0;m<24;m++)cash=cash*Math.pow(1.02,1/12)+(m>=6?1000:0);
+  near(ending(s),100000+cash);
+});
+
+test('retirement months grow accounts before retirement and retain the final partial-year balance',()=>{
+  for(const months of [1,6,11]){
+    const s=flatPlan(65);s.household.retirementAgeMonths=months;s.spending.annualBaseSpending=0;
+    s.accounts={pretax:0,roth:0,taxable:0,cash:100000};
+    const path=runOne(s,fullLife);near(path.yearEnd[0],100000*Math.pow(1.02,months/12));near(path.yearEnd.at(-1),102000);
+    assert.equal(path.chart.length,1);assert.deepEqual(validateScenario(s),[]);
+    const result=runSimulation(s);near(result.medianEndingBalance,102000);assert.equal(result.balanceBands[0].age,65+months/12);
+  }
+});
+
+test('fractional retirement timing changes healthcare and penalties at birthdays and half-birthdays',()=>{
+  const s=flatPlan(64,2);s.household.retirementAgeMonths=6;s.healthcare.preMedicareMonthlyPremium=1000;s.spending.annualBaseSpending=0;
+  near(ending(s),94000); // Six pre-Medicare months, then no premiums.
+  const early=flatPlan(59);early.household.retirementAgeMonths=6;early.accounts={pretax:10000,roth:0,taxable:0,cash:0};
+  early.spending.annualBaseSpending=12000;early.withdrawalStrategy.applyEarlyWithdrawalPenalty=true;
+  near(ending(early),4000); // All six retirement months are after age 59.5.
+});
+
+test('a married plan with retirement months uses spouse mortality and benefit timing correctly',()=>{
+  const s=flatPlan(65,2);s.household.retirementAgeMonths=6;Object.assign(s.household,{filingStatus:'Married',spouseCurrentAge:62});
+  s.spending.annualBaseSpending=0;Object.assign(s.socialSecurity,{annualBenefitAt67:12000,claimAge:65,spouseClaimAge:62});
+  // The primary claims at 65; a spouse aged 62.5 is immediately eligible.
+  const path=runOne(s,fullLife);assert.equal(path.success,true);assert.ok(path.yearEnd[1]>100000+12000);
 });

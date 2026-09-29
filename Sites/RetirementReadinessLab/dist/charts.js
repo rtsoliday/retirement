@@ -1,3 +1,4 @@
+import {ageLabel} from './model.js';
 import {isPreviewResult,shareLabel} from './result-format.js';
 import {pathBounds,valueToFraction,fractionToValue} from './chart-data.js';
 const colors={funded:'#176b5b',alive:'#b27615',success:'#288445',strong:'#38bd60',failure:'#7f1d1d',clear:'#e53935',mean:'#25333e',range:'#dceee6'};
@@ -34,7 +35,7 @@ function mount(el,result,age,dialog=null){
   const inset={left:68,right:16,top:22,bottom:44};
   const span=()=>({w:Math.max(1,width-inset.left-inset.right),h:Math.max(1,height-inset.top-inset.bottom)});
   function constrain(){const {w,h}=span();offsetX=Math.max(w*(1-scale),Math.min(0,offsetX));offsetY=Math.max(h*(1-scale),Math.min(0,offsetY));}
-  function description(a){if(type==='survival'){const p=survival.find(p=>p.age===a);return p?`Age ${a} · Still funded ${shareLabel(p.notFailedShare,count)} · Still alive ${shareLabel(p.aliveShare,count)}`:'';}if(type==='bands'){const p=bands.find(p=>p.age===a);return p?`Age ${a} · ${p.pathCount} ${p.pathCount===1?'path':'paths'} · Median ${money(p.median)} · 10th–90th ${money(p.pessimistic)}–${money(p.optimistic)}`:'';}const p=mean.find(p=>p.yearsInRetirement===a-age);return `Age ${a} · ${p?'Mean '+money(p.balance):'No positive balances observed'}`;}
+  function description(a){if(type==='survival'){const p=survival.find(p=>p.age===a);return p?`Age ${ageLabel(a)} · Still funded ${shareLabel(p.notFailedShare,count)} · Still alive ${shareLabel(p.aliveShare,count)}`:'';}if(type==='bands'){const p=bands.find(p=>p.age===a);return p?`Age ${ageLabel(a)} · ${p.pathCount} ${p.pathCount===1?'path':'paths'} · Median ${money(p.median)} · 10th–90th ${money(p.pessimistic)}–${money(p.optimistic)}`:'';}const p=mean.find(p=>p.yearsInRetirement===Math.round(a-age));return `Age ${ageLabel(a)} · ${p?'Mean '+money(p.balance):'No positive balances observed'}`;}
   function draw(){
     const {w,h}=span(),x=a=>inset.left+(a-start)/Math.max(1,end-start)*w*scale+offsetX,y=v=>inset.top+(1-valueToFraction(v,min,max,log))*h*scale+offsetY;
     ctx.clearRect(0,0,width,height);ctx.fillStyle='#fff';ctx.fillRect(0,0,width,height);ctx.font='11px system-ui';ctx.lineWidth=1;
@@ -52,7 +53,7 @@ function mount(el,result,age,dialog=null){
     ctx.strokeStyle='#d3dde0';ctx.strokeRect(inset.left,inset.top,w,h);
     if(type==='paths'&&!points.length&&!mean.length){ctx.fillStyle='#60757d';ctx.textAlign='center';ctx.fillText('No positive balances to plot',inset.left+w/2,inset.top+h/2);}
   }
-  function inspect(a){selected=Math.max(start,Math.min(end,Math.round(a)));slider.value=selected;output.textContent=description(selected);draw();}
+  function inspect(a){selected=Math.max(start,Math.min(end,start+Math.round(a-start)));slider.value=selected;output.textContent=description(selected);draw();}
   slider.oninput=()=>{const next=Number(slider.value),{w}=span();const px=(next-start)/Math.max(1,end-start)*w*scale+offsetX;if(px<0||px>w)offsetX=w/2-(next-start)/Math.max(1,end-start)*w*scale;constrain();inspect(next);};
   function resize(){const rect=canvas.getBoundingClientRect();width=rect.width;height=rect.height;const ratio=window.devicePixelRatio||1;canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);ctx.setTransform(ratio,0,0,ratio,0,0);constrain();draw();}
   const observer=new ResizeObserver(resize);observer.observe(canvas);output.textContent=description(start);

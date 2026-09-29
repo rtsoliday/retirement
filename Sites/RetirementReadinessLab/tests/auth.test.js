@@ -187,6 +187,42 @@ test('two paid accounts are not silently combined', async () => {
   assert.equal(fixture.customers.get('cus_chatgpt').metadata.retirement_firebase_uid, undefined);
 });
 
+test('linking selects the paid customer behind abandoned checkouts and clears duplicate identity records',async()=>{
+  for(const provider of ['chatgpt','firebase']){
+    const fixture=stripeFixture([
+      {id:'cus_draft1',metadata:{retirement_site_user_id:'chatgpt-user'},paid:false},
+      {id:'cus_draft2',metadata:{retirement_site_user_id:'chatgpt-user',retirement_firebase_uid:'firebase-user'},paid:false},
+      {id:'cus_draft3',metadata:{retirement_firebase_uid:'firebase-user'},paid:false},
+      {id:'cus_paid',metadata:provider==='chatgpt'?{retirement_site_user_id:'chatgpt-user'}:{retirement_firebase_uid:'firebase-user'},paid:true},
+    ]);
+    const bearer=await token();
+    const response=await worker.fetch(request('/api/billing/link',{user:'chatgpt-user',bearer,method:'POST'}),fixture.env);
+    assert.equal(response.status,200);assert.equal((await response.json()).billingCustomerId,'cus_paid');
+    for(const c of fixture.customers.values())if(c.id!=='cus_paid'){
+      assert.notEqual(c.metadata.retirement_site_user_id,'chatgpt-user');
+      assert.notEqual(c.metadata.retirement_firebase_uid,'firebase-user');
+    }
+    for(const identity of [{user:'chatgpt-user'},{bearer}]){
+      const status=await (await worker.fetch(request('/api/billing/status',identity),fixture.env)).json();
+      assert.equal(status.tier,'pro');assert.equal(status.billingCustomerId,'cus_paid');
+    }
+  }
+});
+
+test('linking rejects hidden paid-customer conflicts before modifying any metadata',async()=>{
+  for(const secondMetadata of [{retirement_firebase_uid:'firebase-user'},{retirement_site_user_id:'chatgpt-user'}]){
+    const fixture=stripeFixture([
+      {id:'cus_draft',metadata:{retirement_site_user_id:'chatgpt-user',retirement_firebase_uid:'firebase-user'},paid:false},
+      {id:'cus_paid1',metadata:{retirement_site_user_id:'chatgpt-user'},paid:true},
+      {id:'cus_paid2',metadata:secondMetadata,paid:true},
+    ]);
+    const before=JSON.stringify([...fixture.customers.values()]);
+    const response=await worker.fetch(request('/api/billing/link',{user:'chatgpt-user',bearer:await token(),method:'POST'}),fixture.env);
+    assert.equal(response.status,409);assert.equal(JSON.stringify([...fixture.customers.values()]),before);
+    assert.equal(fixture.writes.some(w=>w.method==='POST'),false);
+  }
+});
+
 test('linked customer reference restores either sign-in without waiting for search updates',async()=>{
   for(const paid of ['chatgpt','firebase']){
     const fixture=stripeFixture([
@@ -213,4 +249,33 @@ test('Firebase checkout uses its verified UID, without borrowing ChatGPT entitle
   assert.equal(checkout.values.get('client_reference_id'), 'firebase:firebase-user');
   assert.equal(checkout.values.get('line_items[0][price]'), 'price_yearly');
   assert.equal(fixture.customers.get('cus_1').metadata.retirement_firebase_uid, 'firebase-user');
+});
+
+
+test('linking includes verified direct customer hints when Stripe Search has not indexed a paid customer',async()=>{
+  for(const provider of ['chatgpt','firebase']){
+    const fixture=stripeFixture([{id:'cus_paid',metadata:provider==='chatgpt'?{retirement_site_user_id:'chatgpt-user'}:{retirement_firebase_uid:'firebase-user'},paid:true}]);
+    const upstream=fixture.env.STRIPE_FETCH;
+    fixture.env.STRIPE_FETCH=async(url,init)=>new URL(url).pathname==='/v1/customers/search'?Response.json({data:[],has_more:false}):upstream(url,init);
+    const bearer=await token(),req=request('/api/billing/link',{user:'chatgpt-user',bearer,method:'POST'});
+    req.headers.set(provider==='chatgpt'?'x-retirement-link-customers':'x-retirement-customer','cus_paid');
+    const response=await worker.fetch(req,fixture.env);assert.equal(response.status,200);assert.equal((await response.json()).billingCustomerId,'cus_paid');
+    assert.equal(fixture.customers.size,1);
+    for(const identity of [{user:'chatgpt-user'},{bearer}]){
+      const statusRequest=request('/api/billing/status',identity);statusRequest.headers.set('x-retirement-customer','cus_paid');
+      assert.equal((await(await worker.fetch(statusRequest,fixture.env)).json()).tier,'pro');
+    }
+  }
+});
+
+test('linking ignores foreign customer hints and checks paid conflicts among owned hints',async()=>{
+  const foreign=stripeFixture([{id:'cus_foreign',metadata:{retirement_site_user_id:'another-user'},paid:true}]);
+  const before=JSON.stringify(foreign.customers.get('cus_foreign'));
+  const req=request('/api/billing/link',{user:'chatgpt-user',bearer:await token(),method:'POST'});req.headers.set('x-retirement-link-customers','cus_foreign');
+  assert.equal((await worker.fetch(req,foreign.env)).status,200);assert.equal(JSON.stringify(foreign.customers.get('cus_foreign')),before);
+  const fixture=stripeFixture([{id:'cus_one',metadata:{retirement_site_user_id:'chatgpt-user'},paid:true},{id:'cus_two',metadata:{retirement_firebase_uid:'firebase-user'},paid:true}]);
+  const upstream=fixture.env.STRIPE_FETCH;
+  fixture.env.STRIPE_FETCH=async(url,init)=>new URL(url).pathname==='/v1/customers/search'?Response.json({data:[],has_more:false}):upstream(url,init);
+  const conflict=request('/api/billing/link',{user:'chatgpt-user',bearer:await token(),method:'POST'});conflict.headers.set('x-retirement-link-customers','cus_one,cus_two');
+  assert.equal((await worker.fetch(conflict,fixture.env)).status,409);assert.equal(fixture.writes.some(w=>w.method==='POST'),false);
 });

@@ -238,3 +238,4 @@ main{container-type:inline-size}
 @keyframes fan-cycle{0%,94%{opacity:1}100%{opacity:0}}
 @media(prefers-reduced-motion:reduce){.fan-data{animation:none}}
 @media print{.fan-data{animation:none}}
+.timing-inputs{display:grid;grid-template-columns:minmax(0,1fr) minmax(90px,.6fr);gap:12px;align-items:end}.timing-months{display:grid;gap:6px}.timing-months label{font-size:.72rem}

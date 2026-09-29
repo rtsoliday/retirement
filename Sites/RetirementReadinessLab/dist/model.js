@@ -1,8 +1,8 @@
-export const ENGINE_VERSION = '2026.09-cumulative-tax';
+export const ENGINE_VERSION = '2026.09-monthly-timing';
 export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
 // Chosen so each sample plan's four-path preview includes at least one shortfall.
 // Android still uses 20260429.
-export const DEFAULT_SEED = 20260549;
+export const DEFAULT_SEED = 20260766;
 export const FREE_SIMULATION_PATHS = 4;
 export const MAX_SIMULATION_PATHS = 10000;
 export const ALLOCATION_KEYS = ['stockUnder30x', 'stock30xTo35x', 'stock35xTo40x', 'stock40xTo45x', 'stock45xTo50x', 'stock50xOrMore'];
@@ -10,10 +10,16 @@ export const FILING_STATUSES = ['Single', 'Married', 'HeadOfHousehold'];
 export const GENDERS = ['Male', 'Female'];
 export const SPENDING_PATH_MODELS = ['EmpiricalAgeDecline', 'Flat'];
 
+export const retirementAge = s => s.household.retirementAge + (s.household.retirementAgeMonths ?? 0) / 12;
+export function ageLabel(value) {
+  const months = Math.round(value * 12), years = Math.floor(months / 12), extra = months % 12;
+  return extra ? `${years} years ${extra} months` : String(years);
+}
+
 export function baseScenario() {
   return {
     id: 'base-plan', name: 'Base plan',
-    household: {currentAge: 50, retirementAge: 67, targetEndAge: 119, filingStatus: 'Single', gender: 'Male', spouseGender: 'Female', spouseCurrentAge: 50},
+    household: {currentAge: 60, retirementAge: 67, retirementAgeMonths: 0, targetEndAge: 119, filingStatus: 'Single', gender: 'Male', spouseGender: 'Female', spouseCurrentAge: 60},
     accounts: {pretax: 800000, roth: 100000, taxable: 0, cash: 50000},
     spending: {annualBaseSpending: 75000, generalInflationMean: .023, generalInflationStdDev: .016, spendingPathModel: 'EmpiricalAgeDecline', lowPortfolioSpendingReduction: .10},
     budget: {annualPropertyTaxes: 0, annualHomeInsurance: 0, annualAutoInsurance: 0, monthlyBudgets: [], retirementAnnualAdjustment: 0, estimateNeedsReview: false, isAppliedToAnnualBaseSpending: false},
@@ -21,12 +27,12 @@ export function baseScenario() {
     rent: {monthlyRent: 0}, home: {currentValue: 0},
     healthcare: {preMedicareMonthlyPremium: 1250, healthcareInflationMean: .04, healthcareInflationStdDev: .018, includeMedicarePremiums: true},
     socialSecurity: {annualBenefitAt67: 30000, claimAge: 67, spouseClaimAge: 67},
-    guaranteedIncome: {annualIncome: 0, startAge: 65, annualIncrease: 0, survivorPercent: 1},
+    guaranteedIncome: {annualIncome: 0, startAge: 65, startAgeMonths: 0, annualIncrease: 0, survivorPercent: 1},
     market: {preRetirementMeanReturn: .133, preRetirementStdDev: .162, stockMeanReturn: .133, stockStdDev: .162, bondMeanReturn: .03, bondStdDev: .06},
     postRetirementAllocation: {stockUnder30x: 1, stock30xTo35x: .9, stock35xTo40x: .8, stock40xTo45x: .7, stock45xTo50x: .6, stock50xOrMore: .5},
     rothConversion: {enabled: false, marginalRateCap: .22},
     withdrawalStrategy: {useCashReserveDuringDrawdowns: false, drawdownTrigger: -.01, applyEarlyWithdrawalPenalty: false, ruleOf55Eligible: false, seppEligible: false},
-    longTermCare: {enabled: true, annualCost: 100000, averageDurationYears: 3},
+    longTermCare: {enabled: true, annualCost: 100000, averageDurationYears: 3, averageDurationMonths: 0},
     numberOfSimulations: FREE_SIMULATION_PATHS, simulationPathsCustomized: false, seed: DEFAULT_SEED
   };
 }
@@ -45,6 +51,12 @@ export function sampleScenarios() {
 }
 
 export function normalizeScenario(raw) {
+  const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  if (!object(raw)) throw new Error('Each scenario must be an object.');
+  // Reject corrupt sections before spreading defaults can hide their shape.
+  for (const [key, value] of Object.entries(TYPE_TEMPLATE)) {
+    if (object(value) && key in raw && !object(raw[key])) throw new Error(`Scenario ${key} must be an object.`);
+  }
   if (raw?.currentAge !== undefined && !raw.household) {
     raw = {
       id: raw.id, name: raw.name,
@@ -65,6 +77,15 @@ export function normalizeScenario(raw) {
     if (base[key] && typeof base[key] === 'object' && !Array.isArray(base[key])) {
       result[key] = {...base[key], ...raw[key]};
     } else result[key] = raw[key];
+  }
+  // Older backups used fractional pension ages and care durations. Split these
+  // into years and months once; explicit month fields must already be valid.
+  for (const [section, years, months] of [['guaranteedIncome','startAge','startAgeMonths'],['longTermCare','averageDurationYears','averageDurationMonths']]) {
+    const value=result[section][years];
+    if(raw[section]?.[months]===undefined&&typeof value==='number'&&Number.isFinite(value)&&!Number.isInteger(value)&&value>=(section==='longTermCare'?1:0)&&(section!=='longTermCare'||value<=10)) {
+      const total=Math.round(value*12);
+      result[section][years]=Math.floor(total/12);result[section][months]=total%12;
+    }
   }
   // Imported and previously saved scenarios cannot change the site's fixed seed.
   result.seed = DEFAULT_SEED;
@@ -90,26 +111,34 @@ export function applyProSimulationDefault(s) {
   return true;
 }
 
+// Stored drafts may have unfinished assumptions, but must be safe to render.
+export function validateScenarioStructure(s) {
+  const wrongTypes=[];
+  (function compare(expected,actual,path){for(const [key,value] of Object.entries(expected)){if(value===null)continue;const next=path?`${path}.${key}`:key;if(Array.isArray(value)){if(!Array.isArray(actual?.[key]))wrongTypes.push(next);}else if(typeof value==='object'){if(actual?.[key]&&typeof actual[key]==='object'&&!Array.isArray(actual[key]))compare(value,actual[key],next);else wrongTypes.push(next);}else if(typeof actual?.[key]!==typeof value)wrongTypes.push(next);}})(TYPE_TEMPLATE,s,'');
+  if (wrongTypes.length) return [`These assumptions have the wrong type: ${wrongTypes.join(', ')}.`];
+  return validateBudgetStructure(s.budget);
+}
+
 export function validateScenario(s) {
   const errors = [];
-  const h=s.household, a=s.accounts, sp=s.spending;
   const allNumbers = [];
   function collect(value) { if (typeof value === 'number') allNumbers.push(value); else if (value && typeof value === 'object') Object.values(value).forEach(collect); }
   collect(s);
   if (allNumbers.some(v=>!Number.isFinite(v))) errors.push('Financial and percentage assumptions must be finite numbers.');
-  const wrongTypes=[];
-  (function compare(expected,actual,path){for(const [key,value] of Object.entries(expected)){if(value===null)continue;const next=path?`${path}.${key}`:key;if(Array.isArray(value)){if(!Array.isArray(actual?.[key]))wrongTypes.push(next);}else if(typeof value==='object'){if(actual?.[key]&&typeof actual[key]==='object'&&!Array.isArray(actual[key]))compare(value,actual[key],next);else wrongTypes.push(next);}else if(typeof actual?.[key]!==typeof value)wrongTypes.push(next);}})(TYPE_TEMPLATE,s,'');
-  if (wrongTypes.length) return [...errors,`These assumptions have the wrong type: ${wrongTypes.join(', ')}.`];
-  errors.push(...validateBudgetStructure(s.budget));
+  const structureErrors=validateScenarioStructure(s);
+  if (structureErrors.length) return [...errors,...structureErrors];
+  const h=s.household, a=s.accounts, sp=s.spending;
   if (!FILING_STATUSES.includes(h.filingStatus)) errors.push('Filing status must be Single, Married, or HeadOfHousehold.');
   if (!GENDERS.includes(h.gender) || (h.filingStatus === 'Married' && !GENDERS.includes(h.spouseGender))) errors.push('Longevity table must be Male or Female.');
   if (!SPENDING_PATH_MODELS.includes(sp.spendingPathModel)) errors.push('Spending path must be EmpiricalAgeDecline or Flat.');
   // Mortality and life-expectancy tables are indexed by whole years.
   if (![h.currentAge,h.retirementAge,h.targetEndAge,...(h.filingStatus==='Married'?[h.spouseCurrentAge]:[])].every(Number.isInteger)) errors.push('Ages must be whole numbers.');
   if (h.currentAge <= 0) errors.push('Current age must be positive.');
-  if (h.retirementAge < h.currentAge) errors.push('Retirement age must be at least current age.');
-  if (h.targetEndAge <= h.retirementAge || h.targetEndAge > 119) errors.push('Maximum modeling age must be after retirement and at most 119.');
-  if (h.filingStatus === 'Married' && (h.spouseCurrentAge <= 0 || h.spouseCurrentAge + h.retirementAge - h.currentAge >= h.targetEndAge)) errors.push('Spouse age at retirement must be below the maximum modeling age.');
+  if (![h.retirementAgeMonths,s.guaranteedIncome.startAgeMonths,s.longTermCare.averageDurationMonths].every(v=>Number.isInteger(v)&&v>=0&&v<=11)) errors.push('Month fields must be whole numbers from 0 through 11.');
+  if (![s.guaranteedIncome.startAge,s.longTermCare.averageDurationYears].every(Number.isInteger)) errors.push('Income start age and long-term care duration years must be whole numbers; use the month fields for extra months.');
+  if (retirementAge(s) < h.currentAge) errors.push('Retirement age must be at least current age.');
+  if (h.targetEndAge <= retirementAge(s) || h.targetEndAge > 119) errors.push('Maximum modeling age must be after retirement and at most 119.');
+  if (h.filingStatus === 'Married' && (h.spouseCurrentAge <= 0 || h.spouseCurrentAge + retirementAge(s) - h.currentAge >= h.targetEndAge)) errors.push('Spouse age at retirement must be below the maximum modeling age.');
   if (s.socialSecurity.claimAge < 62 || s.socialSecurity.claimAge > 70) errors.push('Social Security claim age must be 62–70.');
   if (h.filingStatus === 'Married' && (s.socialSecurity.spouseClaimAge < 60 || s.socialSecurity.spouseClaimAge > 70)) errors.push('Spouse claim age must be 60–70.');
   if (Object.values(a).some(v=>v<0) || sp.annualBaseSpending<0) errors.push('Balances and spending cannot be negative.');
@@ -127,7 +156,7 @@ export function validateScenario(s) {
   if (market.preRetirementMeanReturn < -.20 || market.preRetirementMeanReturn > .25 || market.stockMeanReturn < -.20 || market.stockMeanReturn > .25 || market.bondMeanReturn < -.20 || market.bondMeanReturn > .20 || market.preRetirementStdDev < 0 || market.preRetirementStdDev > .60 || market.stockStdDev < 0 || market.stockStdDev > .60 || market.bondStdDev < 0 || market.bondStdDev > .40) errors.push('Market return assumptions are outside the supported range.');
   if (ALLOCATION_KEYS.some(k=>s.postRetirementAllocation[k]<0 || s.postRetirementAllocation[k]>1)) errors.push('Stock allocation must be between 0% and 100%.');
   if (s.rothConversion.enabled && !ROTH_CONVERSION_RATES.some(x=>Math.abs(x-s.rothConversion.marginalRateCap)<.0001)) errors.push('Roth conversion cap must be 10%, 12%, 22%, 24%, 32%, 35%, or 37%.');
-  if (s.longTermCare.annualCost < 0 || s.longTermCare.averageDurationYears < 1 || s.longTermCare.averageDurationYears > 10) errors.push('Long-term care cost or duration is invalid.');
+  if (s.longTermCare.annualCost < 0 || s.longTermCare.averageDurationYears < 1 || s.longTermCare.averageDurationYears + s.longTermCare.averageDurationMonths/12 > 10) errors.push('Long-term care cost or duration is invalid.');
   if (s.withdrawalStrategy.drawdownTrigger < -.50 || s.withdrawalStrategy.drawdownTrigger > .25) errors.push('Cash drawdown trigger is outside the supported range.');
   // Draft budget errors are shown in the budget editor; only applied spending feeds the simulation.
   return errors;
@@ -217,13 +246,13 @@ export function applyBudgetEstimate(scenario) {
 }
 
 export function scenarioWarnings(s) {
-  const notes=[],h=s.household,total=Object.values(s.accounts).reduce((a,b)=>a+b,0),years=h.retirementAge-h.currentAge;
-  if(h.retirementAge<50)notes.push('Retiring before 50 creates a long drawdown period.');
+  const notes=[],h=s.household,total=Object.values(s.accounts).reduce((a,b)=>a+b,0),years=retirementAge(s)-h.currentAge;
+  if(retirementAge(s)<50)notes.push('Retiring before 50 creates a long drawdown period.');
   if(s.spending.annualBaseSpending/Math.max(1,total)>.07)notes.push('Annual base spending exceeds 7% of current assets.');
   if(s.spending.generalInflationMean<.015)notes.push('General inflation below 1.5% may understate spending pressure.');
   if(s.market.stockMeanReturn>.145||s.market.preRetirementMeanReturn>.145)notes.push('Expected return above 14.5% may make readiness look stronger.');
   const spouseAtRet=h.spouseCurrentAge+years;
-  if((h.retirementAge<65||(h.filingStatus==='Married'&&spouseAtRet<65))&&s.healthcare.preMedicareMonthlyPremium<=0)notes.push('A pre-Medicare adult has no healthcare premium entered.');
+  if((retirementAge(s)<65||(h.filingStatus==='Married'&&spouseAtRet<65))&&s.healthcare.preMedicareMonthlyPremium<=0)notes.push('A pre-Medicare adult has no healthcare premium entered.');
   if(!s.healthcare.includeMedicarePremiums)notes.push('Medicare premiums are excluded.');
   if(!s.longTermCare.enabled)notes.push('Long-term care risk is excluded.');
   if(s.socialSecurity.annualBenefitAt67<=0)notes.push('No Social Security benefit is entered.');

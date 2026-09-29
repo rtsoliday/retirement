@@ -113,6 +113,40 @@ test('an existing Pro customer is not offered a duplicate Checkout', async () =>
   assert.equal(response.status, 409);
 });
 
+test('an unpaid customer reference cannot hide a paid customer or permit another checkout', async () => {
+  const oldCustomer={id:'cus_old',metadata:customer.metadata};
+  const checked=[];
+  const env={...stripeEnv,STRIPE_FETCH:async(url,init)=>{
+    const parsed=new URL(url);
+    if(parsed.pathname==='/v1/customers/cus_old')return Response.json(oldCustomer);
+    if(parsed.pathname==='/v1/customers/search')return Response.json({data:[oldCustomer,customer]});
+    if(parsed.pathname==='/v1/subscriptions'){
+      const id=parsed.searchParams.get('customer');checked.push(id);
+      return Response.json({data:id===customer.id?[subscription]:[]});
+    }
+    if(parsed.pathname==='/v1/checkout/sessions')assert.fail('A paying account must not create another checkout');
+    return stripeEnv.STRIPE_FETCH(url,init);
+  }};
+  const headers={'oai-authenticated-user-id':'user-123','x-retirement-customer':'cus_old',Origin:site};
+  const status=await (await worker.fetch(new Request(site+'/api/billing/status',{headers}),env)).json();
+  assert.equal(status.tier,'pro');assert.equal(status.billingCustomerId,customer.id);
+  const portal=await worker.fetch(new Request(site+'/api/billing/portal',{method:'POST',headers}),env);
+  assert.equal(portal.status,200);
+  const checkout=await worker.fetch(new Request(site+'/api/billing/checkout',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({interval:'monthly'})}),env);
+  assert.equal(checkout.status,409);
+  assert.equal(checked.filter(id=>id==='cus_old').length,3,'each lookup checks the old customer only once');
+});
+
+test('an unpaid verified reference retains portal access when search is delayed',async()=>{
+  const env={...stripeEnv,STRIPE_FETCH:async(url,init)=>{
+    const path=new URL(url).pathname;
+    if(path==='/v1/customers/search'||path==='/v1/subscriptions')return Response.json({data:[]});
+    return stripeEnv.STRIPE_FETCH(url,init);
+  }};
+  const account=await billingAccess(env,'user-123',null,customer.id);
+  assert.equal(account.pro,false);assert.equal(account.customerId,customer.id);
+});
+
 test('past-due and canceled customers retain portal access without Pro entitlement', async () => {
   for(const status of ['past_due','unpaid','canceled']){
     const env={...stripeEnv,STRIPE_FETCH:async(url,init)=>new URL(url).pathname==='/v1/subscriptions'?Response.json({data:[{...subscription,status}]}):stripeEnv.STRIPE_FETCH(url,init)};

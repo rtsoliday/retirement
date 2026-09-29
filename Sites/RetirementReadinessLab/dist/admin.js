@@ -2,6 +2,7 @@ const $ = selector => document.querySelector(selector);
 const number = new Intl.NumberFormat('en-US');
 const day = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 let selectedDays = 7;
+let loadRevision = 0;
 
 function label(date) { return day.format(new Date(`${date}T00:00:00Z`)); }
 function status(message, error = false) {
@@ -52,11 +53,13 @@ function render(data) {
   status(data.pageViews || data.peakDailyUniqueIps ? 'Cloudflare traffic loaded.' : 'No traffic reported for this date range yet.');
 }
 async function load() {
+  const revision = ++loadRevision;
   status('Loading Cloudflare traffic…');
   $('#refresh').disabled = true;
   try {
     const response = await fetch(`/api/admin/traffic?days=${selectedDays}`, { credentials: 'same-origin', cache: 'no-store' });
     const data = await response.json();
+    if (revision !== loadRevision) return;
     if (!response.ok) {
       $('#dashboard').hidden = true;
       $('#setup').hidden = response.status !== 503;
@@ -65,10 +68,11 @@ async function load() {
     }
     render(data);
   } catch {
+    if (revision !== loadRevision) return;
     $('#dashboard').hidden = true;
     status('Could not connect to the analytics service.', true);
   } finally {
-    $('#refresh').disabled = false;
+    if (revision === loadRevision) $('#refresh').disabled = false;
   }
 }
 for (const button of document.querySelectorAll('[data-days]')) {
