@@ -83,7 +83,7 @@ async function status(request, env, user, isOwner = false) {
   if (!enabled || !user) return json({ tier: 'free', maxPaths: FREE_PATHS, signedIn: Boolean(user), checkoutAvailable: enabled, accountProvider: user?.provider || null });
   try {
     const result = await access(env, user, new URL(request.url).searchParams.get('session_id'));
-    return json({ tier: result.pro ? 'pro' : 'free', maxPaths: result.pro ? PRO_PATHS : FREE_PATHS, signedIn: true, checkoutAvailable: true, accountProvider: user.provider });
+    return json({ tier: result.pro ? 'pro' : 'free', maxPaths: result.pro ? PRO_PATHS : FREE_PATHS, signedIn: true, checkoutAvailable: true, billingPortalAvailable: Boolean(result.customerId), accountProvider: user.provider });
   } catch { return json({ tier: 'free', maxPaths: FREE_PATHS, signedIn: true, checkoutAvailable: false, accountProvider: user.provider, error: 'Could not verify subscription. Please retry.' }, 502); }
 }
 async function checkout(request, env, user, isOwner = false) {

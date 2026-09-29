@@ -112,6 +112,19 @@ test('an existing Pro customer is not offered a duplicate Checkout', async () =>
   assert.equal(response.status, 409);
 });
 
+test('past-due and canceled customers retain portal access without Pro entitlement', async () => {
+  for(const status of ['past_due','unpaid','canceled']){
+    const env={...stripeEnv,STRIPE_FETCH:async(url,init)=>new URL(url).pathname==='/v1/subscriptions'?Response.json({data:[{...subscription,status}]}):stripeEnv.STRIPE_FETCH(url,init)};
+    const result=await (await worker.fetch(request('/api/billing/status',{user:'user-123'}),env)).json();
+    assert.equal(result.tier,'free');assert.equal(result.billingPortalAvailable,true);
+    const response=await worker.fetch(request('/api/billing/portal',{method:'POST',origin:site,user:'user-123'}),env);
+    assert.equal(response.status,200);assert.equal(new URL((await response.json()).url).hostname,'billing.stripe.com');
+  }
+  const env={...stripeEnv,STRIPE_FETCH:async()=>Response.json({data:[]})};
+  const result=await (await worker.fetch(request('/api/billing/status',{user:'new-user'}),env)).json();
+  assert.equal(result.billingPortalAvailable,false);
+});
+
 test('Checkout and billing portal return only expected Stripe destinations', async () => {
   const freeEnv = { ...stripeEnv, STRIPE_FETCH: async (url, init) => {
     const parsed = new URL(url);

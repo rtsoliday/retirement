@@ -1,4 +1,4 @@
-export const ENGINE_VERSION = '2026.09-roth-social-security';
+export const ENGINE_VERSION = '2026.09-cumulative-tax';
 export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
 export const DEFAULT_SEED = 20260429;
 export const FREE_SIMULATION_PATHS = 4;
@@ -96,8 +96,9 @@ export function validateScenario(s) {
   collect(s);
   if (allNumbers.some(v=>!Number.isFinite(v))) errors.push('Financial and percentage assumptions must be finite numbers.');
   const wrongTypes=[];
-  (function compare(expected,actual,path){for(const [key,value] of Object.entries(expected)){if(value===null||Array.isArray(value))continue;const next=path?`${path}.${key}`:key;if(typeof value==='object'){if(actual?.[key]&&typeof actual[key]==='object')compare(value,actual[key],next);else wrongTypes.push(next);}else if(typeof actual?.[key]!==typeof value)wrongTypes.push(next);}})(TYPE_TEMPLATE,s,'');
-  if (wrongTypes.length) errors.push(`These assumptions have the wrong type: ${wrongTypes.join(', ')}.`);
+  (function compare(expected,actual,path){for(const [key,value] of Object.entries(expected)){if(value===null)continue;const next=path?`${path}.${key}`:key;if(Array.isArray(value)){if(!Array.isArray(actual?.[key]))wrongTypes.push(next);}else if(typeof value==='object'){if(actual?.[key]&&typeof actual[key]==='object'&&!Array.isArray(actual[key]))compare(value,actual[key],next);else wrongTypes.push(next);}else if(typeof actual?.[key]!==typeof value)wrongTypes.push(next);}})(TYPE_TEMPLATE,s,'');
+  if (wrongTypes.length) return [...errors,`These assumptions have the wrong type: ${wrongTypes.join(', ')}.`];
+  errors.push(...validateBudgetStructure(s.budget));
   if (!FILING_STATUSES.includes(h.filingStatus)) errors.push('Filing status must be Single, Married, or HeadOfHousehold.');
   if (!GENDERS.includes(h.gender) || (h.filingStatus === 'Married' && !GENDERS.includes(h.spouseGender))) errors.push('Longevity table must be Male or Female.');
   if (!SPENDING_PATH_MODELS.includes(sp.spendingPathModel)) errors.push('Spending path must be EmpiricalAgeDecline or Flat.');
@@ -132,6 +133,34 @@ export function validateScenario(s) {
 
 export const ANNUAL_BILLS = [['Property taxes','annualPropertyTaxes','propertyTaxes'],['Home insurance','annualHomeInsurance','homeInsurance'],['Auto insurance','annualAutoInsurance','autoInsurance']];
 export const SEPARATE_COSTS = [['Mortgage payments','mortgage'],['Rent','rent'],['Healthcare premiums','healthcare']];
+// Draft amounts can be unfinished, but imported structures must remain safe
+// for the budget editor and reports before replacing any existing scenarios.
+export function validateBudgetStructure(budget) {
+  const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
+  if(!object(budget)||!Array.isArray(budget.monthlyBudgets))return ['Budget monthlyBudgets must be an array.'];
+  const errors=[];
+  const number=(v,path)=>{if(v!==undefined&&(typeof v!=='number'||!Number.isFinite(v)))errors.push(`${path} must be a finite number.`);};
+  number(budget.appliedAnnualHomeCosts,'Budget appliedAnnualHomeCosts');
+  for(const [i,m] of budget.monthlyBudgets.entries()){
+    const path=`Budget month ${i+1}`;
+    if(!object(m)){errors.push(`${path} must be an object.`);continue;}
+    if(typeof m.month!=='string')errors.push(`${path} must have a month string.`);
+    number(m.cashAndAtmWithdrawals,`${path} cash withdrawals`);
+    for(const key of ['checkingSavingsBills','creditCardBills']){
+      if(m[key]===undefined)continue;
+      if(!Array.isArray(m[key])){errors.push(`${path} ${key} must be an array.`);continue;}
+      for(const bill of m[key]){
+        if(!object(bill)){errors.push(`${path} ${key} entries must be objects.`);continue;}
+        number(bill.monthlyAmount,`${path} ${key} monthlyAmount`);
+      }
+    }
+    if(m.adjustments!==undefined){
+      if(!object(m.adjustments))errors.push(`${path} adjustments must be an object.`);
+      else for(const key of [...ANNUAL_BILLS.map(x=>x[2]),...SEPARATE_COSTS.map(x=>x[1])])number(m.adjustments[key],`${path} ${key}`);
+    }
+  }
+  return errors;
+}
 const amount = v => Number(v ?? 0);
 export function budgetMonthTotals(m) {
   const checking=(m.checkingSavingsBills||[]).reduce((sum,x)=>sum+amount(x.monthlyAmount),0);
@@ -150,6 +179,7 @@ export function budgetBreakdown(budget) {
   return {months,count,totals,grossAverage:average('gross'),annualBillsAverage:average('annualBills'),separateCostsAverage:average('separateCosts'),monthlyAverage:average('adjusted'),annualized:average('adjusted')*12,annualBills,retirementAdjustment,estimate:average('adjusted')*12+annualBills+retirementAdjustment};
 }
 export function validateBudget(budget,{requireMonths=false}={}) {
+  const structureErrors=validateBudgetStructure(budget);if(structureErrors.length)return structureErrors;
   const errors=[],months=budget.monthlyBudgets||[],seen=new Set();
   const nonnegative=v=>Number.isFinite(amount(v))&&amount(v)>=0;
   if(requireMonths&&!months.length)errors.push('Add at least one complete month of spending before using the estimate.');

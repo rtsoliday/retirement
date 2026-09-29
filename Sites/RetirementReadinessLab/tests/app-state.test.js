@@ -8,29 +8,78 @@ import {runSimulation} from '../dist/engine.js';
 
 // Execute the actual app and event handlers. Only browser IO is replaced;
 // workers stay pending so changes during calculations can be reproduced.
-function app(saved=null,{fetch=async()=>{throw new Error('offline');}}={}){
+function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={fail:false}}={}){
   const elements=new Map(),workers=[];
   let stored=saved===null?null:JSON.stringify(saved);
   function element(selector){
     if(['#advanced-model','#allocation-settings'].includes(selector))return null;
-    if(!elements.has(selector))elements.set(selector,{innerHTML:'',textContent:'',dataset:{},listeners:{},classList:{toggle(){},remove(){}},addEventListener(name,fn){this.listeners[name]=fn;},querySelectorAll(){return [];},setAttribute(){},focus(){},scrollIntoView(){},insertAdjacentHTML(){}});
+    if(!elements.has(selector))elements.set(selector,{innerHTML:'',textContent:'',dataset:{},listeners:{},classList:{toggle(){},remove(){}},addEventListener(name,fn){this.listeners[name]=fn;},querySelectorAll(){return [];},setAttribute(){},focus(){},scrollIntoView(){},insertAdjacentHTML(){},remove(){elements.delete(selector);}});
     return elements.get(selector);
   }
   const context=vm.createContext({...model,...format,structuredClone,Intl,URLSearchParams,URL,console,
     location:{search:'',pathname:'/',hash:''},history:{replaceState(){}},confirm:()=>true,
-    localStorage:{getItem:()=>stored,setItem(key,value){stored=value;}},window:{addEventListener(){},scrollTo(){}},
+    localStorage:{getItem:()=>stored,setItem(key,value){if(storage.fail)throw new Error('QuotaExceededError');stored=value;}},window:{addEventListener(){},scrollTo(){}},
     document:{querySelector:element,querySelectorAll:()=>[],addEventListener(){}},
     chartCard:()=>'',mountCharts(){},disposeCharts(){},initializeSocialAuth:()=>new Promise(()=>{}),fetch,authHeaders:async()=>({}),
     Worker:class{constructor(){workers.push(this);}postMessage(data){this.data=data;}terminate(){this.terminated=true;}},
   });
   const source=readFileSync(new URL('../dist/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
   vm.runInContext(source.replace('function render(){','let renderCount=0;function render(){renderCount++;'),context);
-  const api=vm.runInContext('({state,run,runLab,runDecision,results,dashboard,lab,reportText,current,persist,loadAccess,renders:()=>renderCount})',context);
-  return {...api,workers,saved:()=>JSON.parse(stored),change:(selector,target)=>element(selector).listeners.change({target}),
+  const api=vm.runInContext('({state,run,runLab,runDecision,results,dashboard,lab,budget,billingView,reportText,current,persist,loadAccess,renders:()=>renderCount})',context);
+  return {...api,workers,element,saved:()=>JSON.parse(stored),change:(selector,target)=>element(selector).listeners.change({target}),
     click:(action,extra={})=>{const el={dataset:{action,...extra}};return element('#main').listeners.click({target:{closest:selector=>selector==='[data-action]'?el:null}});}};
 }
 function seedExploration(a){a.state.labResults=[{label:'Old plan',result:null}];a.state.decision={targetReadiness:.8,simulationCount:180};}
 function assertCleared(a){assert.equal(a.state.labResults,null);assert.equal(a.state.decision,null);}
+
+test('malformed backup structures cannot replace saved scenarios',async()=>{
+  const edits=[s=>s.budget.monthlyBudgets={},s=>s.budget.monthlyBudgets=null,s=>s.budget.monthlyBudgets=[null],s=>s.budget.monthlyBudgets=[{month:'2026-01',checkingSavingsBills:{}}],s=>s.budget.monthlyBudgets=[{month:'2026-01',creditCardBills:[null]}],s=>s.budget.monthlyBudgets=[{month:'2026-01',creditCardBills:[{monthlyAmount:'100'}]}],s=>s.budget.monthlyBudgets=[{month:'2026-01',adjustments:[]}]];
+  for(const edit of edits){
+    const original={scenarios:model.sampleScenarios(),selectedId:'base-plan'},a=app(original),before=JSON.stringify(a.state.scenarios),bad=model.baseScenario();
+    bad.id='malformed-import';edit(bad);
+    await a.change('#import-file',{files:[{text:async()=>JSON.stringify([bad])}],value:'backup.json'});
+    assert.match(a.state.message,/Error:/);assert.equal(JSON.stringify(a.state.scenarios),before);assert.deepEqual(a.saved(),original);
+    assert.doesNotThrow(()=>a.budget());assert.doesNotThrow(()=>a.reportText(a.current()));
+  }
+});
+
+test('unfinished but structurally valid budget drafts remain importable',async()=>{
+  const a=app(),draft=model.baseScenario();draft.budget.monthlyBudgets=[{month:'',checkingSavingsBills:[],creditCardBills:[],cashAndAtmWithdrawals:0}];
+  await a.change('#import-file',{files:[{text:async()=>JSON.stringify([draft])}],value:'backup.json'});
+  assert.match(a.state.message,/1 scenarios imported/);assert.doesNotThrow(()=>a.budget());assert.doesNotThrow(()=>a.reportText(a.current()));
+});
+
+test('failed assumption saves show an error and recover after a successful retry',()=>{
+  const storage={fail:true},a=app(null,{storage});
+  a.change('#main',{dataset:{field:'accounts.pretax',type:'money'},value:'123456'});
+  assert.equal(a.current().accounts.pretax,123456);assert.equal(a.saved(),null);
+  assert.match(a.state.message,/Error: Changes could not be saved/);assert.doesNotMatch(a.state.message,/^Saved/);
+  assert.equal(a.element('#main > .notice').className,'notice error');
+  storage.fail=false;a.change('#main',{dataset:{field:'accounts.pretax',type:'money'},value:'234567'});
+  assert.equal(a.saved().scenarios[0].accounts.pretax,234567);assert.match(a.state.message,/^Saved/);assert.equal(a.state.storageError,'');
+});
+
+test('failed budget saves display a warning without leaving the editor',()=>{
+  const a=app(null,{storage:{fail:true}});a.state.view='budget';
+  a.change('#main',{dataset:{budget:'annualPropertyTaxes'},value:'1000'});
+  assert.match(a.element('#main > .notice').textContent,/could not be saved/);assert.equal(a.saved(),null);assert.equal(a.state.view,'budget');
+});
+
+test('copy, reset, apply and import cannot overwrite a failed-save warning',async()=>{
+  for(const action of ['new-scenario','reset-assumptions','apply-budget']){
+    const a=app(null,{storage:{fail:true}});a.current().budget.monthlyBudgets=[{month:'2026-01',creditCardBills:[{monthlyAmount:1000}]}];
+    await a.click(action);assert.match(a.state.message,/could not be saved/);assert.equal(a.saved(),null);
+  }
+  const a=app(null,{storage:{fail:true}});
+  await a.change('#import-file',{files:[{text:async()=>JSON.stringify([model.baseScenario()])}],value:'backup.json'});
+  assert.match(a.state.message,/could not be saved/);assert.equal(a.saved(),null);
+});
+
+test('billing portal remains visible for a free account with an existing customer',async()=>{
+  const a=app(null,{fetch:async()=>Response.json({tier:'free',maxPaths:4,signedIn:true,checkoutAvailable:true,billingPortalAvailable:true})});
+  await a.loadAccess();assert.match(a.billingView(),/data-action="billing-portal"/);
+  a.state.access.billingPortalAvailable=false;assert.doesNotMatch(a.billingView(),/data-action="billing-portal"/);
+});
 
 test('first visit leads with starting actions and an explicitly illustrative chart',()=>{
   const a=app(),html=a.dashboard();
