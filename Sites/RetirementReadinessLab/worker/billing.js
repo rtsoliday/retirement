@@ -168,7 +168,7 @@ async function linkAccounts(request, env) {
       }, 'POST');
     }
     if (other) await stripe(env, `customers/${other.id}`, { [`metadata[${other.id === chatgptCustomer.id ? 'retirement_site_user_id' : 'retirement_firebase_uid'}]`]: '' }, 'POST');
-    return json({ linked: true });
+    return json({ linked: true, billingCustomerId: chosen.id });
   } catch { return json({ error: 'Could not link accounts. Please try again.' }, 502); }
 }
 export async function billing(request, env, pathname, isOwner = false) {

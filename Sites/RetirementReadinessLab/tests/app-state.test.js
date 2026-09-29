@@ -9,7 +9,7 @@ import {runSimulation} from '../dist/engine.js';
 // Execute the actual app and event handlers. Only browser IO is replaced;
 // workers stay pending so changes during calculations can be reproduced.
 function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={fail:false},clock={now:Date.now()},session=new Map(),location={search:'',pathname:'/',hash:''},identity={accountKey:null},params=URLSearchParams}={}){
-  const elements=new Map(),workers=[];
+  const elements=new Map(),workers=[],timers=new Map();let nextTimer=0;
   let stored=saved===null?null:JSON.stringify(saved);
   function element(selector){
     if(['#advanced-model','#allocation-settings'].includes(selector))return null;
@@ -18,6 +18,7 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
   }
   const context=vm.createContext({...model,...format,structuredClone,Intl,URLSearchParams:params,URL,console,Date:class extends Date{static now(){return clock.now;}},
     location,history:{replaceState(_state,_title,url){const next=new URL(url,'https://example.test');location.search=next.search;location.hash=next.hash;}},confirm:()=>true,
+    setTimeout(fn,delay){const id=++nextTimer;timers.set(id,{fn,at:clock.now+delay});return id;},clearTimeout(id){timers.delete(id);},
     sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value)},socialState:()=>({...identity}),
     localStorage:{getItem:()=>stored,setItem(key,value){if(storage.fail)throw new Error('QuotaExceededError');stored=value;}},window:{addEventListener(){},scrollTo(){}},
     document:{querySelector:element,querySelectorAll:()=>[],addEventListener(){}},
@@ -27,7 +28,7 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
   const source=readFileSync(new URL('../dist/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replaceAll('import.meta.url',JSON.stringify(new URL('../dist/app.js',import.meta.url).href));
   vm.runInContext(source.replace('function render(){','let renderCount=0;function render(){renderCount++;'),context);
   const api=vm.runInContext('({state,run,runLab,runDecision,results,dashboard,lab,budget,billingView,reportText,current,persist,loadAccess,isPro,effectivePaths,syncAuthState,linkAccounts,renders:()=>renderCount})',context);
-  return {...api,workers,element,saved:()=>JSON.parse(stored),change:(selector,target)=>element(selector).listeners.change({target}),
+  return {...api,workers,element,timers,advanceTime(ms){clock.now+=ms;for(const [id,timer] of [...timers])if(timer.at<=clock.now){timers.delete(id);timer.fn();}},saved:()=>JSON.parse(stored),change:(selector,target)=>element(selector).listeners.change({target}),
     click:(action,extra={})=>{const el={dataset:{action,...extra}};return element('#main').listeners.click({target:{closest:selector=>selector==='[data-action]'?el:null}});}};
 }
 function seedExploration(a){a.state.labResults=[{label:'Old plan',result:null}];a.state.decision={targetReadiness:.8,simulationCount:180};}
@@ -201,9 +202,10 @@ test('a different identity cannot inherit grace after its billing check fails',a
 });
 
 test('server identity changes and stale overlapping responses cannot restore another account access',async()=>{
-  let next={tier:'pro',signedIn:true,accountKey:'a'};
-  const a=app(null,{fetch:async()=>Response.json(next,{status:next.status||200})});await a.loadAccess();
-  next={accountKey:'b',status:502};await a.loadAccess();assert.equal(a.isPro(),false);
+  let next={tier:'pro',signedIn:true,accountKey:'a',billingCustomerId:'cus_old'};const session=new Map();
+  const a=app(null,{session,fetch:async()=>Response.json(next,{status:next.status||200})});await a.loadAccess();
+  next={accountKey:'b',status:502};await a.loadAccess();assert.equal(a.isPro(),false);assert.equal(a.state.access.accountKey,'b');assert.equal(a.state.access.signedIn,true);
+  assert.equal(session.get('retirement-billing-reference'),'{}');await a.loadAccess();assert.equal(a.state.access.accountKey,'b');assert.doesNotMatch(a.state.message,/Sign in again/);
   const resolvers=[],b=app(null,{fetch:()=>new Promise(resolve=>resolvers.push(resolve))});
   const old=b.loadAccess(),recent=b.loadAccess();await new Promise(setImmediate);
   resolvers[1](Response.json({tier:'free',signedIn:false}));await recent;
@@ -221,6 +223,92 @@ test('verified checkout customer reference survives URL cleanup and reload',asyn
 test('account-link query cleanup works without URLSearchParams.size',async()=>{
   class OlderParams extends URLSearchParams{get size(){return undefined;}}
   const location={search:'?link=google&keep=1',pathname:'/',hash:'#billing'};
-  const a=app(null,{location,params:OlderParams,fetch:async()=>Response.json({linked:true})});await a.linkAccounts();
+  const a=app(null,{location,params:OlderParams,fetch:async()=>Response.json({linked:true,billingCustomerId:'cus_linked'})});await a.linkAccounts();
   assert.equal(location.search,'?keep=1');assert.equal(location.hash,'#billing');
+});
+
+test('initial Stripe outages retain authenticated identity and the stored customer reference',async()=>{
+  const session=new Map([['retirement-billing-reference',JSON.stringify({customerId:'cus_123'})]]),requests=[];
+  const a=app(null,{session,fetch:async(_url,options)=>{requests.push(options);return Response.json({signedIn:true,accountKey:'a',accountProvider:'chatgpt',error:'Stripe unavailable'},{status:502});}});
+  for(let i=0;i<3;i++){
+    assert.equal(await a.loadAccess(),false);assert.equal(a.state.access.signedIn,true);assert.equal(a.state.access.accountKey,'a');
+    assert.equal(JSON.parse(session.get('retirement-billing-reference')).customerId,'cus_123');
+    assert.match(a.billingView(),/Signed in with ChatGPT/);assert.doesNotMatch(a.state.message,/Sign in again/);assert.equal(a.isPro(),false);
+  }
+  assert.ok(requests.every(r=>r.headers['x-retirement-customer']==='cus_123'));
+});
+
+test('repeated outages preserve known identity for Free and expired Pro access',async()=>{
+  for(const tier of ['free','pro'])for(const failure of ['network','502']){
+    let failing=false;const clock={now:1000},session=new Map();
+    const a=app(null,{clock,session,fetch:async()=>{
+      if(!failing)return Response.json({tier,signedIn:true,accountKey:'a',accountProvider:'google',billingCustomerId:'cus_123'});
+      if(failure==='network')throw Error('offline');
+      return Response.json({signedIn:true,accountKey:'a',accountProvider:'google'},{status:502});
+    }});
+    await a.loadAccess();failing=true;clock.now+=300001;
+    for(let i=0;i<3;i++){
+      await a.loadAccess();assert.equal(a.state.access.accountKey,'a');assert.equal(a.state.access.signedIn,true);assert.equal(a.state.access.accountProvider,'google');
+      assert.equal(a.isPro(),false);assert.doesNotMatch(a.state.message,/Sign in again/);assert.equal(JSON.parse(session.get('retirement-billing-reference')).customerId,'cus_123');
+    }
+  }
+});
+
+test('grace expiration redraws permissions without extending grace or interrupting results',async()=>{
+  for(const running of [false,true])for(const ownerAccess of [false,true]){
+    let failing=false;const clock={now:1000};
+    const a=app(null,{clock,fetch:async()=>failing?Response.json({accountKey:'a'},{status:502}):Response.json({tier:'pro',signedIn:true,accountKey:'a',ownerAccess})});
+    a.state.view='billing';await a.loadAccess();const result=runSimulation({...a.current(),numberOfSimulations:4});a.state.results.set(a.current().id,result);seedExploration(a);
+    failing=true;await a.loadAccess();a.advanceTime(60000);await a.loadAccess();assert.equal(a.timers.size,1);
+    const pending=running?a.run():null,renders=a.renders();a.advanceTime(240000);
+    assert.equal(a.renders(),renders+1);assert.equal(a.timers.size,0);assert.equal(a.effectivePaths(),4);
+    assert.doesNotMatch(a.element('#main').innerHTML,/Active on this account|Owner Pro access is active|last verified Pro access is available/);
+    assert.match(a.state.message,running?/Calculating this plan/:/New runs use the four-path/);assert.equal(a.state.results.get(a.current().id),result);assert.ok(a.state.decision);
+    if(running){assert.equal(a.workers[0].terminated,undefined);a.workers[0].onmessage({data:{type:'result',result}});await pending;}
+    assert.equal(a.state.results.get(a.current().id),result);
+  }
+});
+
+test('recovery and authentication changes cancel an obsolete grace timer',async()=>{
+  for(const next of [{tier:'pro',signedIn:true,accountKey:'a'},{tier:'free',signedIn:false},{status:401}]){
+    let reply={tier:'pro',signedIn:true,accountKey:'a'};const a=app(null,{clock:{now:1000},fetch:async()=>reply.status===401?new Response('Unauthorized',{status:401}):Response.json(reply,{status:reply.status||200})});
+    await a.loadAccess();reply={accountKey:'a',status:502};await a.loadAccess();assert.equal(a.timers.size,1);
+    reply=next;await a.loadAccess();assert.equal(a.timers.size,0);const renders=a.renders();a.advanceTime(300001);
+    assert.equal(a.renders(),renders);assert.equal(a.isPro(),next.tier==='pro');
+  }
+});
+
+test('payment pending becomes confirmed after checkout parameters are removed',async()=>{
+  let tier='free';const location={search:'?checkout=success&session_id=cs_live_12345678&keep=1',pathname:'/',hash:''};
+  const a=app(null,{location,fetch:async()=>Response.json({tier,signedIn:true,accountKey:'a',billingCustomerId:'cus_123'})});
+  await a.loadAccess();assert.equal(location.search,'?keep=1');assert.match(a.state.message,/Payment is being confirmed/);
+  await a.loadAccess();assert.match(a.state.message,/Payment is being confirmed/);
+  tier='pro';await a.loadAccess();assert.equal(a.isPro(),true);assert.equal(a.state.message,'Pro is active for this account.');
+});
+
+test('linking uses the chosen customer and supersedes checks started before linking',async()=>{
+  let resolveOld,first=true;const requests=[],session=new Map(),identity={accountKey:'firebase:a'};
+  const a=app(null,{identity,session,fetch:async(url,options)=>{
+    requests.push({url,options});
+    if(url==='/api/billing/link')return Response.json({linked:true,billingCustomerId:'cus_linked'});
+    if(first){first=false;return new Promise(resolve=>{resolveOld=resolve;});}
+    return Response.json({tier:'pro',signedIn:true,accountKey:'firebase:a',billingCustomerId:'cus_linked'});
+  }});
+  const old=a.loadAccess();await new Promise(setImmediate);await a.linkAccounts();a.syncAuthState();
+  resolveOld(Response.json({tier:'free',signedIn:true,accountKey:'firebase:a',billingCustomerId:'cus_old'}));await old;
+  assert.equal(JSON.parse(session.get('retirement-billing-reference')).customerId,'cus_linked');
+  await a.loadAccess();assert.equal(requests.at(-1).options.headers['x-retirement-customer'],'cus_linked');assert.equal(a.isPro(),true);
+});
+
+test('link confirmation does not overwrite a subsequent billing outage notice',async()=>{
+  const a=app(null,{fetch:async url=>url==='/api/billing/link'?Response.json({linked:true,billingCustomerId:'cus_linked'}):Response.json({signedIn:true,accountKey:'a'},{status:502})});
+  await a.click('social-link-accounts');assert.match(a.state.message,/Subscription status is unavailable/);assert.doesNotMatch(a.state.message,/Sign-in methods linked/);
+});
+
+test('account changes during linking cannot install the earlier account customer reference',async()=>{
+  let finish;const identity={accountKey:'firebase:a'},session=new Map();
+  const a=app(null,{identity,session,fetch:()=>new Promise(resolve=>{finish=resolve;})});
+  const pending=a.linkAccounts();await new Promise(setImmediate);identity.accountKey='firebase:b';a.syncAuthState();
+  finish(Response.json({linked:true,billingCustomerId:'cus_old'}));await assert.rejects(pending,/signed-in account changed/);
+  assert.equal(session.get('retirement-billing-reference'),'{}');assert.equal(a.isPro(),false);
 });

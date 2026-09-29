@@ -52,6 +52,10 @@ function stripeFixture(initial = []) {
       for (const [key, value] of values) { const m = /^metadata\[(.+)\]$/.exec(key); if (m) customer.metadata[m[1]] = value; }
       return Response.json(customer);
     }
+    if (path.startsWith('/v1/customers/') && init.method === 'GET') {
+      const customer=customers.get(path.split('/').at(-1));
+      return Response.json(customer||{}, {status:customer?200:404});
+    }
     if (path === '/v1/checkout/sessions' && init.method === 'POST') return Response.json({ url: 'https://checkout.stripe.com/c/pay/example' });
     if (path === '/v1/billing_portal/sessions' && init.method === 'POST') return Response.json({ url: 'https://billing.stripe.com/p/session/example' });
     return Response.json({}, { status: 404 });
@@ -135,6 +139,24 @@ test('two paid accounts are not silently combined', async () => {
   const response = await worker.fetch(request('/api/billing/link', { user: 'chatgpt-user', bearer: await token(), method: 'POST' }), fixture.env);
   assert.equal(response.status, 409);
   assert.equal(fixture.customers.get('cus_chatgpt').metadata.retirement_firebase_uid, undefined);
+});
+
+test('linked customer reference restores either sign-in without waiting for search updates',async()=>{
+  for(const paid of ['chatgpt','firebase']){
+    const fixture=stripeFixture([
+      {id:'cus_chatgpt',metadata:{retirement_site_user_id:'chatgpt-user'},paid:paid==='chatgpt'},
+      {id:'cus_firebase',metadata:{retirement_firebase_uid:'firebase-user'},paid:paid==='firebase'},
+    ]);
+    const bearer=await token();
+    const response=await worker.fetch(request('/api/billing/link',{user:'chatgpt-user',bearer,method:'POST'}),fixture.env);
+    assert.equal(response.status,200);const linked=await response.json();assert.equal(linked.billingCustomerId,`cus_${paid}`);
+    const fetch=fixture.env.STRIPE_FETCH;
+    fixture.env.STRIPE_FETCH=async(url,init)=>{assert.notEqual(new URL(url).pathname,'/v1/customers/search','must not search after linking');return fetch(url,init);};
+    for(const identity of [{user:'chatgpt-user'},{bearer}]){
+      const statusRequest=request('/api/billing/status',identity);statusRequest.headers.set('x-retirement-customer',linked.billingCustomerId);
+      const status=await worker.fetch(statusRequest,fixture.env);assert.equal(status.status,200);assert.equal((await status.json()).tier,'pro');
+    }
+  }
 });
 
 test('Firebase checkout uses its verified UID, without borrowing ChatGPT entitlement', async () => {

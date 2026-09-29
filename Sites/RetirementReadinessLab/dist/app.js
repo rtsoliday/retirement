@@ -15,12 +15,25 @@ if(!state.scenarios.some(s=>s.id===state.selectedId))state.selectedId=state.scen
 state.hasStartedPlan=hasSavedScenarios&&(saved.hasStartedPlan??true);
 function current(){return state.scenarios.find(s=>s.id===state.selectedId)||state.scenarios[0];}
 const ACCESS_GRACE_MS=5*60*1000;
-let accessConfirmedAt=0,accessRequest=0,billingReference={};
+let accessConfirmedAt=0,accessRequest=0,accessGraceTimer=null,billingReference={};
 try{const savedReference=JSON.parse(sessionStorage.getItem('retirement-billing-reference'));if(typeof savedReference?.customerId==='string'&&/^cus_[A-Za-z0-9]{1,200}$/.test(savedReference.customerId))billingReference={customerId:savedReference.customerId};}catch{}
 function saveBillingReference(){try{sessionStorage.setItem('retirement-billing-reference',JSON.stringify(billingReference));}catch{}}
 function isPro(){return state.access.tier==='pro'&&(!state.accessStale||Date.now()-accessConfirmedAt<ACCESS_GRACE_MS);}
 async function billingHeaders(){return {...await authHeaders(),...(billingReference.customerId?{'x-retirement-customer':billingReference.customerId}:{})};}
-function resetBillingIdentity(){accessRequest++;accessConfirmedAt=0;billingReference={};saveBillingReference();state.access={tier:'free',maxPaths:FREE_SIMULATION_PATHS,signedIn:false,checkoutAvailable:false};state.accessStale=false;}
+function clearAccessGraceTimer(){clearTimeout(accessGraceTimer);accessGraceTimer=null;}
+function resetBillingIdentity(){accessRequest++;clearAccessGraceTimer();accessConfirmedAt=0;billingReference={};saveBillingReference();state.access={tier:'free',maxPaths:FREE_SIMULATION_PATHS,signedIn:false,checkoutAvailable:false};state.accessStale=false;}
+function scheduleAccessGraceExpiry(){
+  clearAccessGraceTimer();
+  if(!state.accessStale||state.access.tier!=='pro')return;
+  accessGraceTimer=setTimeout(()=>{
+    accessGraceTimer=null;
+    if(!state.accessStale||state.access.tier!=='pro')return;
+    if(isPro()){scheduleAccessGraceExpiry();return;}
+    state.access={...state.access,tier:'free',maxPaths:FREE_SIMULATION_PATHS,ownerAccess:false,checkoutAvailable:false};
+    if(state.message===ACCESS_RETRY)state.message=ACCESS_UNAVAILABLE;
+    render();
+  },Math.max(0,accessConfirmedAt+ACCESS_GRACE_MS-Date.now()));
+}
 function syncAuthState(){const next=socialState();if(state.auth.accountKey!==undefined&&state.auth.accountKey!==next.accountKey)resetBillingIdentity();state.auth=next;}
 function effectivePaths(s=current()){return isPro()?Math.max(FREE_SIMULATION_PATHS,Math.min(MAX_SIMULATION_PATHS,Number(s.numberOfSimulations)||FREE_SIMULATION_PATHS)):FREE_SIMULATION_PATHS;}
 function simulationScenario(s=current()){const copy=deep(s);copy.numberOfSimulations=effectivePaths(s);copy.seed=DEFAULT_SEED;return copy;}
@@ -255,9 +268,9 @@ $('#main').addEventListener('click',async e=>{const runPlan=e.target.closest('[d
       else if(a==='social-link-accounts')await linkAccounts();
       else if(a==='social-signout')await signOutSocial();
       syncAuthState();
-      await loadAccess({force:true});
-      if(a.includes('link'))setMessage('Sign-in methods linked to the same subscription.');
-      else if(a==='social-signout')setMessage('Signed out of Google.');
+      const verified=await loadAccess({force:true});
+      if(a.includes('link')&&verified)setMessage('Sign-in methods linked to the same subscription.');
+      else if(a==='social-signout'&&verified)setMessage('Signed out of Google.');
     }catch(error){setMessage('Error: '+(error?.message||'Sign-in failed. Please try again.'));}
     finally{el.disabled=false;}
     return;
@@ -290,50 +303,71 @@ $('#import-file').addEventListener('change',async e=>{const file=e.target.files?
 render();
 
 async function linkAccounts(){
+  syncAuthState();
+  const linkingAccount=state.auth.accountKey;
   const response=await fetch('/api/billing/link',{method:'POST',credentials:'same-origin',headers:await authHeaders()});
   const data=await response.json();
   if(!response.ok)throw new Error(data.error||'Could not link accounts.');
+  if(linkingAccount!==socialState().accountKey)throw new Error('The signed-in account changed. Check your current account before linking again.');
+  if(data.linked!==true||typeof data.billingCustomerId!=='string'||!/^cus_[A-Za-z0-9]{1,200}$/.test(data.billingCustomerId))throw new Error('Could not verify the linked billing account. Please retry.');
+  // Supersede checks started before linking and use the chosen customer directly.
+  // The server still verifies ownership and current subscription on every use.
+  accessRequest++;
+  billingReference={customerId:data.billingCustomerId};saveBillingReference();
   const query=new URLSearchParams(location.search);
   if(query.has('link')){query.delete('link');history.replaceState(null,'',location.pathname+(query.toString()?'?'+query:'')+location.hash);}
 }
-const ACCESS_UNAVAILABLE='Subscription status is unavailable. The free preview remains available.';
+const ACCESS_UNAVAILABLE='Subscription status is unavailable. New runs use the four-path free preview; your completed results are kept.';
+const PAYMENT_PENDING='Payment is being confirmed. Refresh your plan in a moment.';
 // Billing checks govern future runs. Completed results belong to the local plan
 // and survive outages, upgrades, expiration and sign-out.
 async function loadAccess({force=false}={}){
-  const requestId=++accessRequest,before=JSON.stringify(state.access),query=new URLSearchParams(location.search);let message=null,rerender=force;
+  const requestId=++accessRequest,before=JSON.stringify(state.access),query=new URLSearchParams(location.search);let message=null,rerender=force,verified=false;
   try{
     const sessionId=query.get('session_id');
     const response=await fetch('/api/billing/status'+(sessionId?'?session_id='+encodeURIComponent(sessionId):''),{credentials:'same-origin',cache:'no-store',headers:await billingHeaders()});
+    if(requestId!==accessRequest)return false;
+    // Authentication rejection is definitive even if the response is not JSON.
+    if(response.status===401||response.status===403){
+      resetBillingIdentity();
+      setMessage('Sign in again to verify your plan. Your completed results are still available.');return false;
+    }
     const access=await response.json();
-    if(requestId!==accessRequest)return;
+    if(requestId!==accessRequest)return false;
     if(!response.ok){
-      // Authentication failure or a different server-confirmed identity cannot
-      // inherit an earlier account's grace period.
-      if(response.status===401||response.status===403||(access.accountKey&&access.accountKey!==state.access.accountKey)){
-        resetBillingIdentity();
-        setMessage('Sign in again to verify your plan. Your completed results are still available.');return;
+      // Stripe can fail after authentication succeeds. An unknown prior identity
+      // is not a change of user, and billing failures must retain known identity.
+      if(typeof access?.accountKey==='string'&&access.accountKey){
+        if(state.access.accountKey&&access.accountKey!==state.access.accountKey){
+          resetBillingIdentity();
+          state.access={...state.access,signedIn:true,accountKey:access.accountKey,accountProvider:access.accountProvider};
+          state.accessStale=true;setMessage(ACCESS_UNAVAILABLE);return false;
+        }
+        state.access={...state.access,signedIn:true,accountKey:access.accountKey,accountProvider:access.accountProvider??state.access.accountProvider};
       }
-      throw new Error(access.error||'Subscription check failed');
+      throw new Error(access?.error||'Subscription check failed');
     }
     if(!['free','pro'].includes(access.tier))throw new Error('Invalid subscription response');
-    state.access=access;state.accessStale=false;accessConfirmedAt=Date.now();
+    clearAccessGraceTimer();state.access=access;state.accessStale=false;accessConfirmedAt=Date.now();verified=true;
     billingReference=access.billingCustomerId?{customerId:access.billingCustomerId}:{};saveBillingReference();
     if(access.tier==='pro'){let changed=false;for(const scenario of state.scenarios)changed=applyProSimulationDefault(scenario)||changed;if(changed){persist(false);rerender=true;}}
-    if(query.get('checkout')==='success')message=access.tier==='pro'?'Pro is active for this account.':'Payment is being confirmed. Refresh your plan in a moment.';
+    if(query.get('checkout')==='success')message=access.tier==='pro'?'Pro is active for this account.':PAYMENT_PENDING;
     else if(query.get('checkout')==='canceled')message='Checkout was canceled.';
+    else if(state.message===PAYMENT_PENDING&&access.tier==='pro')message='Pro is active for this account.';
     else if(state.message===ACCESS_UNAVAILABLE||state.message===ACCESS_RETRY)message='';
     // Retain an unverified checkout reference for another attempt. Once the
     // customer is verified, later requests use its direct, ownership-checked ID.
     if(!sessionId||access.billingCustomerId){query.delete('checkout');query.delete('session_id');const search=query.toString();history.replaceState(null,'',location.pathname+(search?'?'+search:'')+location.hash);}
   }catch{
-    if(requestId!==accessRequest)return;
+    if(requestId!==accessRequest)return false;
     state.accessStale=true;
-    if(isPro())message=ACCESS_RETRY;
-    else{state.access={tier:'free',maxPaths:FREE_SIMULATION_PATHS,signedIn:state.access.signedIn,checkoutAvailable:false};message=ACCESS_UNAVAILABLE;}
+    if(isPro()){message=ACCESS_RETRY;scheduleAccessGraceExpiry();}
+    else{clearAccessGraceTimer();state.access={...state.access,tier:'free',maxPaths:FREE_SIMULATION_PATHS,ownerAccess:false,checkoutAvailable:false};message=ACCESS_UNAVAILABLE;}
   }
   if(JSON.stringify(state.access)!==before)rerender=true;
   if(message!==null&&message!==state.message){state.message=message;rerender=true;}
   if(rerender)render();
+  return verified;
 }
 const ACCESS_RETRY='Subscription status is temporarily unavailable. Your last verified Pro access is available for up to five minutes; your completed results are kept.';
 async function bootAuth(){
