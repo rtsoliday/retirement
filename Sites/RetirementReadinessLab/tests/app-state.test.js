@@ -19,7 +19,7 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
   const windowListeners={};
   function element(selector){
     if(['#advanced-model','#allocation-settings'].includes(selector))return null;
-    if(!elements.has(selector))elements.set(selector,{innerHTML:'',textContent:'',dataset:{},listeners:{},classList:{toggle(){},remove(){}},addEventListener(name,fn){this.listeners[name]=fn;},querySelectorAll(){return [];},setAttribute(){},focus(){},scrollIntoView(){},insertAdjacentHTML(){},remove(){elements.delete(selector);}});
+    if(!elements.has(selector))elements.set(selector,{innerHTML:'',textContent:'',dataset:{},listeners:{},classList:{toggle(){},remove(){}},addEventListener(name,fn){this.listeners[name]=fn;},querySelectorAll(){return [];},querySelector(child){return element(selector+' '+child);},setAttribute(){},focus(){},scrollIntoView(){},insertAdjacentHTML(){},remove(){elements.delete(selector);}});
     return elements.get(selector);
   }
   const document={activeElement:null,querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement(){return {click(){downloads.push({name:this.download,blob:downloadBlobs.get(this.href)});}};}};
@@ -34,12 +34,111 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
   });
   const source=readFileSync(new URL('../dist/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replaceAll('import.meta.url',JSON.stringify(new URL('../dist/app.js',import.meta.url).href));
   vm.runInContext(source.replace('function render({preserveEditor=false}={}){','let renderCount=0;function render({preserveEditor=false}={}){renderCount++;'),context);
-  const api=vm.runInContext('({state,setup,run,runLab,runDecision,results,dashboard,lab,budget,billingView,reportText,current,persist,loadAccess,isPro,effectivePaths,syncAuthState,linkAccounts,renders:()=>renderCount})',context);
+  const api=vm.runInContext('({state,setup,run,runLab,runDecision,results,dashboard,lab,budget,budgetView,budgetSummary,render,billingView,reportText,current,persist,loadAccess,isPro,effectivePaths,syncAuthState,linkAccounts,renders:()=>renderCount})',context);
   return {...api,workers,element,timers,document,downloads,stored:readStored,storageChanged:()=>windowListeners.storage({key:'retirement-readiness-lab-sites-v1'}),beforeUnload:event=>windowListeners.beforeunload(event),advanceTime(ms){clock.now+=ms;for(const [id,timer] of [...timers])if(timer.at<=clock.now){timers.delete(id);timer.fn();}},saved:()=>JSON.parse(readStored()),change:(selector,target)=>element(selector).listeners.change({target}),
     click:(action,extra={})=>{const el={dataset:{action,...extra}};return element('#main').listeners.click({target:{closest:selector=>selector==='[data-action]'?el:null}});}};
 }
 function seedExploration(a){a.state.labResults=[{label:'Old plan',result:null}];a.state.decision={targetReadiness:.8,simulationCount:180};}
 function assertCleared(a){assert.equal(a.state.labResults,null);assert.equal(a.state.decision,null);}
+
+test('the first Budget month is visible without saving or treating an untouched entry as zero spending',async()=>{
+  const a=app(),s=a.current();a.state.view='budget';const html=a.budget();
+  const lastMonth=new Date();lastMonth.setDate(1);lastMonth.setMonth(lastMonth.getMonth()-1);
+  const expected=`${lastMonth.getFullYear()}-${String(lastMonth.getMonth()+1).padStart(2,'0')}`;
+  assert.match(html,/id="budget-month-0"[^>]* open/);
+  assert.match(html,/id="month-0-credit"[^>]*value=""/);
+  assert.equal(a.budgetView().pending.month,expected);
+  assert.match(html,/data-action="apply-budget" disabled/);
+  assert.doesNotMatch(html,/Add at least one complete month/,'An untouched worksheet needs guidance, not an error');
+  assert.equal(s.budget.monthlyBudgets.length,0);assert.equal(s.spending.annualBaseSpending,75000);assert.equal(a.stored(),null);
+  await a.change('#main',{dataset:{month:'0',part:'month'},value:'2026-01'});
+  assert.equal(a.budgetView().pending.month,'2026-01');assert.equal(s.budget.monthlyBudgets.length,0);assert.equal(a.stored(),null);
+  await a.change('#main',{dataset:{month:'0',part:'credit'},value:'',validity:{badInput:true}});
+  assert.equal(s.budget.monthlyBudgets.length,0);assert.equal(a.stored(),null);
+  await a.change('#main',{dataset:{month:'0',part:'credit'},value:'0'});
+  assert.equal(s.budget.monthlyBudgets.length,1);assert.equal(s.budget.monthlyBudgets[0].month,'2026-01');
+  assert.equal(a.saved().scenarios[0].budget.monthlyBudgets.length,1,'An explicitly entered zero is a real spending entry');
+  assert.equal(s.spending.annualBaseSpending,75000);assert.equal(a.budgetView().pending,null);
+});
+
+test('adding an unentered month cannot reduce an applied estimate; committing it creates a draft',async()=>{
+  const s=model.baseScenario();s.budget.monthlyBudgets=[{month:'2026-08',creditCardBills:[{monthlyAmount:4000}]}];model.applyBudgetEstimate(s);
+  const a=app({scenarios:[s],selectedId:s.id});a.state.view='budget';a.budget();const saved=a.stored();
+  assert.match(a.budgetSummary(),/>Applied</);
+  await a.click('add-month');assert.equal(a.stored(),saved);
+  assert.equal(a.current().budget.monthlyBudgets.length,1);assert.equal(model.budgetEstimate(a.current().budget),48000);
+  assert.notEqual(a.budgetView().pending.month,'2026-08');assert.match(a.budgetSummary(),/>Applied</);
+  await a.click('add-month');assert.equal(a.current().budget.monthlyBudgets.length,1,'Only one unentered month is offered at a time');
+  await a.click('remove-month',{index:'1'});assert.equal(a.budgetView().pending,null);assert.equal(a.stored(),saved);
+  await a.click('add-month');
+  await a.change('#main',{dataset:{month:'1',part:'checking'},value:'5000'});
+  assert.equal(a.current().budget.monthlyBudgets.length,2);assert.equal(a.budgetView().pending,null);
+  assert.equal(a.current().spending.annualBaseSpending,48000);assert.equal(model.budgetEstimate(a.current().budget),54000);
+  assert.match(a.budgetSummary(),/>Draft</);assert.match(a.budgetSummary(),/plan still uses \$48,000.00/);
+  await a.click('apply-budget');assert.equal(a.current().spending.annualBaseSpending,54000);assert.match(a.budgetSummary(),/>Applied</);
+});
+
+test('completed months collapse, optional sections summarize their values, and the final monthly amount includes all adjustments',async()=>{
+  const s=model.baseScenario();s.budget.monthlyBudgets=Array.from({length:12},(_,i)=>({month:`2026-${String(i+1).padStart(2,'0')}`,creditCardBills:[{monthlyAmount:4000}]}));
+  s.budget.annualPropertyTaxes=6000;s.budget.retirementAnnualAdjustment=-2400;
+  const a=app({scenarios:[s],selectedId:s.id});a.state.view='budget';const html=a.budget();
+  const rows=[...html.matchAll(/<details class="spending-month"[^>]*>/g)].map(m=>m[0]);
+  assert.equal(rows.length,12);assert.ok(rows.every(row=>!row.includes(' open')));
+  assert.match(html,/January 2026/);assert.match(html,/data-budget-disclosure="annual-bills"><summary/);
+  assert.match(html,/id="budget-annual-bills-summary">\$6,000.00 \/ year/);
+  assert.match(html,/id="budget-retirement-summary">\$200.00 \/ month less/);
+  assert.match(html,/Monthly equivalent<\/span><strong>\$4,300.00/);
+  assert.match(html,/Annual spending<\/span><strong>\$51,600.00/);
+  assert.match(html,/data-budget-disclosure="calculation"><summary>How this was calculated/);
+  assert.match(html,/Excludes mortgage\/rent and health premiums/);assert.match(html,/Use this spending in my plan/);
+  const original=JSON.stringify(a.current()),stored=a.stored();a.element('#budget-month-0').open=true;
+  await a.click('finish-month',{index:'0'});assert.equal(a.element('#budget-month-0').open,false);
+  assert.equal(JSON.stringify(a.current()),original);assert.equal(a.stored(),stored);
+});
+
+test('monthly retirement controls preserve legacy annual amounts exactly when changing direction',async()=>{
+  for(const original of [-1000,1000]){
+    const s=model.baseScenario();s.budget.monthlyBudgets=[{month:'2026-01',creditCardBills:[{monthlyAmount:4000}]}];s.budget.retirementAnnualAdjustment=original;model.applyBudgetEstimate(s);
+    const a=app({scenarios:[s],selectedId:s.id});a.state.view='budget';const applied=a.current().spending.annualBaseSpending;
+    assert.match(a.budget(),/id="budget-retirement-monthly-adjustment"[^>]*value="83.33"/);
+    assert.equal(a.current().budget.retirementAnnualAdjustment,original,'Displaying a rounded monthly value must not change a backup');
+    await a.change('#main',{dataset:{budgetAdjustment:'direction'},value:original<0?'more':'less'});
+    assert.equal(a.current().budget.retirementAnnualAdjustment,-original,'A sign change uses the precise annual value');
+    assert.equal(a.current().spending.annualBaseSpending,applied);assert.match(a.budgetSummary(),/>Draft</);
+    await a.change('#main',{dataset:{budgetAdjustment:'amount'},value:'125.50'});
+    assert.equal(a.current().budget.retirementAnnualAdjustment,original<0?1506:-1506);
+    const copy=app(a.saved());assert.equal(copy.current().budget.retirementAnnualAdjustment,original<0?1506:-1506);
+    await a.click('export-backup');const backup=JSON.parse(await a.downloads[0].blob.text());
+    assert.equal(backup.scenarios[0].budget.retirementAnnualAdjustment,original<0?1506:-1506);
+    assert.equal(Object.hasOwn(backup.scenarios[0].budget,'pending'),false);
+  }
+  const a=app();a.state.view='budget';a.budget();await a.change('#main',{dataset:{budgetAdjustment:'direction'},value:'more'});
+  await a.change('#main',{dataset:{budgetAdjustment:'amount'},value:'250'});assert.equal(a.current().budget.retirementAnnualAdjustment,3000);
+});
+
+test('invalid monthly retirement edits retain applied spending and reject overflow after annualizing',async()=>{
+  const s=model.baseScenario();s.budget.monthlyBudgets=[{month:'2026-01',creditCardBills:[{monthlyAmount:4000}]}];s.budget.retirementAnnualAdjustment=-6000;model.applyBudgetEstimate(s);
+  const a=app({scenarios:[s],selectedId:s.id});a.state.view='budget';a.budget();const before=JSON.stringify(a.current()),stored=a.stored();
+  for(const invalid of [{value:'',validity:{badInput:true}},{value:'1e'},{value:'-50'},{value:'1e15'},{value:'1e308'}]){
+    await a.change('#main',{dataset:{budgetAdjustment:'amount'},...invalid});
+    assert.equal(JSON.stringify(a.current()),before);assert.equal(a.stored(),stored);assert.match(a.state.message,/^Error/);
+  }
+  await a.change('#main',{dataset:{budgetAdjustment:'amount'},value:'0'});
+  assert.equal(a.current().budget.retirementAnnualAdjustment,0);assert.equal(a.current().spending.annualBaseSpending,42000);
+});
+
+test('Budget disclosures and unfinished monthly adjustment editors survive a background render',async()=>{
+  for(const tagName of ['INPUT','SELECT']){
+    const a=app(null,{fetch:async()=>Response.json({tier:'free',signedIn:false})});a.state.view='budget';a.budget();
+    const layout=a.element('.budget-layout');layout.dataset.scenarioId=a.current().id;
+    layout.querySelectorAll=()=>['help','annual-bills','retirement','month-0'].map(key=>({dataset:{budgetDisclosure:key},open:true}));
+    const editor={tagName,type:tagName==='INPUT'?'number':'select-one',id:'live-adjustment',dataset:{budgetAdjustment:tagName==='INPUT'?'amount':'direction'},value:tagName==='INPUT'?'123.45':'more',focus(){a.document.activeElement=this;}};
+    const replacement=a.element('#live-adjustment');replacement.type=editor.type;let retained;replacement.replaceWith=node=>{retained=node;};a.document.activeElement=editor;
+    await a.loadAccess();assert.equal(retained,editor);assert.equal(a.document.activeElement,editor);
+    assert.equal(editor.value,tagName==='INPUT'?'123.45':'more');
+    const html=a.budget();for(const key of ['help','annual-bills','retirement','month-0'])assert.match(html,new RegExp('data-budget-disclosure="'+key+'" open'));
+  }
+});
 
 test('Roth setup shows separate total and contribution inputs with useful five-year explanations',()=>{
   const a=app();a.state.setupSection=1;const html=a.setup();
