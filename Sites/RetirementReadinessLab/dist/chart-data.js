@@ -30,10 +30,11 @@ export function medianOfSorted(values){
 // events once avoids rescanning thousands of paths at every monthly endpoint.
 export function buildFundingSurvival(paths,retirementAge){
   if(!paths.length)return [];
-  const deaths=paths.map(p=>Math.round(p.deathAge*12)).sort((a,b)=>a-b);
+  const endpoints=paths.map(p=>Math.round((p.observationEndAge??p.deathAge)*12)),lastMonth=Math.max(...endpoints);
+  const deaths=paths.filter(p=>p.deathAge<=(p.observationEndAge??p.deathAge)).map(p=>Math.round(p.deathAge*12)).sort((a,b)=>a-b);
   const failures=paths.filter(p=>p.failureAge!==null).map(p=>Math.round(p.failureAge*12)).sort((a,b)=>a-b);
-  const months=new Set([...deaths,...failures]);
-  for(let month=Math.round(retirementAge*12);month<=deaths.at(-1);month+=12)months.add(month);
+  const months=new Set([...endpoints,...deaths,...failures]);
+  for(let month=Math.round(retirementAge*12);month<=lastMonth;month+=12)months.add(month);
   let failed=0,died=0;
   return [...months].sort((a,b)=>a-b).map(month=>{
     while(failed<failures.length&&failures[failed]<=month)failed++;

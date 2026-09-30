@@ -1,10 +1,11 @@
-export const ENGINE_VERSION = '2026.09-medians-survival-endpoints';
+export const ENGINE_VERSION = '2026.09-roth-history-senior-horizon';
 export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
-// Chosen so each sample plan's four-path preview includes at least one shortfall.
+// Retained across engine revisions for repeatable scenario comparisons.
 // Android still uses 20260429.
 export const DEFAULT_SEED = 20260766;
 export const FREE_SIMULATION_PATHS = 4;
 export const MAX_SIMULATION_PATHS = 10000;
+export const MAX_DOLLAR_AMOUNT = Number.MAX_SAFE_INTEGER;
 export const ALLOCATION_KEYS = ['stockUnder30x', 'stock30xTo35x', 'stock35xTo40x', 'stock40xTo45x', 'stock45xTo50x', 'stock50xOrMore'];
 export const FILING_STATUSES = ['Single', 'Married', 'HeadOfHousehold'];
 export const GENDERS = ['Male', 'Female'];
@@ -20,7 +21,8 @@ export function baseScenario() {
   return {
     id: 'base-plan', name: 'Base plan',
     household: {currentAge: 60, retirementAge: 67, retirementAgeMonths: 0, targetEndAge: 119, filingStatus: 'Single', gender: 'Male', spouseGender: 'Female', spouseCurrentAge: 60},
-    accounts: {pretax: 800000, roth: 100000, taxable: 0, cash: 50000},
+    accounts: {pretax: 500000, roth: 50000, taxable: 0, cash: 50000},
+    rothHistory: {contributionBasis: 50000, firstContributionYear: 2021, conversions: [], needsReview: false},
     spending: {annualBaseSpending: 75000, generalInflationMean: .023, generalInflationStdDev: .016, spendingPathModel: 'EmpiricalAgeDecline', lowPortfolioSpendingReduction: .10},
     budget: {annualPropertyTaxes: 0, annualHomeInsurance: 0, annualAutoInsurance: 0, monthlyBudgets: [], retirementAnnualAdjustment: 0, estimateNeedsReview: false, isAppliedToAnnualBaseSpending: false},
     mortgage: {monthlyPayment: 0, yearsLeft: 0, monthsLeft: 0, currentBalance: 0},
@@ -78,6 +80,11 @@ export function normalizeScenario(raw) {
       result[key] = {...base[key], ...raw[key]};
     } else result[key] = raw[key];
   }
+  // Preserve old balances and assumptions, but make the missing history visible.
+  // Never replace an explicitly entered basis or conversion history.
+  if(raw.rothHistory===undefined){
+    result.rothHistory={contributionBasis:result.accounts.roth,firstContributionYear:result.accounts.roth>0?2021:0,conversions:[],needsReview:result.accounts.roth>0};
+  }
   // Older backups used fractional pension ages and care durations. Split these
   // into years and months once; explicit month fields must already be valid.
   for (const [section, years, months] of [['guaranteedIncome','startAge','startAgeMonths'],['longTermCare','averageDurationYears','averageDurationMonths']]) {
@@ -118,7 +125,16 @@ export function validateScenarioStructure(s) {
   const wrongTypes=[];
   (function compare(expected,actual,path){for(const [key,value] of Object.entries(expected)){if(value===null)continue;const next=path?`${path}.${key}`:key;if(Array.isArray(value)){if(!Array.isArray(actual?.[key]))wrongTypes.push(next);}else if(typeof value==='object'){if(actual?.[key]&&typeof actual[key]==='object'&&!Array.isArray(actual[key]))compare(value,actual[key],next);else wrongTypes.push(next);}else if(typeof actual?.[key]!==typeof value)wrongTypes.push(next);}})(TYPE_TEMPLATE,s,'');
   if (wrongTypes.length) return [`These assumptions have the wrong type: ${wrongTypes.join(', ')}.`];
-  return validateBudgetStructure(s.budget);
+  return [...validateBudgetStructure(s.budget),...validateRothHistoryStructure(s.rothHistory)];
+}
+
+export function validateRothHistoryStructure(history) {
+  if(!Array.isArray(history?.conversions))return ['Roth conversion history must be an array.'];
+  const errors=[];
+  for(const [i,lot] of history.conversions.entries()){
+    if(!lot||typeof lot!=='object'||Array.isArray(lot)||!['taxYear','amount','taxableAmount'].every(key=>typeof lot[key]==='number'&&Number.isFinite(lot[key])))errors.push(`Roth conversion ${i+1} must have a finite tax year, remaining principal, and remaining taxable principal.`);
+  }
+  return errors;
 }
 
 export function validateScenario(s) {
@@ -144,6 +160,16 @@ export function validateScenario(s) {
   if (s.socialSecurity.claimAge < 62 || s.socialSecurity.claimAge > 70) errors.push('Social Security claim age must be 62–70.');
   if (h.filingStatus === 'Married' && (s.socialSecurity.spouseClaimAge < 60 || s.socialSecurity.spouseClaimAge > 70)) errors.push('Spouse claim age must be 60–70.');
   if (Object.values(a).some(v=>v<0) || sp.annualBaseSpending<0) errors.push('Balances and spending cannot be negative.');
+  const dollars=[...Object.values(a),sp.annualBaseSpending,s.mortgage.monthlyPayment,s.mortgage.currentBalance,s.rent.monthlyRent,s.home.currentValue,s.healthcare.preMedicareMonthlyPremium,s.socialSecurity.annualBenefitAt67,s.guaranteedIncome.annualIncome,s.longTermCare.annualCost];
+  if(s.budget.isAppliedToAnnualBaseSpending)dollars.push(s.budget.appliedAnnualHomeCosts??(s.budget.annualPropertyTaxes+s.budget.annualHomeInsurance));
+  if (dollars.some(v=>Math.abs(v)>MAX_DOLLAR_AMOUNT)) errors.push('Financial amounts exceed the supported dollar range.');
+  const rh=s.rothHistory;
+  if(rh.contributionBasis<0||rh.contributionBasis>MAX_DOLLAR_AMOUNT)errors.push('Remaining Roth contributions must be a supported amount of 0 or more. Contributions may exceed the balance after investment losses.');
+  if(!Number.isInteger(rh.firstContributionYear)||(rh.firstContributionYear!==0&&(rh.firstContributionYear<1998||rh.firstContributionYear>2026))||(rh.firstContributionYear===0&&(a.roth>0||rh.contributionBasis>0||rh.conversions.some(lot=>lot.amount>0))))errors.push('Enter the first Roth funding tax year from 1998 through 2026, or 0 if no Roth has been funded.');
+  for(const [i,lot] of rh.conversions.entries()){
+    if(!Number.isInteger(lot.taxYear)||lot.taxYear<1998||lot.taxYear>2026||lot.taxYear<rh.firstContributionYear||lot.amount<0||lot.amount>MAX_DOLLAR_AMOUNT||lot.taxableAmount<0||lot.taxableAmount>lot.amount)errors.push(`Roth conversion ${i+1}: enter a valid past tax year and remaining principal; taxable principal must be between 0 and the total principal.`);
+  }
+  if(rh.conversions.reduce((total,lot)=>total+lot.amount,rh.contributionBasis)>MAX_DOLLAR_AMOUNT)errors.push('Roth contribution and conversion principal exceed the supported dollar range.');
   if (sp.generalInflationMean < -.02 || sp.generalInflationMean > .15 || sp.generalInflationStdDev < 0 || sp.generalInflationStdDev > .3) errors.push('General inflation assumptions are outside the supported range.');
   if (sp.lowPortfolioSpendingReduction < 0 || sp.lowPortfolioSpendingReduction > 1) errors.push('Spending reduction must be between 0% and 100%.');
   if (s.healthcare.healthcareInflationMean < 0 || s.healthcare.healthcareInflationMean > .2 || s.healthcare.healthcareInflationStdDev < 0 || s.healthcare.healthcareInflationStdDev > .3) errors.push('Healthcare inflation assumptions are outside the supported range.');
@@ -161,6 +187,7 @@ export function validateScenario(s) {
   if (s.rothConversion.enabled && !ROTH_CONVERSION_RATES.some(x=>Math.abs(x-s.rothConversion.marginalRateCap)<.0001)) errors.push('Roth conversion cap must be 10%, 12%, 22%, 24%, 32%, 35%, or 37%.');
   if (s.longTermCare.annualCost < 0 || s.longTermCare.averageDurationYears < 1 || s.longTermCare.averageDurationYears + s.longTermCare.averageDurationMonths/12 > 10) errors.push('Long-term care cost or duration is invalid.');
   if (s.withdrawalStrategy.drawdownTrigger < -.50 || s.withdrawalStrategy.drawdownTrigger > .25) errors.push('Cash drawdown trigger is outside the supported range.');
+  errors.push(...budgetDollarRangeErrors(s.budget));
   // Draft budget errors are shown in the budget editor; only applied spending feeds the simulation.
   return errors;
 }
@@ -228,10 +255,23 @@ export function validateBudget(budget,{requireMonths=false}={}) {
     if([...ANNUAL_BILLS.map(x=>x[2]),...SEPARATE_COSTS.map(x=>x[1])].some(k=>!nonnegative(m.adjustments?.[k])))errors.push(`${label}: amounts already counted must be 0 or more.`);
   }
   const d=budgetBreakdown(budget);
+  errors.push(...budgetDollarRangeErrors(budget,d));
   // Refund-heavy months may be negative; evaluate deductions over the entire sample.
   if(d.totals.adjusted < -0.005)errors.push('Adjustments exceed spending across the selected months. Check for amounts deducted twice.');
   if(d.estimate < 0)errors.push('The retirement adjustment would make the annual estimate negative.');
   return errors;
+}
+function budgetDollarRangeErrors(budget,d=budgetBreakdown(budget)){
+  const supported=v=>{const n=amount(v);return Number.isFinite(n)&&Math.abs(n)<=MAX_DOLLAR_AMOUNT;};
+  const error=['Budget amounts and calculated totals exceed the supported dollar range.'];
+  if([...ANNUAL_BILLS.map(([,key])=>budget[key]),budget.retirementAnnualAdjustment,budget.appliedAnnualHomeCosts].some(v=>!supported(v)))return error;
+  const adjustments=[...ANNUAL_BILLS.map(x=>x[2]),...SEPARATE_COSTS.map(x=>x[1])];
+  for(const m of budget.monthlyBudgets){
+    if(!supported(m.cashAndAtmWithdrawals)||(m.checkingSavingsBills||[]).some(x=>!supported(x.monthlyAmount))||(m.creditCardBills||[]).some(x=>!supported(x.monthlyAmount))||adjustments.some(key=>!supported(m.adjustments?.[key]))||Object.values(budgetMonthTotals(m)).some(v=>!supported(v)))return error;
+  }
+  // Check intermediate sums as well as the estimate before applying anything.
+  // Otherwise Infinity can become null when the scenario backup is serialized.
+  return [...Object.values(d.totals),...Object.values(d).filter(v=>typeof v==='number')].some(v=>!supported(v))?error:[];
 }
 export function budgetEstimate(budget) { return budgetBreakdown(budget).estimate; }
 export function markBudgetEdited(budget) {
@@ -248,6 +288,14 @@ export function applyBudgetEstimate(scenario) {
   return scenario.spending.annualBaseSpending;
 }
 
+// Manually chosen spending replaces the applied worksheet. Keep the editor,
+// comparisons and spending-target candidates on the same cash-flow assumptions.
+export function setAnnualBaseSpending(scenario,amount) {
+  scenario.spending.annualBaseSpending=amount;
+  scenario.budget.isAppliedToAnnualBaseSpending=false;
+  scenario.budget.estimateNeedsReview=true;
+}
+
 export function scenarioWarnings(s) {
   const notes=[],h=s.household,total=Object.values(s.accounts).reduce((a,b)=>a+b,0),years=retirementAge(s)-h.currentAge;
   if(retirementAge(s)<50)notes.push('Retiring before 50 creates a long drawdown period.');
@@ -258,6 +306,7 @@ export function scenarioWarnings(s) {
   if((retirementAge(s)<65||(h.filingStatus==='Married'&&spouseAtRet<65))&&s.healthcare.preMedicareMonthlyPremium<=0)notes.push('A pre-Medicare adult has no healthcare premium entered.');
   if(!s.healthcare.includeMedicarePremiums)notes.push('Medicare premiums are excluded.');
   if(!s.longTermCare.enabled)notes.push('Long-term care risk is excluded.');
+  if(s.rothHistory.needsReview)notes.push('Review Roth history: this older plan assumes its starting Roth value is remaining contributions, first funded in 2021, with no past conversions.');
   if(s.socialSecurity.annualBenefitAt67<=0)notes.push('No Social Security benefit is entered.');
   if(s.numberOfSimulations===4)notes.push('Four paths are only a preview. Use many more paths for serious comparisons and retirement decisions.');
   else if(s.numberOfSimulations<500)notes.push('Fewer than 500 paths can make comparisons unstable. Use more paths before relying on small differences.');

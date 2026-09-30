@@ -21,7 +21,7 @@ test('ending balances, failure ages and bands average the middle pair for even s
   assert.deepEqual(bands,[{age:65,pessimistic:0,median:500000,optimistic:10000000,pathCount:4}]);
 });
 
-test('funding and survival include the final partial-year shortfall and death',()=>{
+test('funding and survival include the final partial-year shortfall without inventing death at the cutoff',()=>{
   const s=baseScenario();Object.assign(s.household,{currentAge:65,retirementAge:65,targetEndAge:66});
   s.accounts={pretax:0,roth:11500,taxable:0,cash:0};
   Object.assign(s.spending,{annualBaseSpending:12000,spendingPathModel:'Flat',generalInflationMean:0,generalInflationStdDev:0,lowPortfolioSpendingReduction:0});
@@ -31,7 +31,7 @@ test('funding and survival include the final partial-year shortfall and death',(
   assert.deepEqual(r.notFailedByAge,[
     {age:65,notFailedShare:1,aliveShare:1},
     {age:791/12,notFailedShare:0,aliveShare:1},
-    {age:66,notFailedShare:0,aliveShare:0}
+    {age:66,notFailedShare:0,aliveShare:1}
   ]);
 });
 
@@ -107,8 +107,8 @@ test('successful lifetime balances stop at last living age rather than model cap
   assert.equal(r.medianEndingBalance,path.yearEnd.at(-1));
 });
 test('mixed simulation bands are nonnegative, do not outlive sampled lifetimes, and retain readiness while reporting monthly failure ages',()=>{
-  const s=baseScenario();s.household.currentAge=50;s.seed=REFERENCE_SEED;s.numberOfSimulations=50;
-  const r=runSimulation(s);assert.equal(r.successProbability,.98);assert.equal(r.medianFailureAge,947/12);
+  const s=baseScenario();s.accounts={pretax:800000,roth:100000,taxable:0,cash:50000};s.household.currentAge=50;s.seed=REFERENCE_SEED;s.numberOfSimulations=50;s.spending.annualBaseSpending=90000;
+  const r=runSimulation(s);assert.equal(r.successProbability,.98);assert.equal(r.medianFailureAge,956/12);
   assert.ok(r.balanceBands.at(-1).age<=r.notFailedByAge.at(-1).age);
   assert.ok(r.balanceBands.at(-1).age<s.household.targetEndAge);
   for(const b of r.balanceBands){assert.ok(b.pessimistic>=0);assert.ok(b.pessimistic<=b.median&&b.median<=b.optimistic);assert.ok(b.pathCount>0&&b.pathCount<=s.numberOfSimulations);}

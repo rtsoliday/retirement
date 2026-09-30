@@ -8,9 +8,15 @@ import {runSimulation} from '../dist/engine.js';
 
 // Execute the actual app and event handlers. Only browser IO is replaced;
 // workers stay pending so changes during calculations can be reproduced.
-function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={fail:false},clock={now:Date.now()},session=new Map(),location={search:'',pathname:'/',hash:''},identity={accountKey:null},params=URLSearchParams,confirm=()=>true,rawStorage}={}){
+function webLocks(){
+  let queue=Promise.resolve();
+  return {request(_name,callback){const next=queue.then(callback);queue=next.catch(()=>{});return next;}};
+}
+function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={fail:false},clock={now:Date.now()},session=new Map(),location={search:'',pathname:'/',hash:''},identity={accountKey:null},params=URLSearchParams,confirm=()=>true,rawStorage,locks=webLocks(),socialActions={}}={}){
   const elements=new Map(),workers=[],timers=new Map(),downloadBlobs=new Map(),downloads=[];let nextTimer=0;
   let stored=rawStorage===undefined?(saved===null?null:JSON.stringify(saved)):rawStorage;
+  const readStored=()=>Object.hasOwn(storage,'raw')?storage.raw:stored;
+  const windowListeners={};
   function element(selector){
     if(['#advanced-model','#allocation-settings'].includes(selector))return null;
     if(!elements.has(selector))elements.set(selector,{innerHTML:'',textContent:'',dataset:{},listeners:{},classList:{toggle(){},remove(){}},addEventListener(name,fn){this.listeners[name]=fn;},querySelectorAll(){return [];},setAttribute(){},focus(){},scrollIntoView(){},insertAdjacentHTML(){},remove(){elements.delete(selector);}});
@@ -21,21 +27,257 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
     location,history:{replaceState(_state,_title,url){const next=new URL(url,'https://example.test');location.search=next.search;location.hash=next.hash;}},confirm,
     setTimeout(fn,delay){const id=++nextTimer;timers.set(id,{fn,at:clock.now+delay});return id;},clearTimeout(id){timers.delete(id);},
     sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value)},socialState:()=>({...identity}),
-    localStorage:{getItem:()=>stored,setItem(key,value){if(storage.fail)throw new Error('QuotaExceededError');stored=value;}},window:{addEventListener(){},scrollTo(){}},
+    navigator:{locks},localStorage:{getItem:readStored,setItem(key,value){if(storage.fail)throw new Error('QuotaExceededError');if(Object.hasOwn(storage,'raw'))storage.raw=value;else stored=value;}},window:{addEventListener(name,handler){windowListeners[name]=handler;},scrollTo(){}},
     document,
-    chartCard:()=>'',mountCharts(){},disposeCharts(){},initializeSocialAuth:()=>new Promise(()=>{}),fetch,authHeaders:async()=>({}),
+    chartCard:()=>'',mountCharts(){},disposeCharts(){},initializeSocialAuth:()=>new Promise(()=>{}),fetch,authHeaders:async()=>({}),...socialActions,
     Worker:class{constructor(){workers.push(this);}postMessage(data){this.data=data;}terminate(){this.terminated=true;}},
   });
   const source=readFileSync(new URL('../dist/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replaceAll('import.meta.url',JSON.stringify(new URL('../dist/app.js',import.meta.url).href));
   vm.runInContext(source.replace('function render({preserveEditor=false}={}){','let renderCount=0;function render({preserveEditor=false}={}){renderCount++;'),context);
   const api=vm.runInContext('({state,setup,run,runLab,runDecision,results,dashboard,lab,budget,billingView,reportText,current,persist,loadAccess,isPro,effectivePaths,syncAuthState,linkAccounts,renders:()=>renderCount})',context);
-  return {...api,workers,element,timers,document,downloads,stored:()=>stored,advanceTime(ms){clock.now+=ms;for(const [id,timer] of [...timers])if(timer.at<=clock.now){timers.delete(id);timer.fn();}},saved:()=>JSON.parse(stored),change:(selector,target)=>element(selector).listeners.change({target}),
+  return {...api,workers,element,timers,document,downloads,stored:readStored,storageChanged:()=>windowListeners.storage({key:'retirement-readiness-lab-sites-v1'}),beforeUnload:event=>windowListeners.beforeunload(event),advanceTime(ms){clock.now+=ms;for(const [id,timer] of [...timers])if(timer.at<=clock.now){timers.delete(id);timer.fn();}},saved:()=>JSON.parse(readStored()),change:(selector,target)=>element(selector).listeners.change({target}),
     click:(action,extra={})=>{const el={dataset:{action,...extra}};return element('#main').listeners.click({target:{closest:selector=>selector==='[data-action]'?el:null}});}};
 }
 function seedExploration(a){a.state.labResults=[{label:'Old plan',result:null}];a.state.decision={targetReadiness:.8,simulationCount:180};}
 function assertCleared(a){assert.equal(a.state.labResults,null);assert.equal(a.state.decision,null);}
 
-test('repairing a missing or duplicate scenario ID preserves later IDs and the selected plan',()=>{
+test('Roth setup shows separate total and contribution inputs with useful five-year explanations',()=>{
+  const a=app();a.state.setupSection=1;const html=a.setup();
+  assert.match(html,/Total Roth IRA value/);assert.match(html,/Remaining regular contributions/);
+  assert.match(html,/data-field="rothHistory.contributionBasis"/);
+  assert.match(html,/First Roth funding tax year/);assert.match(html,/five.tax.year clock/);
+  assert.match(html,/can exceed the current balance/);assert.doesNotMatch(html,/treats withdrawals from this balance as tax-free/);
+});
+
+test('Roth history edits save, invalidate results, survive reload, and appear in reports and backups',async()=>{
+  const a=app(),s=a.current();a.state.results.set(s.id,{completed:true});seedExploration(a);
+  await a.change('#main',{dataset:{field:'rothHistory.contributionBasis',type:'money'},value:'75000'});
+  assert.equal(s.rothHistory.contributionBasis,75000);assert.equal(s.accounts.roth,50000);
+  assert.equal(a.state.results.has(s.id),false);assertCleared(a);
+  await a.change('#main',{dataset:{field:'rothHistory.firstContributionYear',type:'number'},value:'2024'});
+  await a.click('add-roth-conversion');
+  await a.change('#main',{dataset:{field:'rothHistory.conversions.0.taxYear',type:'number'},value:'2025'});
+  await a.change('#main',{dataset:{field:'rothHistory.conversions.0.amount',type:'money'},value:'12000'});
+  assert.equal(s.rothHistory.conversions[0].taxableAmount,12000);
+  await a.change('#main',{dataset:{field:'rothHistory.conversions.0.taxableAmount',type:'money'},value:'8000'});
+  await a.change('#main',{dataset:{field:'rothHistory.conversions.0.amount',type:'money'},value:'11000'});
+  assert.equal(s.rothHistory.conversions[0].taxableAmount,8000,'An explicit partially taxable conversion is preserved');
+  const restored=app(a.saved());assert.deepEqual(JSON.parse(JSON.stringify(restored.current().rothHistory)),JSON.parse(JSON.stringify(s.rothHistory)));
+  const report=a.reportText(s,null);assert.match(report,/Remaining regular contributions: \$75,000/);
+  assert.match(report,/First Roth funding tax year: 2024/);assert.match(report,/Tax year 2025: remaining principal \$11,000.00; remaining taxable principal \$8,000.00/);
+  await a.click('export-backup');const backup=JSON.parse(await a.downloads[0].blob.text());
+  assert.deepEqual(backup.scenarios[0].rothHistory,JSON.parse(JSON.stringify(s.rothHistory)));
+  await a.click('remove-roth-conversion',{index:'0'});assert.equal(s.rothHistory.conversions.length,0);
+});
+
+test('legacy Roth assumptions are visibly marked for review without changing saved balances',async()=>{
+  const old=model.baseScenario();delete old.rothHistory;const a=app({scenarios:[old],selectedId:old.id});
+  assert.equal(a.current().accounts.roth,50000);assert.equal(a.current().rothHistory.needsReview,true);
+  a.state.setupSection=1;assert.match(a.setup(),/older plan had no Roth history/);assert.match(a.dashboard(),/Review Roth history/);
+  assert.match(a.reportText(a.current(),null),/Roth history needs review: Yes/);
+  await a.click('review-roth-history');assert.equal(a.current().rothHistory.needsReview,false);
+  assert.equal(a.saved().scenarios[0].accounts.roth,50000);assert.doesNotMatch(a.setup(),/older plan had no Roth history/);
+});
+
+test('tabbing from conversion principal keeps the visible taxable principal in sync without replacing the focused field',async()=>{
+  const a=app();await a.click('add-roth-conversion');
+  const taxable=a.element('#f-rothHistory-conversions-0-taxableAmount');
+  Object.assign(taxable,{tagName:'INPUT',id:'f-rothHistory-conversions-0-taxableAmount',type:'number',dataset:{field:'rothHistory.conversions.0.taxableAmount',type:'money'},value:'0',replaceWith(){}});
+  a.document.activeElement=taxable;
+  const renders=a.renders();
+  await a.change('#main',{dataset:{field:'rothHistory.conversions.0.amount',type:'money'},value:'20000'});
+  assert.equal(a.current().rothHistory.conversions[0].taxableAmount,20000);
+  assert.equal(taxable.value,'20000','The next input must show the updated default when it receives focus');
+  assert.equal(a.renders(),renders,'A principal edit should not replace the newly focused input');
+  taxable.value='15000';await a.change('#main',taxable);
+  await a.change('#main',{dataset:{field:'rothHistory.conversions.0.amount',type:'money'},value:'25000'});
+  assert.equal(taxable.value,'15000');
+  assert.equal(a.current().rothHistory.conversions[0].taxableAmount,15000);
+});
+
+test('malformed Roth numeric edits and malformed history imports retain the saved plan',async()=>{
+  const a=app();await a.click('add-roth-conversion');const before=a.stored(),history=JSON.stringify(a.current().rothHistory);
+  for(const field of ['rothHistory.contributionBasis','rothHistory.conversions.0.amount']){
+    await a.change('#main',{dataset:{field,type:'money'},value:'1e308'});
+    assert.equal(a.stored(),before);assert.equal(JSON.stringify(a.current().rothHistory),history);
+  }
+  const bad=model.baseScenario();bad.rothHistory.conversions=[{taxYear:2024,amount:1000,taxableAmount:'1000'}];
+  await a.change('#import-file',{files:[{text:async()=>JSON.stringify({scenarios:[bad]})}],value:'bad.json'});
+  assert.equal(a.stored(),before);assert.equal(JSON.stringify(a.current().rothHistory),history);
+  assert.match(a.state.message,/Roth conversion/);
+});
+
+test('malformed numeric changes keep saved assumptions, results and budget snapshots',async()=>{
+  const targets=[
+    {dataset:{field:'spending.annualBaseSpending',type:'money'}},
+    {dataset:{field:'household.currentAge',type:'number'}},
+    {dataset:{field:'market.stockMeanReturn',type:'percent'}},
+    {dataset:{budget:'annualPropertyTaxes'}},
+    ...['checking','credit','cashAndAtmWithdrawals','mortgage'].map(part=>({dataset:{month:'0',part}})),
+  ];
+  for(const target of targets)for(const invalid of [{value:'',validity:{badInput:true}},{value:'1e'},{value:'1e309'}]){
+    const a=app(),s=a.current();
+    s.budget.monthlyBudgets=[{month:'2026-01',checkingSavingsBills:[{id:'original',monthlyAmount:4500}],creditCardBills:[{monthlyAmount:100}],cashAndAtmWithdrawals:50,adjustments:{mortgage:1000}}];
+    model.applyBudgetEstimate(s);await a.persist();
+    const original=JSON.stringify(s),saved=a.stored(),renders=a.renders(),result={completed:true};
+    a.state.results.set(s.id,result);seedExploration(a);
+    await a.change('#main',{...target,...invalid});
+    assert.equal(JSON.stringify(s),original);assert.equal(a.stored(),saved);
+    assert.equal(a.state.results.get(s.id),result);assert.ok(a.state.labResults);assert.ok(a.state.decision);
+    assert.equal(a.renders(),renders);assert.match(a.state.message,/valid.*number.*previous value was kept/i);
+  }
+});
+
+test('numeric editors reject unsupported dollar amounts and accept repaired entries and intentional zero',async()=>{
+  for(const target of [{dataset:{field:'accounts.pretax',type:'money'}},{dataset:{budget:'annualPropertyTaxes'}},{dataset:{month:'0',part:'checking'}}]){
+    const a=app(),s=a.current();s.budget.monthlyBudgets=[{month:'2026-01',checkingSavingsBills:[{monthlyAmount:4500}]}];await a.persist();
+    const original=JSON.stringify(s),saved=a.stored();
+    await a.change('#main',{...target,value:'1e308',validity:{badInput:false}});
+    assert.equal(JSON.stringify(s),original);assert.equal(a.stored(),saved);assert.match(a.state.message,/supported dollar range/i);
+    await a.change('#main',{...target,value:'1250.50',validity:{badInput:false}});
+    assert.notEqual(a.stored(),saved);assert.doesNotMatch(a.stored(),/:null/);
+  }
+  const a=app();
+  await a.change('#main',{dataset:{field:'spending.annualBaseSpending',type:'money'},value:'',validity:{badInput:false}});
+  assert.equal(a.current().spending.annualBaseSpending,0);
+  await a.change('#main',{tagName:'SELECT',dataset:{field:'rothConversion.marginalRateCap',type:'percent'},value:'24'});
+  assert.equal(a.current().rothConversion.marginalRateCap,.24);
+});
+
+test('sensitivity views and reports disclose paired comparisons and their sample size',()=>{
+  const a=app(),s=a.current(),r=runSimulation(s);a.state.results.set(s.id,r);
+  const overview=a.dashboard(),results=a.results(),report=a.reportText(s,r);
+  assert.match(overview,/Assumption sensitivity/);assert.match(overview,/General inflation/);
+  assert.match(overview,/4 paired paths/);assert.match(results,/4 paired paths/);
+  assert.match(report,/Most helpful sensitivity check:/);assert.match(report,/4 paired paths/);
+  assert.doesNotMatch(report,/Primary risk:/);
+  assert.match(overview,/Constant returns at the entered annual means/);
+});
+
+test('Results tables group monthly observations by whole-year age and keep the last snapshot together',()=>{
+  const a=app(),s=a.current(),r=runSimulation(s);
+  const ages=[65.5,65.75,66,66.25,66.5,66.75,67,67.25];
+  const shares=[[1,1],[.75,1],[.75,.75],[.5,.75],[.5,.5],[.25,.5],[.25,.25],[.25,0]];
+  r.notFailedByAge=ages.map((age,i)=>({age,notFailedShare:shares[i][0],aliveShare:shares[i][1]}));
+  r.balanceBands=ages.map((age,i)=>({age,pessimistic:900-i*100,median:1000-i*100,optimistic:1100-i*100,pathCount:4-Math.floor(i/3)}));
+  const monthlyData=JSON.stringify([r.notFailedByAge,r.balanceBands]);
+  a.state.results.set(s.id,r);
+  const html=a.results(),tables=[...html.matchAll(/<tbody>(.*?)<\/tbody>/gs)].map(table=>
+    [...table[1].matchAll(/<tr>(.*?)<\/tr>/gs)].map(row=>[...row[1].matchAll(/<td>(.*?)<\/td>/gs)].map(cell=>cell[1])));
+  assert.deepEqual(tables,[
+    [['65','3 of 4','4 of 4'],['66','1 of 4','2 of 4'],['67','1 of 4','0 of 4']],
+    [['65','4','$800','$900','$1,000'],['66','3','$400','$500','$600'],['67','2','$200','$300','$400']]
+  ]);
+  assert.match(html,/Each whole-year age shows its last modeled observation/);
+  assert.equal(JSON.stringify([r.notFailedByAge,r.balanceBands]),monthlyData,'Table grouping preserves monthly chart data');
+});
+
+test('a stale tab cannot overwrite saved edits with an unrelated change or automatic Pro defaults',async()=>{
+  const storage={raw:JSON.stringify({scenarios:[model.baseScenario()],selectedId:'base-plan'})},locks=webLocks();
+  const first=app(null,{storage,locks}),second=app(null,{storage,locks,fetch:async()=>Response.json({tier:'pro',signedIn:true,accountKey:'owner'})});
+  await first.change('#main',{dataset:{field:'spending.annualBaseSpending',type:'money'},value:'90000'});
+  const saved=storage.raw;
+  await second.change('#main',{dataset:{field:'accounts.cash',type:'money'},value:'60000'});
+  assert.equal(storage.raw,saved);assert.equal(second.current().accounts.cash,60000);
+  assert.match(second.dashboard(),/changed in another tab/);
+  await second.loadAccess();assert.equal(storage.raw,saved);assert.match(second.dashboard(),/changed in another tab/);
+  await second.click('export-backup');
+  const backup=JSON.parse(await second.downloads[0].blob.text());assert.equal(backup.scenarios[0].accounts.cash,60000);
+  const reloaded=app(null,{storage,locks});assert.equal(reloaded.current().spending.annualBaseSpending,90000);
+  await reloaded.change('#main',{dataset:{field:'accounts.cash',type:'money'},value:'60000'});
+  assert.equal(reloaded.saved().scenarios[0].spending.annualBaseSpending,90000);assert.equal(reloaded.saved().scenarios[0].accounts.cash,60000);
+});
+
+test('the storage lock serializes simultaneous saves from separate tabs',async()=>{
+  const storage={raw:JSON.stringify({scenarios:[model.baseScenario()],selectedId:'base-plan'})},locks=webLocks();
+  const first=app(null,{storage,locks}),second=app(null,{storage,locks});
+  first.current().spending.annualBaseSpending=90000;second.current().accounts.cash=60000;
+  const results=await Promise.all([first.persist(),second.persist()]);
+  assert.deepEqual(results,[true,false]);
+  assert.equal(first.saved().scenarios[0].spending.annualBaseSpending,90000);
+  assert.equal(first.saved().scenarios[0].accounts.cash,50000);assert.match(second.state.storageError,/changed in another tab/);
+});
+
+test('one tab queues rapid edits without losing either change or reporting a conflict',async()=>{
+  const a=app();
+  await Promise.all([
+    a.change('#main',{dataset:{field:'spending.annualBaseSpending',type:'money'},value:'90000'}),
+    a.change('#main',{dataset:{field:'accounts.cash',type:'money'},value:'60000'}),
+  ]);
+  assert.equal(a.saved().scenarios[0].spending.annualBaseSpending,90000);assert.equal(a.saved().scenarios[0].accounts.cash,60000);
+  assert.equal(a.state.storageError,'');
+});
+
+test('external storage updates warn without discarding local drafts or completed calculations',async()=>{
+  const storage={raw:JSON.stringify({scenarios:[model.baseScenario()],selectedId:'base-plan'})},locks=webLocks();
+  const first=app(null,{storage,locks}),second=app(null,{storage,locks});
+  second.current().accounts.cash=60000;second.state.results.set(second.current().id,runSimulation(second.current()));
+  await first.change('#main',{dataset:{field:'spending.annualBaseSpending',type:'money'},value:'90000'});
+  const saved=storage.raw;second.storageChanged();
+  assert.equal(second.current().accounts.cash,60000);assert.equal(second.state.results.size,1);assert.equal(storage.raw,saved);
+  assert.match(second.dashboard(),/changed in another tab/);
+});
+
+test('explicit import and unreadable-backup replacement cannot bypass another tab update',async()=>{
+  for(const unreadable of [false,true]){
+    const storage={raw:JSON.stringify(unreadable?{scenarios:[null]}:{scenarios:[model.baseScenario()],selectedId:'base-plan'})},a=app(null,{storage});
+    storage.raw=JSON.stringify({scenarios:[{...model.baseScenario(),name:'Newer plan'}],selectedId:'base-plan'});
+    const newer=storage.raw;
+    if(unreadable)await a.click('replace-unreadable-plans');
+    else await a.change('#import-file',{files:[{text:async()=>JSON.stringify([model.baseScenario()])}],value:'backup.json'});
+    assert.equal(storage.raw,newer);assert.match(a.state.storageError,/changed in another tab/);
+  }
+});
+
+test('a browser without storage locks keeps drafts exportable and does not save unsafely',async()=>{
+  const a=app(null,{locks:null});
+  await a.change('#main',{dataset:{field:'accounts.cash',type:'money'},value:'60000'});
+  assert.equal(a.saved(),null);assert.equal(a.current().accounts.cash,60000);assert.match(a.dashboard(),/Automatic saving is unavailable/);
+  await a.click('export-backup');assert.equal(JSON.parse(await a.downloads[0].blob.text()).scenarios[0].accounts.cash,60000);
+});
+
+test('closing a tab with pending or blocked saves warns; a successful save clears the warning',async()=>{
+  const locks=webLocks();let release;
+  const held=locks.request('retirement-readiness-lab-sites-v1',()=>new Promise(resolve=>{release=resolve;}));
+  await Promise.resolve();
+  const a=app(null,{locks}),saving=a.persist();
+  const leaving={prevented:false,preventDefault(){this.prevented=true;}};a.beforeUnload(leaving);assert.equal(leaving.prevented,true);
+  release();await held;assert.equal(await saving,true);
+  const saved={prevented:false,preventDefault(){this.prevented=true;}};a.beforeUnload(saved);assert.equal(saved.prevented,false);
+  a.state.storageError='Error: Unsaved edits';const blocked={prevented:false,preventDefault(){this.prevented=true;}};a.beforeUnload(blocked);assert.equal(blocked.prevented,true);
+});
+
+test('recovery drafts warn on closing until an explicit replacement or valid import saves them',async()=>{
+  for(const recover of ['replace','import']){
+    const rawStorage='{broken-json',a=app(null,{rawStorage});
+    const leaving=()=>({prevented:false,preventDefault(){this.prevented=true;}});
+    let exit=leaving();a.beforeUnload(exit);assert.equal(exit.prevented,false);
+    await a.persist(false);exit=leaving();a.beforeUnload(exit);assert.equal(exit.prevented,false,'Automatic defaults do not mark recovery edits');
+    await a.change('#main',{dataset:{field:'accounts.cash',type:'money'},value:'123456'});
+    assert.equal(a.stored(),rawStorage);exit=leaving();a.beforeUnload(exit);assert.equal(exit.prevented,true);
+    await a.click('export-backup');assert.equal(JSON.parse(await a.downloads[0].blob.text()).scenarios[0].accounts.cash,123456);
+    if(recover==='replace')await a.click('replace-unreadable-plans');
+    else await a.change('#import-file',{files:[{text:async()=>JSON.stringify([a.current()])}],value:'backup.json'});
+    assert.equal(a.saved().scenarios[0].accounts.cash,123456);exit=leaving();a.beforeUnload(exit);assert.equal(exit.prevented,false);
+  }
+});
+
+test('edits blocked during an in-flight recovery replacement retain their closing warning',async()=>{
+  const locks=webLocks();let release;
+  const held=locks.request('retirement-readiness-lab-sites-v1',()=>new Promise(resolve=>{release=resolve;}));
+  await Promise.resolve();
+  const a=app(null,{rawStorage:'{broken-json',locks});
+  await a.change('#main',{dataset:{field:'accounts.cash',type:'money'},value:'123456'});
+  const replacement=a.click('replace-unreadable-plans');
+  await a.change('#main',{dataset:{field:'accounts.cash',type:'money'},value:'234567'});
+  release();await held;await replacement;
+  assert.equal(a.saved().scenarios[0].accounts.cash,123456);assert.equal(a.current().accounts.cash,234567);
+  const exit={prevented:false,preventDefault(){this.prevented=true;}};a.beforeUnload(exit);assert.equal(exit.prevented,true);
+  await a.persist();assert.equal(a.saved().scenarios[0].accounts.cash,234567);
+  exit.prevented=false;a.beforeUnload(exit);assert.equal(exit.prevented,false);
+});
+
+test('repairing a missing or duplicate scenario ID preserves later IDs and the selected plan',async()=>{
   for(const repeated of [false,true]){
     const missing=model.baseScenario(),selected=model.baseScenario();delete missing.id;
     missing.name='Needs an ID';selected.id='plan-imported-1';selected.name='Selected plan';
@@ -43,7 +285,7 @@ test('repairing a missing or duplicate scenario ID preserves later IDs and the s
     const a=app({scenarios,selectedId:selected.id});
     assert.equal(a.current().name,'Selected plan');assert.equal(a.current().id,selected.id);
     assert.equal(new Set(a.state.scenarios.map(s=>s.id)).size,scenarios.length);
-    a.persist();const restored=app(a.saved());assert.equal(restored.current().name,'Selected plan');
+    await a.persist();const restored=app(a.saved());assert.equal(restored.current().name,'Selected plan');
   }
 });
 
@@ -94,10 +336,10 @@ test('malformed scenario entries and sections cannot be hidden by defaults durin
   }
 });
 
-test('corrupt saved scenario structures do not crash startup or get overwritten by Pro defaults',()=>{
+test('corrupt saved scenario structures do not crash startup or get overwritten by Pro defaults',async()=>{
   const original={scenarios:[null],selectedId:'old'},a=app(original);
   assert.match(a.state.message,/Saved plans could not be loaded/);
-  a.state.scenarios.forEach(model.applyProSimulationDefault);assert.equal(a.persist(false),false);
+  a.state.scenarios.forEach(model.applyProSimulationDefault);assert.equal(await a.persist(false),false);
   assert.deepEqual(a.saved(),original);
 });
 
@@ -107,9 +349,9 @@ test('unreadable saved plans survive navigation and edits until replacement is e
   const a=app(original,{confirm:()=>approved});
   await a.click('start-plan');
   await a.click('select-scenario',{id:'later-retirement'});
-  a.change('#scenario-select',{value:'base-plan'});
-  a.change('#main',{dataset:{field:'accounts.pretax',type:'money'},value:'123456'});
-  a.change('#main',{dataset:{budget:'annualPropertyTaxes'},value:'1000'});
+  await a.change('#scenario-select',{value:'base-plan'});
+  await a.change('#main',{dataset:{field:'accounts.pretax',type:'money'},value:'123456'});
+  await a.change('#main',{dataset:{budget:'annualPropertyTaxes'},value:'1000'});
   assert.deepEqual(a.saved(),original);
   assert.match(a.dashboard(),/export-unreadable-backup/);
   assert.match(a.dashboard(),/replace-unreadable-plans/);
@@ -148,19 +390,19 @@ test('a valid explicit import can replace unreadable saved plans',async()=>{
   assert.doesNotMatch(a.dashboard(),/Saved plans could not be loaded/);
 });
 
-test('stored budgets and primitive types are checked before any view can render them',()=>{
+test('stored budgets and primitive types are checked before any view can render them',async()=>{
   const edits=[s=>s.budget.monthlyBudgets=null,s=>s.budget.monthlyBudgets=[null],s=>s.budget.monthlyBudgets=[{month:'2026-01',creditCardBills:[null]}],s=>s.budget.monthlyBudgets=[{month:'2026-01',checkingSavingsBills:{}}],s=>s.accounts.pretax='800000',s=>s.spending.annualBaseSpending=null];
   for(const edit of edits){
     const bad=model.baseScenario();edit(bad);
     const original={scenarios:[model.baseScenario(),bad],selectedId:bad.id},a=app(original);
     assert.match(a.state.message,/Saved plans could not be loaded/);
     assert.doesNotThrow(()=>a.budget());assert.doesNotThrow(()=>a.reportText(a.current()));
-    a.state.scenarios.forEach(model.applyProSimulationDefault);assert.equal(a.persist(false),false);
+    a.state.scenarios.forEach(model.applyProSimulationDefault);assert.equal(await a.persist(false),false);
     assert.deepEqual(a.saved(),original);
   }
   for(const original of [{scenarios:null},{scenarios:[]},{}]){
     const a=app(original);assert.match(a.state.message,/Saved plans could not be loaded/);
-    assert.equal(a.persist(false),false);assert.deepEqual(a.saved(),original);
+    assert.equal(await a.persist(false),false);assert.deepEqual(a.saved(),original);
   }
 });
 
@@ -192,8 +434,8 @@ test('calculation updates preserve focused drafts through success and failure un
       assert.equal(a.document.activeElement,editor);assert.equal(retained,editor);assert.equal(editor.value,'123456');
     }
     await pending;assert.equal(a.document.activeElement,editor);assert.equal(a.state.busy,false);
-    assert.equal(a.current().accounts.pretax,800000);assert.equal(a.current().budget.annualPropertyTaxes,0);
-    a.change('#main',editor);
+    assert.equal(a.current().accounts.pretax,500000);assert.equal(a.current().budget.annualPropertyTaxes,0);
+    await a.change('#main',editor);
     const s=a.saved().scenarios[0];
     assert.equal(dataset.field?s.accounts.pretax:dataset.budget?s.budget.annualPropertyTaxes:s.budget.monthlyBudgets[0].creditCardBills[0].monthlyAmount,123456);
     if(dataset.field){assert.equal(a.state.results.size,0);assertCleared(a);}
@@ -221,10 +463,52 @@ test('background billing renders retain the original live editor and its uncommi
     a.document.activeElement=editor;
     finish(Response.json(access,{status:access.error?401:200}));await pending;
     assert.equal(details.open,true);assert.equal(retained,editor);assert.equal(a.document.activeElement,editor);assert.equal(editor.value,'123456');
-    a.change('#main',editor);
+    await a.change('#main',editor);
     const s=a.saved().scenarios[0];
     assert.equal(dataset.field?s.accounts.pretax:dataset.budget?s.budget.annualPropertyTaxes:s.budget.monthlyBudgets[0].creditCardBills[0].monthlyAmount,123456);
   }
+});
+
+test('delayed billing and sign-in errors preserve unfinished edits after leaving the billing view',async()=>{
+  for(const action of ['checkout','billing-portal','social-signin','social-link-provider'])for(const dataset of [{field:'household.currentAge',type:'number'},{budget:'annualPropertyTaxes'},{month:'0',part:'credit'}]){
+    let finish;
+    const deferred=()=>new Promise((resolve,reject)=>{finish={resolve,reject};});
+    const a=app(null,{fetch:deferred,socialActions:{signInSocial:deferred,linkSocialProvider:deferred}});
+    a.state.view='billing';
+    const pending=a.click(action,{interval:'monthly',provider:'google'});
+    while(!finish)await Promise.resolve();
+    a.current().budget.monthlyBudgets=[{month:'2026-01',creditCardBills:[]}];
+    a.element('#navigation').listeners.click({target:{closest:()=>({dataset:{view:dataset.field?'setup':'budget'}})}});
+    const main=a.element('#main');let html=main.innerHTML;
+    Object.defineProperty(main,'innerHTML',{get:()=>html,set(value){html=value;a.document.activeElement=null;}});
+    const editor={tagName:'INPUT',type:'number',id:'live-editor',dataset,value:dataset.field?'70':'123456',focus(){a.document.activeElement=this;}};
+    const replacement=a.element('#live-editor');replacement.type='number';let retained;
+    replacement.replaceWith=node=>{retained=node;};a.document.activeElement=editor;
+    if(action.startsWith('social-'))finish.reject(new Error('Temporary sign-in outage'));
+    else finish.resolve(Response.json({error:'Temporary billing outage'},{status:502}));
+    await pending;
+    assert.equal(a.document.activeElement,editor);assert.equal(retained,editor);
+    assert.equal(editor.value,dataset.field?'70':'123456');assert.equal(a.current().household.currentAge,60);
+    assert.equal(a.current().budget.annualPropertyTaxes,0);assert.match(a.state.message,/Temporary .* outage/);
+    await a.change('#main',editor);
+    const s=a.saved().scenarios[0];
+    assert.equal(dataset.field?s.household.currentAge:dataset.budget?s.budget.annualPropertyTaxes:s.budget.monthlyBudgets[0].creditCardBills[0].monthlyAmount,dataset.field?70:123456);
+  }
+});
+
+test('a delayed sign-out confirmation preserves a live setup editor',async()=>{
+  let finish;
+  const a=app(null,{fetch:async()=>Response.json({tier:'free',signedIn:false,accountKey:null}),socialActions:{signOutSocial:()=>new Promise(resolve=>{finish=resolve;})}});
+  a.state.view='billing';const pending=a.click('social-signout');
+  a.element('#navigation').listeners.click({target:{closest:()=>({dataset:{view:'setup'}})}});
+  const main=a.element('#main');let html=main.innerHTML;
+  Object.defineProperty(main,'innerHTML',{get:()=>html,set(value){html=value;a.document.activeElement=null;}});
+  const editor={tagName:'INPUT',type:'number',id:'live-editor',dataset:{field:'household.currentAge'},value:'70',focus(){a.document.activeElement=this;}};
+  const replacement=a.element('#live-editor');replacement.type='number';let retained;
+  replacement.replaceWith=node=>{retained=node;};a.document.activeElement=editor;
+  finish();await pending;
+  assert.equal(retained,editor);assert.equal(a.document.activeElement,editor);assert.equal(editor.value,'70');
+  assert.equal(a.current().household.currentAge,60);assert.match(a.state.message,/Signed out of Google/);
 });
 
 test('unfinished but structurally valid budget drafts remain importable',async()=>{
@@ -233,19 +517,19 @@ test('unfinished but structurally valid budget drafts remain importable',async()
   assert.match(a.state.message,/1 scenarios imported/);assert.doesNotThrow(()=>a.budget());assert.doesNotThrow(()=>a.reportText(a.current()));
 });
 
-test('failed assumption saves show an error and recover after a successful retry',()=>{
+test('failed assumption saves show an error and recover after a successful retry',async()=>{
   const storage={fail:true},a=app(null,{storage});
-  a.change('#main',{dataset:{field:'accounts.pretax',type:'money'},value:'123456'});
+  await a.change('#main',{dataset:{field:'accounts.pretax',type:'money'},value:'123456'});
   assert.equal(a.current().accounts.pretax,123456);assert.equal(a.saved(),null);
   assert.match(a.state.message,/Error: Changes could not be saved/);assert.doesNotMatch(a.state.message,/^Saved/);
   assert.equal(a.element('#main > .notice').className,'notice error');
-  storage.fail=false;a.change('#main',{dataset:{field:'accounts.pretax',type:'money'},value:'234567'});
+  storage.fail=false;await a.change('#main',{dataset:{field:'accounts.pretax',type:'money'},value:'234567'});
   assert.equal(a.saved().scenarios[0].accounts.pretax,234567);assert.match(a.state.message,/^Saved/);assert.equal(a.state.storageError,'');
 });
 
-test('failed budget saves display a warning without leaving the editor',()=>{
+test('failed budget saves display a warning without leaving the editor',async()=>{
   const a=app(null,{storage:{fail:true}});a.state.view='budget';
-  a.change('#main',{dataset:{budget:'annualPropertyTaxes'},value:'1000'});
+  await a.change('#main',{dataset:{budget:'annualPropertyTaxes'},value:'1000'});
   assert.match(a.element('#main > .notice').textContent,/could not be saved/);assert.equal(a.saved(),null);assert.equal(a.state.view,'budget');
 });
 
@@ -287,8 +571,8 @@ test('existing backups resume the selected plan and escape its name',()=>{
   assert.equal(a.current().id,plans[1].id);assert.match(a.dashboard(),/Continue my plan/);
   assert.match(a.dashboard(),/&lt;b&gt;My plan&lt;\/b&gt;/);assert.doesNotMatch(a.dashboard(),/<b>My plan<\/b>/);
 });
-test('automatic Pro defaults preserve the first-visit state across reloads',()=>{
-  const a=app();a.state.access.tier='pro';a.state.scenarios.forEach(model.applyProSimulationDefault);a.persist(false);
+test('automatic Pro defaults preserve the first-visit state across reloads',async()=>{
+  const a=app();a.state.access.tier='pro';a.state.scenarios.forEach(model.applyProSimulationDefault);await a.persist(false);
   const restored=app(a.saved());restored.state.access.tier='pro';const html=restored.dashboard();
   assert.match(html,/Build my forecast/);assert.match(html,/Pro · Up to 10,000/);
   assert.doesNotMatch(html,/overview-upgrade-title|Free preview · 4 simulated lifetimes/);
@@ -296,7 +580,7 @@ test('automatic Pro defaults preserve the first-visit state across reloads',()=>
 
 test('both scenario selectors discard prior comparisons and targets',async()=>{
   const a=app();seedExploration(a);await a.click('select-scenario',{id:'later-retirement'});assert.equal(a.current().id,'later-retirement');assertCleared(a);
-  seedExploration(a);a.change('#scenario-select',{value:'base-plan'});assert.equal(a.current().id,'base-plan');assertCleared(a);
+  seedExploration(a);await a.change('#scenario-select',{value:'base-plan'});assert.equal(a.current().id,'base-plan');assertCleared(a);
 });
 test('reset, duplicate, delete and backup replacement invalidate exploration',async()=>{
   const a=app();for(const action of ['reset-assumptions','new-scenario','delete-scenario']){seedExploration(a);await a.click(action,{id:a.current().id});assertCleared(a);}
@@ -309,7 +593,7 @@ test('switching plans while a comparison worker runs cannot restore old rows',as
   await pending;assertCleared(a);assert.equal(a.workers.length,1);assert.equal(a.state.busy,false);assert.doesNotMatch(a.lab(),/Comparisons ready|Old plan/);
 });
 test('an input edit during simulation discards the obsolete result',async()=>{
-  const a=app(),pending=a.run();a.change('#main',{dataset:{field:'spending.annualBaseSpending',type:'money'},value:'90000'});
+  const a=app(),pending=a.run();await a.change('#main',{dataset:{field:'spending.annualBaseSpending',type:'money'},value:'90000'});
   a.workers[0].onmessage({data:{type:'result',result:runSimulation(a.workers[0].data.scenario)}});
   await pending;assert.equal(a.state.results.size,0);assert.equal(a.current().spending.annualBaseSpending,90000);assert.equal(a.state.busy,false);
 });
@@ -321,6 +605,25 @@ test('unchanged runs still publish results and complete all comparison rows',asy
   const a=app(),pending=a.run();a.workers[0].onmessage({data:{type:'result',result:runSimulation(a.workers[0].data.scenario)}});await pending;assert.equal(a.state.results.size,1);
   const lab=a.runLab();for(let i=1;i<=7;i++){const w=a.workers[i];assert.ok(w);w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});await Promise.resolve();}
   await lab;assert.equal(a.state.labResults.length,7);assert.equal(a.state.busy,false);
+});
+test('lower-spending comparisons use the same home-sale assumptions as an editor change',async()=>{
+  const s=model.baseScenario();s.home.currentValue=300000;
+  s.budget.annualPropertyTaxes=20000;s.budget.monthlyBudgets=[{month:'2026-01',checkingSavingsBills:[{monthlyAmount:2500}]}];
+  model.applyBudgetEstimate(s);
+  const a=app({scenarios:[s],selectedId:s.id}),pending=a.runLab();let spendingVariant;
+  for(let i=0;i<7;i++){
+    const worker=a.workers[i];assert.ok(worker);
+    if(i===2)spendingVariant=structuredClone(worker.data.scenario);
+    if(i===0||i===1)assert.equal(worker.data.scenario.budget.isAppliedToAnnualBaseSpending,true);
+    worker.onmessage({data:{type:'result',result:runSimulation(worker.data.scenario)}});await Promise.resolve();
+  }
+  await pending;
+  assert.equal(a.current().budget.isAppliedToAnnualBaseSpending,true,'Comparison must preserve the original budget');
+  const comparisonReadiness=a.state.labResults[2].result.successProbability;
+  await a.change('#main',{dataset:{field:'spending.annualBaseSpending',type:'money'},value:String(s.spending.annualBaseSpending*.95)});
+  assert.deepEqual(spendingVariant.budget,structuredClone(a.current().budget));
+  const entered=structuredClone(a.current());entered.numberOfSimulations=spendingVariant.numberOfSimulations;
+  assert.equal(runSimulation(entered).successProbability,comparisonReadiness);
 });
 test('four-path outcomes use counts and a visible warning in free and Pro views and reports',()=>{
   for(const tier of ['free','pro']){
@@ -543,14 +846,14 @@ test('welcome illustration is fixed decoration and never reflects the visitor pl
 });
 
 
-test('timing editors offer 0-11 month selectors and save months in backups and reports',()=>{
+test('timing editors offer 0-11 month selectors and save months in backups and reports',async()=>{
   const a=app();
   for(const [section,years,months] of [[0,'household.retirementAge','household.retirementAgeMonths'],[2,'guaranteedIncome.startAge','guaranteedIncome.startAgeMonths'],[3,'longTermCare.averageDurationYears','longTermCare.averageDurationMonths']]){
     a.state.setupSection=section;const html=a.setup();
     assert.match(html,new RegExp(`data-field="${years}" data-type="number"`));
     assert.match(html,new RegExp(`<select[^>]+data-field="${months}" data-type="month">`));
     assert.match(html,/<option value="0" selected>0<\/option>/);assert.match(html,/<option value="11" >11<\/option>/);
-    a.change('#main',{dataset:{field:months,type:'month'},value:'6'});
+    await a.change('#main',{dataset:{field:months,type:'month'},value:'6'});
   }
   const s=a.saved().scenarios[0];assert.equal(s.household.retirementAgeMonths,6);assert.equal(s.guaranteedIncome.startAgeMonths,6);assert.equal(s.longTermCare.averageDurationMonths,6);
   assert.match(a.reportText(a.current()),/Retirement age extra months: 6/);assert.match(a.dashboard(),/67 years 6 months/);
@@ -558,7 +861,7 @@ test('timing editors offer 0-11 month selectors and save months in backups and r
 
 test('changing retirement months discards pending calculations and exploration results',async()=>{
   const a=app();seedExploration(a);const pending=a.run();
-  a.change('#main',{dataset:{field:'household.retirementAgeMonths',type:'month'},value:'6'});
+  await a.change('#main',{dataset:{field:'household.retirementAgeMonths',type:'month'},value:'6'});
   a.workers[0].onmessage({data:{type:'result',result:runSimulation(a.workers[0].data.scenario)}});await pending;
   assert.equal(a.state.results.size,0);assertCleared(a);
 });

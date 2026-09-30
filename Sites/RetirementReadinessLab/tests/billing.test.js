@@ -17,6 +17,7 @@ const calls = [];
 const stripeEnv = { ASSETS: assets, STRIPE_SECRET_KEY: 'sk_live_fake', STRIPE_PRO_MONTHLY_PRICE_ID: 'price_test_monthly', STRIPE_PRO_YEARLY_PRICE_ID: 'price_test_yearly', STRIPE_PRO_LIVE_MONTHLY_PRICE_ID: 'price_monthly', STRIPE_PRO_LIVE_YEARLY_PRICE_ID: 'price_yearly', STRIPE_FETCH: async (url, init) => {
   const parsed = new URL(url); calls.push({ path: parsed.pathname, search: parsed.searchParams, body: init.body, method: init.method });
   if (parsed.pathname === '/v1/customers/search') return Response.json({ data: [customer], has_more: false });
+  if (parsed.pathname === '/v1/customers' && init.method === 'GET') return Response.json({ data: [customer], has_more: false });
   if (parsed.pathname === '/v1/customers/cus_123') return Response.json(customer);
   if (parsed.pathname === '/v1/subscriptions') return Response.json({ data: [subscription] });
   if (parsed.pathname === '/v1/checkout/sessions/cs_test_12345678') return Response.json({ client_reference_id: 'user-123', customer: customer.id, subscription: subscription.id });
@@ -269,7 +270,8 @@ test('sandbox visitors cannot check out and the signed-in owner can test Checkou
   const ownerCustomer={id:'cus_owner',metadata:{retirement_site_user_id:'site-owner-id'}};
   const ownerEnv={...testEnv,STRIPE_FETCH:async(url,init)=>{
     const path=new URL(url).pathname;
-    if(path==='/v1/customers/search')return Response.json({data:[ownerCustomer]});
+    if(path==='/v1/customers/search'||path==='/v1/customers'&&init.method==='GET')return Response.json({data:[ownerCustomer],has_more:false});
+    if(path==='/v1/customers/cus_owner'&&init.method==='GET')return Response.json(ownerCustomer);
     if(path==='/v1/subscriptions')return Response.json({data:[]});
     return stripeEnv.STRIPE_FETCH(url,init);
   }};
@@ -310,7 +312,7 @@ test('an active owner test subscription blocks duplicate sandbox checkout',async
   const user='028696a7-7846-4822-a4c1-67026aa2383f';
   const env={...stripeEnv,STRIPE_SECRET_KEY:'sk_test_fake',STRIPE_FETCH:async(url)=>{
     const path=new URL(url).pathname;
-    if(path==='/v1/customers/search')return Response.json({data:[{id:'cus_owner',metadata:{retirement_site_user_id:user}}]});
+    if(path==='/v1/customers/search'||path==='/v1/customers')return Response.json({data:[{id:'cus_owner',metadata:{retirement_site_user_id:user}}],has_more:false});
     if(path==='/v1/subscriptions')return Response.json({data:[{...subscription,items:{data:[{price:{id:'price_test_monthly'}}]}}]});
     assert.fail('Duplicate checkout must not create a Stripe session');
   }};
@@ -390,6 +392,140 @@ function checkoutFixture(initial=[]) {
 }
 const checkoutRequest=interval=>request('/api/billing/checkout',{user:'user-123',method:'POST',origin:site,interval});
 
+function duplicateCustomerFixture(initial=[]){
+  const f=checkoutFixture(initial),other={id:'cus_other',metadata:customer.metadata},historyLookups=[];
+  const upstream=f.env.STRIPE_FETCH;
+  f.env.STRIPE_FETCH=async(url,init)=>{
+    const parsed=new URL(url);
+    if(parsed.pathname==='/v1/customers/search'||parsed.pathname==='/v1/customers'&&init.method==='GET')return Response.json({data:[customer,other],has_more:false});
+    if(parsed.pathname==='/v1/customers/'+other.id)return Response.json(other);
+    if(parsed.pathname==='/v1/checkout/sessions'&&init.method==='GET'){
+      const id=parsed.searchParams.get('customer');historyLookups.push(id);
+      return Response.json({data:structuredClone(f.sessions.filter(s=>s.customer===id)),has_more:false});
+    }
+    return upstream(url,init);
+  };
+  return {...f,other,historyLookups};
+}
+
+test('an open Checkout on another matching customer is reused and other links expire',async()=>{
+  const existing={id:'cs_other',customer:'cus_other',mode:'subscription',status:'open',client_reference_id:'user-123',price:'price_monthly',url:'https://checkout.stripe.com/c/pay/other'};
+  const f=duplicateCustomerFixture([existing]);
+  const response=await worker.fetch(checkoutRequest('monthly'),f.env);
+  assert.equal(response.status,200);assert.deepEqual(await response.json(),{url:existing.url});
+  assert.deepEqual(new Set(f.historyLookups),new Set([customer.id,f.other.id]));assert.equal(f.keys.size,0);
+  f.sessions.push({...existing,id:'cs_extra',customer:customer.id});
+  assert.equal((await worker.fetch(checkoutRequest('monthly'),f.env)).status,200);
+  assert.equal(f.sessions.filter(s=>s.status==='open').length,1);assert.equal(f.keys.size,0);
+});
+
+test('changing interval expires every matching customer link before creating one replacement',async()=>{
+  const f=duplicateCustomerFixture([{id:'cs_other',customer:'cus_other',mode:'subscription',status:'open',client_reference_id:'user-123',price:'price_monthly',url:'https://checkout.stripe.com/c/pay/other'}]);
+  const response=await worker.fetch(checkoutRequest('yearly'),f.env);
+  assert.equal(response.status,200);assert.equal(f.sessions.filter(s=>s.status==='open').length,1);
+  assert.deepEqual(f.events,['expire:cs_other','create:cs_new2']);assert.equal(f.sessions[0].metadata.retirement_price,'price_yearly');
+});
+
+test('a completed purchase on another matching customer blocks Checkout until its subscription ends',async()=>{
+  for(const status of ['active','incomplete','canceled']){
+    const f=duplicateCustomerFixture([{id:'cs_completed',customer:'cus_other',mode:'subscription',status:'complete',subscription:'sub_other',client_reference_id:'user-123'}]);
+    const upstream=f.env.STRIPE_FETCH;
+    f.env.STRIPE_FETCH=async(url,init)=>new URL(url).pathname==='/v1/subscriptions/sub_other'?Response.json({status}):upstream(url,init);
+    assert.equal((await worker.fetch(checkoutRequest('monthly'),f.env)).status,status==='canceled'?200:409);
+    assert.equal(f.keys.size,status==='canceled'?1:0);
+  }
+});
+
+test('unavailable history or expiration on another customer cannot authorize Checkout',async()=>{
+  for(const failure of ['history','expire']){
+    const f=duplicateCustomerFixture([{id:'cs_other',customer:'cus_other',mode:'subscription',status:'open',client_reference_id:'user-123',price:'price_monthly'}]);
+    const upstream=f.env.STRIPE_FETCH;
+    f.env.STRIPE_FETCH=async(url,init)=>{
+      const parsed=new URL(url);
+      if(failure==='history'&&parsed.pathname==='/v1/checkout/sessions'&&parsed.searchParams.get('customer')==='cus_other'||failure==='expire'&&parsed.pathname.endsWith('/expire'))return Response.json({error:'offline'},{status:503});
+      return upstream(url,init);
+    };
+    assert.equal((await worker.fetch(checkoutRequest('yearly'),f.env)).status,502);assert.equal(f.keys.size,0);
+  }
+});
+
+test('concurrent Checkout requests with different owned hints share one customer generation',async()=>{
+  const f=duplicateCustomerFixture(),hinted=checkoutRequest('monthly');hinted.headers.set('x-retirement-customer',f.other.id);
+  const responses=await Promise.all([worker.fetch(checkoutRequest('monthly'),f.env),worker.fetch(hinted,f.env)]);
+  assert.deepEqual(responses.map(r=>r.status),[200,200]);assert.deepEqual(await responses[0].json(),await responses[1].json());
+  assert.equal(f.sessions.filter(s=>s.status==='open').length,1);assert.equal(f.keys.size,1);
+});
+
+test('delayed or partial Search results cannot split purchases across owned customer hints',async()=>{
+  for(const search of [[],[customer],[{id:'cus_other',metadata:customer.metadata}]]){
+    const f=duplicateCustomerFixture([{id:'cs_old',customer:customer.id,mode:'subscription',status:'expired',client_reference_id:'user-123'}]);
+    const upstream=f.env.STRIPE_FETCH;
+    f.env.STRIPE_FETCH=async(url,init)=>new URL(url).pathname==='/v1/customers/search'?Response.json({data:search,has_more:false}):upstream(url,init);
+    const first=checkoutRequest('monthly'),second=checkoutRequest('monthly');
+    first.headers.set('x-retirement-customer',customer.id);second.headers.set('x-retirement-customer',f.other.id);
+    const responses=await Promise.all([worker.fetch(first,f.env),worker.fetch(second,f.env)]);
+    assert.deepEqual(responses.map(r=>r.status),[200,200]);assert.deepEqual(await responses[0].json(),await responses[1].json());
+    assert.equal(f.sessions.filter(s=>s.status==='open').length,1);assert.equal(f.keys.size,1);
+    assert.deepEqual(new Set(f.historyLookups),new Set([customer.id,f.other.id]));
+  }
+});
+
+test('Checkout discovers a paid customer after more than five hundred unrelated listed records',async()=>{
+  const f=duplicateCustomerFixture(),upstream=f.env.STRIPE_FETCH,cursors=[];
+  f.env.STRIPE_FETCH=async(url,init)=>{
+    const parsed=new URL(url);
+    if(parsed.pathname==='/v1/customers/search')assert.fail('Purchases must not depend on Search');
+    if(parsed.pathname==='/v1/customers'&&init.method==='GET'){
+      const cursor=parsed.searchParams.get('starting_after');cursors.push(cursor);
+      const page=cursor?Number(cursor.split('x').at(-1))+1:0;
+      if(page<5)return Response.json({data:Array.from({length:100},(_,i)=>({id:`cus_${i}x${page}`,metadata:{retirement_site_user_id:'someone-else'}})),has_more:true});
+      assert.equal(page,5);return Response.json({data:[f.other],has_more:false});
+    }
+    if(parsed.pathname==='/v1/subscriptions'&&parsed.searchParams.get('customer')===f.other.id)return Response.json({data:[subscription],has_more:false});
+    return upstream(url,init);
+  };
+  assert.equal((await worker.fetch(checkoutRequest('monthly'),f.env)).status,409);
+  assert.equal(cursors.length,6);assert.equal(f.keys.size,0);
+});
+
+test('incomplete customer-list lookups cannot authorize a new purchase',async()=>{
+  for(const failure of ['offline','malformed','missing-pagination','invalid-pagination','empty-page','repeated-cursor']){
+    const f=duplicateCustomerFixture(),upstream=f.env.STRIPE_FETCH;
+    f.env.STRIPE_FETCH=async(url,init)=>{
+      if(new URL(url).pathname==='/v1/customers'&&init.method==='GET'){
+        if(failure==='offline')throw new Error('offline');
+        if(failure==='malformed')return Response.json({data:null});
+        if(failure==='missing-pagination')return Response.json({data:[]});
+        if(failure==='invalid-pagination')return Response.json({data:[],has_more:'false'});
+        if(failure==='empty-page')return Response.json({data:[],has_more:true});
+        return Response.json({data:[customer],has_more:true});
+      }
+      return upstream(url,init);
+    };
+    assert.equal((await worker.fetch(checkoutRequest('monthly'),f.env)).status,502);
+    assert.equal(f.keys.size,0);assert.equal(f.events.length,0);
+  }
+});
+
+test('an interval change racing expiration on another customer still creates one payable link',{timeout:5000},async()=>{
+  const f=duplicateCustomerFixture([{id:'cs_other',customer:'cus_other',mode:'subscription',status:'open',client_reference_id:'user-123',price:'price_monthly',url:'https://checkout.stripe.com/c/pay/other'}]);
+  const upstream=f.env.STRIPE_FETCH;let resume,signal,paused=false;
+  const held=new Promise(resolve=>{resume=resolve;}),creating=new Promise(resolve=>{signal=resolve;});
+  f.env.STRIPE_FETCH=async(url,init)=>{
+    if(new URL(url).pathname==='/v1/checkout/sessions'&&init.method==='POST'&&!paused){paused=true;signal();await held;}
+    return upstream(url,init);
+  };
+  const first=worker.fetch(checkoutRequest('yearly'),f.env);
+  await creating;
+  // The second server sees the earlier link expired but no replacement yet.
+  let second;
+  try{second=await worker.fetch(checkoutRequest('yearly'),f.env);}finally{resume();}
+  const firstResponse=await first;
+  assert.equal(firstResponse.status,200);assert.equal(second.status,200);
+  assert.deepEqual(await firstResponse.json(),await second.json());
+  assert.equal(f.sessions.filter(s=>s.status==='open').length,1);assert.equal(f.keys.size,1);
+});
+
 test('concurrent identical checkouts create one session and return the same payment link',async()=>{
   const f=checkoutFixture();
   const responses=await Promise.all([worker.fetch(checkoutRequest('monthly'),f.env),worker.fetch(checkoutRequest('monthly'),{...f.env})]);
@@ -428,6 +564,76 @@ test('a confirmed canceled subscription permits retrying an unsuccessful complet
   assert.equal(f.sessions.filter(s=>s.status==='open').length,1);
 });
 
+test('a payment completed after the access lookup blocks a second Checkout even when paid',async()=>{
+  const f=checkoutFixture();let paid=false;const observed=[];
+  const env={...f.env,STRIPE_FETCH:async(url,init)=>{
+    const path=new URL(url).pathname;observed.push(path);
+    if(path==='/v1/subscriptions')return Response.json({data:paid?[subscription]:[],has_more:false});
+    if(path==='/v1/checkout/sessions'&&init.method==='GET'){
+      paid=true;return Response.json({data:[{id:'cs_completed',customer:customer.id,mode:'subscription',status:'complete',payment_status:'paid',subscription:subscription.id,client_reference_id:'user-123'}],has_more:false});
+    }
+    if(path==='/v1/subscriptions/'+subscription.id)return Response.json(subscription);
+    return f.env.STRIPE_FETCH(url,init);
+  }};
+  const response=await worker.fetch(checkoutRequest('monthly'),env);
+  assert.equal(response.status,409);assert.ok(observed.includes('/v1/subscriptions/'+subscription.id));assert.equal(f.keys.size,0);
+});
+
+test('completed paid Checkout permits a new purchase only after its subscription ends',async()=>{
+  for(const status of ['active','trialing','incomplete','past_due','unpaid','canceled','incomplete_expired']){
+    const f=checkoutFixture([{id:'cs_completed',customer:customer.id,mode:'subscription',status:'complete',payment_status:'paid',subscription:'sub_previous',client_reference_id:'user-123'}]);
+    const env={...f.env,STRIPE_FETCH:async(url,init)=>new URL(url).pathname==='/v1/subscriptions/sub_previous'?Response.json({status}):f.env.STRIPE_FETCH(url,init)};
+    const ended=['canceled','incomplete_expired'].includes(status);
+    assert.equal((await worker.fetch(checkoutRequest('monthly'),env)).status,ended?200:409,status);
+    assert.equal(f.keys.size,ended?1:0);
+  }
+});
+
+test('newer abandoned or ended Checkouts cannot hide an older unended purchase',async()=>{
+  for(const newer of ['expired','complete'])for(const status of ['active','incomplete','past_due','canceled'])for(const paginated of [false,true]){
+    const latest={id:'cs_newer',customer:customer.id,mode:'subscription',status:newer,subscription:'sub_ended',client_reference_id:'user-123'};
+    const older={...latest,id:'cs_older',status:'complete',payment_status:'paid',subscription:'sub_previous'};
+    const f=checkoutFixture([latest,older]),lookups=[];
+    const env={...f.env,STRIPE_FETCH:async(url,init)=>{
+      const parsed=new URL(url),path=parsed.pathname;
+      if(path==='/v1/subscriptions/sub_ended')return Response.json({status:'canceled'});
+      if(path==='/v1/subscriptions/sub_previous'){lookups.push(path);return Response.json({status});}
+      if(paginated&&path==='/v1/checkout/sessions'&&init.method==='GET'){
+        const cursor=parsed.searchParams.get('starting_after');
+        if(!cursor)return Response.json({data:[latest],has_more:true});
+        assert.equal(cursor,latest.id);return Response.json({data:[older],has_more:false});
+      }
+      return f.env.STRIPE_FETCH(url,init);
+    }};
+    const response=await worker.fetch(checkoutRequest('monthly'),env);
+    assert.equal(response.status,status==='canceled'?200:409);
+    assert.equal(lookups.length,1);assert.equal(f.keys.size,status==='canceled'?1:0);
+  }
+});
+
+test('an older completed purchase with unavailable confirmation blocks another Checkout',async()=>{
+  for(const missing of [false,true]){
+    const f=checkoutFixture([
+      {id:'cs_newer',customer:customer.id,mode:'subscription',status:'expired',client_reference_id:'user-123'},
+      {id:'cs_older',customer:customer.id,mode:'subscription',status:'complete',client_reference_id:'user-123',...(missing?{}:{subscription:'sub_previous'})},
+    ]);
+    const env={...f.env,STRIPE_FETCH:async(url,init)=>new URL(url).pathname==='/v1/subscriptions/sub_previous'?Response.json({error:'offline'},{status:503}):f.env.STRIPE_FETCH(url,init)};
+    assert.equal((await worker.fetch(checkoutRequest('monthly'),env)).status,missing?409:502);
+    assert.equal(f.keys.size,0);
+  }
+});
+
+test('repeated Checkout history cursors fail closed instead of looping',async()=>{
+  const f=checkoutFixture();let pages=0;
+  const env={...f.env,STRIPE_FETCH:async(url,init)=>{
+    if(new URL(url).pathname==='/v1/checkout/sessions'&&init.method==='GET'){
+      assert.ok(++pages<=2);return Response.json({data:[{id:'cs_stuck',mode:'payment'}],has_more:true});
+    }
+    return f.env.STRIPE_FETCH(url,init);
+  }};
+  assert.equal((await worker.fetch(checkoutRequest('monthly'),env)).status,502);assert.equal(f.keys.size,0);
+});
+
 test('Checkout history and expiration failures cannot bypass purchase coordination',async()=>{
   for(const failure of ['history','expire']){
     const f=checkoutFixture([{id:'cs_legacy',customer:customer.id,mode:'subscription',status:'open',client_reference_id:'user-123',price:'price_monthly',url:'https://checkout.stripe.com/c/pay/legacy'}]);
@@ -445,7 +651,8 @@ test('pending Checkout lookup paginates and recognizes a previously linked Googl
   const f=checkoutFixture([pending]);let pages=0;
   const env={...f.env,STRIPE_FETCH:async(url,init)=>{
     const parsed=new URL(url);
-    if(parsed.pathname==='/v1/customers/search')return Response.json({data:[{...customer,metadata:{...customer.metadata,retirement_firebase_uid:'linked-user'}}]});
+    if(parsed.pathname==='/v1/customers/search'||parsed.pathname==='/v1/customers'&&init.method==='GET')return Response.json({data:[{...customer,metadata:{...customer.metadata,retirement_firebase_uid:'linked-user'}}],has_more:false});
+    if(parsed.pathname==='/v1/customers/'+customer.id&&init.method==='GET')return Response.json({...customer,metadata:{...customer.metadata,retirement_firebase_uid:'linked-user'}});
     if(parsed.pathname==='/v1/checkout/sessions'&&init.method==='GET'){
       pages++;
       if(!parsed.searchParams.has('starting_after'))return Response.json({data:[{id:'cs_unrelated',customer:customer.id,mode:'payment',status:'complete'}],has_more:true});

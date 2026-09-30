@@ -35,6 +35,23 @@ test('refunds can reduce credit purchases including a negative month',()=>{
   const b=baseScenario().budget;b.monthlyBudgets=[{...month('2026-01',0),creditCardBills:[{monthlyAmount:-100}]},month('2026-02',2100)];
   assert.deepEqual(validateBudget(b),[]);assert.equal(budgetEstimate(b),12000);
 });
+test('oversized inputs and computed budget totals cannot corrupt applied spending or backups',()=>{
+  const edits=[
+    b=>{b.monthlyBudgets[0].checkingSavingsBills[0].monthlyAmount=1e308;},
+    b=>{b.retirementAnnualAdjustment=-1e308;},
+    b=>{b.annualPropertyTaxes=1e308;},
+    b=>{b.monthlyBudgets=[month('2026-01',Number.MAX_SAFE_INTEGER/6)];},
+    b=>{b.annualPropertyTaxes=Number.MAX_SAFE_INTEGER;b.annualHomeInsurance=Number.MAX_SAFE_INTEGER;},
+    b=>{b.monthlyBudgets[0].checkingSavingsBills=[{monthlyAmount:1e308},{monthlyAmount:1e308}];b.monthlyBudgets[0].creditCardBills=[{monthlyAmount:-1e308}];},
+  ];
+  for(const edit of edits){
+    const s=baseScenario();s.budget.monthlyBudgets=[month('2026-01')];applyBudgetEstimate(s);
+    edit(s.budget);markBudgetEdited(s.budget);const before=structuredClone(s);
+    assert.match(validateBudget(s.budget).join(' '),/supported dollar range/);
+    assert.throws(()=>applyBudgetEstimate(s),/supported dollar range/);assert.deepEqual(s,before);
+    assert.equal(normalizeScenario(JSON.parse(JSON.stringify(s))).spending.annualBaseSpending,before.spending.annualBaseSpending);
+  }
+});
 test('budget edits leave the applied plan and home-sale calculation unchanged until reapplied',()=>{
   const s=baseScenario();s.numberOfSimulations=1;s.accounts.pretax=10000;s.accounts.roth=0;s.accounts.cash=0;s.home.currentValue=500000;
   s.budget.monthlyBudgets=[month('2026-01')];s.budget.annualPropertyTaxes=6000;applyBudgetEstimate(s);
