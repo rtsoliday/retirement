@@ -410,7 +410,7 @@ test('safe stored drafts can still be loaded and corrected without losing their 
   const s=model.baseScenario();s.household.retirementAge=59;
   s.budget.monthlyBudgets=[{month:'',creditCardBills:[{monthlyAmount:-100}],adjustments:{mortgage:200}}];
   const original={scenarios:[s],selectedId:s.id},a=app(original);
-  assert.equal(a.state.message,'');assert.deepEqual(JSON.parse(JSON.stringify(a.current())),s);
+  assert.equal(a.state.message,'');assert.deepEqual(JSON.parse(JSON.stringify(a.current())),model.prepareCalendarScenario(structuredClone(s)));assert.deepEqual(a.saved(),original);
   assert.doesNotThrow(()=>a.budget());assert.doesNotThrow(()=>a.reportText(a.current()));
   assert.equal(a.current().household.retirementAge,59);
 });
@@ -846,22 +846,22 @@ test('welcome illustration is fixed decoration and never reflects the visitor pl
 });
 
 
-test('timing editors offer 0-11 month selectors and save months in backups and reports',async()=>{
+test('pension and care editors retain 0-11 month selectors and save months in backups and reports',async()=>{
   const a=app();
-  for(const [section,years,months] of [[0,'household.retirementAge','household.retirementAgeMonths'],[2,'guaranteedIncome.startAge','guaranteedIncome.startAgeMonths'],[3,'longTermCare.averageDurationYears','longTermCare.averageDurationMonths']]){
+  for(const [section,years,months] of [[2,'guaranteedIncome.startAge','guaranteedIncome.startAgeMonths'],[3,'longTermCare.averageDurationYears','longTermCare.averageDurationMonths']]){
     a.state.setupSection=section;const html=a.setup();
     assert.match(html,new RegExp(`data-field="${years}" data-type="number"`));
     assert.match(html,new RegExp(`<select[^>]+data-field="${months}" data-type="month">`));
     assert.match(html,/<option value="0" selected>0<\/option>/);assert.match(html,/<option value="11" >11<\/option>/);
     await a.change('#main',{dataset:{field:months,type:'month'},value:'6'});
   }
-  const s=a.saved().scenarios[0];assert.equal(s.household.retirementAgeMonths,6);assert.equal(s.guaranteedIncome.startAgeMonths,6);assert.equal(s.longTermCare.averageDurationMonths,6);
-  assert.match(a.reportText(a.current()),/Retirement age extra months: 6/);assert.match(a.dashboard(),/67 years 6 months/);
+  const s=a.saved().scenarios[0];assert.equal(s.household.retirementAgeMonths,0);assert.equal(s.guaranteedIncome.startAgeMonths,6);assert.equal(s.longTermCare.averageDurationMonths,6);
+  assert.match(a.reportText(a.current()),/Income start age extra months: 6/);assert.match(a.reportText(a.current()),/Long-term care duration \/ years extra months: 6/);
 });
 
-test('changing retirement months discards pending calculations and exploration results',async()=>{
+test('changing retirement date discards pending calculations and exploration results',async()=>{
   const a=app();seedExploration(a);const pending=a.run();
-  await a.change('#main',{dataset:{field:'household.retirementAgeMonths',type:'month'},value:'6'});
+  await a.change('#main',{dataset:{field:'household.retirementDate',type:'date'},value:model.addCalendarMonths(a.current().household.retirementDate,6)});
   a.workers[0].onmessage({data:{type:'result',result:runSimulation(a.workers[0].data.scenario)}});await pending;
   assert.equal(a.state.results.size,0);assertCleared(a);
 });
@@ -941,4 +941,54 @@ test('property tax and home insurance are a Housing input that typing spending n
   await a.change('#main',{dataset:{field:'spending.annualBaseSpending',type:'money'},value:'70000'});
   const saved=a.saved().scenarios[0];assert.equal(saved.home.annualTaxesAndInsurance,8000);assert.equal(saved.spending.annualBaseSpending,70000);
   assert.match(a.reportText(a.current()),/Property tax & home insurance \/ year: \$8,000\.00/);
+});
+
+
+test('household setup uses calendar fields, preserves saved dates, and includes them in reports',async()=>{
+  const a=app(),html=a.setup();
+  assert.match(html,/type="date"[^>]+data-field="household.birthday"/);
+  assert.match(html,/type="date"[^>]+data-field="household.retirementDate"/);
+  assert.doesNotMatch(html,/data-field="household.(?:currentAge|retirementAge|retirementAgeMonths|spouseBirthday)"/);
+  await a.change('#main',{dataset:{field:'household.birthday',type:'date'},value:'1965-01-31'});
+  await a.change('#main',{dataset:{field:'household.retirementDate',type:'date'},value:'2033-07-20'});
+  await a.change('#main',{dataset:{field:'household.filingStatus',type:'select'},value:'Married'});
+  assert.match(a.setup(),/type="date"[^>]+data-field="household.spouseBirthday"/);
+  await a.change('#main',{dataset:{field:'household.spouseBirthday',type:'date'},value:'1968-03-02'});
+  const restored=app(a.saved());
+  assert.equal(restored.current().household.birthday,'1965-01-31');
+  assert.equal(restored.current().household.retirementDate,'2033-07-20');
+  assert.equal(restored.current().household.spouseBirthday,'1968-03-02');
+  assert.match(a.reportText(a.current()),/Retirement date: 2033-07-20/);
+  assert.match(a.reportText(a.current()),/Spouse birthday: 1968-03-02/);
+  assert.match(a.dashboard(),/Jul 20, 2033/);
+});
+
+test('incomplete or impossible calendar edits preserve the previous saved assumption',async()=>{
+  const a=app(),before=a.current().household.birthday;
+  for(const value of ['', '2026-02-29', '2999-01-01']){
+    await a.change('#main',{dataset:{field:'household.birthday',type:'date'},value});
+    assert.equal(a.current().household.birthday,before);assert.match(a.state.message,/Error:.*birthday/);
+  }
+  const retirement=a.current().household.retirementDate;
+  await a.change('#main',{dataset:{field:'household.retirementDate',type:'date'},value:'2000-01-01'});
+  assert.equal(a.current().household.retirementDate,retirement);
+});
+
+test('inferred legacy dates show a review notice until explicitly acknowledged',async()=>{
+  const old=model.baseScenario(),a=app({scenarios:[old],selectedId:old.id});
+  assert.match(a.setup(),/Dates were estimated from your saved ages/);
+  assert.equal(a.current().accounts.pretax,old.accounts.pretax);
+  await a.click('review-calendar-dates');
+  assert.equal(a.saved().scenarios[0].household.datesNeedReview,false);
+  assert.doesNotMatch(app(a.saved()).setup(),/Dates were estimated from your saved ages/);
+});
+
+test('correcting a partly completed date draft never saves nonfinite legacy age values',async()=>{
+  const s=model.baseScenario();s.household.birthday='1965-01-31';s.household.retirementDate='';
+  const a=app({scenarios:[s],selectedId:s.id});
+  await a.change('#main',{dataset:{field:'household.birthday',type:'date'},value:'1965-02-01'});
+  assert.equal(typeof a.saved().scenarios[0].household.retirementAge,'number');
+  assert.doesNotMatch(app(a.saved()).state.message,/could not be loaded/);
+  await a.change('#main',{dataset:{field:'household.retirementDate',type:'date'},value:'2033-07-20'});
+  assert.deepEqual(model.validateScenario(a.current()),[]);
 });

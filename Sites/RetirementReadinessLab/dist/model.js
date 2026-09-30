@@ -1,4 +1,4 @@
-export const ENGINE_VERSION = '2026.09-monthly-mortality';
+export const ENGINE_VERSION = '2026.09-calendar-dates';
 export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
 // Retained across engine revisions for repeatable scenario comparisons.
 // Android still uses 20260429.
@@ -11,11 +11,74 @@ export const FILING_STATUSES = ['Single', 'Married', 'HeadOfHousehold'];
 export const GENDERS = ['Male', 'Female'];
 export const SPENDING_PATH_MODELS = ['EmpiricalAgeDecline', 'Flat'];
 
-export const retirementAge = s => s.household.retirementAge + (s.household.retirementAgeMonths ?? 0) / 12;
+// Calendar values remain YYYY-MM-DD in storage; never parse them in local time.
+export function localCalendarDate() {
+  const now=new Date();
+  return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+}
+export function calendarDate(value) {
+  if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))return null;
+  const date=new Date(value+'T00:00:00Z');
+  return Number.isFinite(date.getTime())&&date.toISOString().slice(0,10)===value?date:null;
+}
+export function addCalendarMonths(value,months) {
+  const date=calendarDate(value);if(!date||!Number.isInteger(months))return '';
+  const day=date.getUTCDate();date.setUTCDate(1);date.setUTCMonth(date.getUTCMonth()+months);
+  const end=new Date(date.getTime());end.setUTCMonth(end.getUTCMonth()+1);end.setUTCDate(0);
+  date.setUTCDate(Math.min(day,end.getUTCDate()));
+  return Number.isFinite(date.getTime())?date.toISOString().slice(0,10):'';
+}
+// Completed calendar months, with month-end birthdays clamped to that month's last day.
+export function calendarMonthsBetween(start,end) {
+  const a=calendarDate(start),b=calendarDate(end);if(!a||!b)return NaN;
+  const months=(b.getUTCFullYear()-a.getUTCFullYear())*12+b.getUTCMonth()-a.getUTCMonth();
+  return months-Number(addCalendarMonths(start,months)>end);
+}
+export const usesCalendarDates = s => Boolean(s?.household?.birthday||s?.household?.retirementDate);
+export function scenarioTimeline(s,today=s.household.asOfDate||localCalendarDate()) {
+  const h=s.household;
+  if(!usesCalendarDates(s)){
+    const retirementAge=h.retirementAge+(h.retirementAgeMonths??0)/12,preMonths=Math.round((retirementAge-h.currentAge)*12);
+    return {currentAge:h.currentAge,retirementAge,preMonths,spouseAtRet:h.spouseCurrentAge+preMonths/12,birthYear:2026-h.currentAge,spouseBirthYear:2026-h.spouseCurrentAge,retirementYear:2026+Math.floor(preMonths/12)};
+  }
+  return {currentAge:calendarMonthsBetween(h.birthday,today)/12,retirementAge:calendarMonthsBetween(h.birthday,h.retirementDate)/12,preMonths:calendarMonthsBetween(today,h.retirementDate),spouseAtRet:calendarMonthsBetween(h.spouseBirthday,h.retirementDate)/12,birthYear:calendarDate(h.birthday)?.getUTCFullYear(),spouseBirthYear:calendarDate(h.spouseBirthday)?.getUTCFullYear(),retirementYear:calendarDate(h.retirementDate)?.getUTCFullYear()};
+}
+export const retirementAge = s => scenarioTimeline(s).retirementAge;
+export function dateLabel(value) {
+  const date=calendarDate(value);
+  return date?new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}).format(date):'Choose a date';
+}
+// Legacy ages contain no birth day. Anchor their inferred birthdays to the day
+// of migration, preserving the entered monthly distance to retirement.
+export function prepareCalendarScenario(s,{today=localCalendarDate(),needsReview=true}={}) {
+  const h=s.household;
+  if(!usesCalendarDates(s)&&h.birthday===''&&h.retirementDate===''&&[h.currentAge,h.retirementAge,h.retirementAgeMonths].every(Number.isInteger)){
+    h.birthday=addCalendarMonths(today,-h.currentAge*12);
+    h.retirementDate=addCalendarMonths(h.birthday,h.retirementAge*12+h.retirementAgeMonths);
+    h.spouseBirthday=Number.isInteger(h.spouseCurrentAge)&&h.spouseCurrentAge>0?addCalendarMonths(today,-h.spouseCurrentAge*12):'';
+    h.datesNeedReview=needsReview;
+  }
+  return s;
+}
+export function setRetirementAge(s,age) {
+  if(usesCalendarDates(s))s.household.retirementDate=addCalendarMonths(s.household.birthday,Math.round(age*12));
+  s.household.retirementAge=Math.floor(age);s.household.retirementAgeMonths=Math.round(age*12)%12;
+}
+export function syncCalendarAges(s) {
+  const h=s.household;h.asOfDate='';
+  const t=scenarioTimeline(s),spouseMonths=calendarMonthsBetween(h.spouseBirthday,localCalendarDate());
+  if(Number.isFinite(t.currentAge))h.currentAge=Math.floor(t.currentAge);
+  if(Number.isFinite(t.retirementAge)){h.retirementAge=Math.floor(t.retirementAge);h.retirementAgeMonths=Math.round(t.retirementAge*12)%12;}
+  if(Number.isFinite(spouseMonths))h.spouseCurrentAge=Math.floor(spouseMonths/12);
+}
+export function delayRetirement(s,years) {
+  if(usesCalendarDates(s)){s.household.retirementDate=addCalendarMonths(s.household.retirementDate,years*12);syncCalendarAges(s);}
+  else setRetirementAge(s,retirementAge(s)+years);
+}
 // Separation must fall in or after the calendar year the person turns 55. With
 // no birthday entered, a separation at 54 can still be in that year; earlier cannot.
 const RULE_OF_55_EARLIEST_AGE = 54;
-export const ruleOf55Applies = s => s.withdrawalStrategy.ruleOf55Eligible === true && retirementAge(s) >= RULE_OF_55_EARLIEST_AGE;
+export const ruleOf55Applies = s => s.withdrawalStrategy.ruleOf55Eligible === true && (usesCalendarDates(s)?scenarioTimeline(s).retirementYear>=scenarioTimeline(s).birthYear+55:retirementAge(s)>=RULE_OF_55_EARLIEST_AGE);
 export function ageLabel(value) {
   const months = Math.round(value * 12), years = Math.floor(months / 12), extra = months % 12;
   return extra ? `${years} years ${extra} months` : String(years);
@@ -24,7 +87,7 @@ export function ageLabel(value) {
 export function baseScenario() {
   return {
     id: 'base-plan', name: 'Base plan',
-    household: {currentAge: 60, retirementAge: 67, retirementAgeMonths: 0, targetEndAge: 119, filingStatus: 'Single', gender: 'Male', spouseGender: 'Female', spouseCurrentAge: 60},
+    household: {currentAge: 60, retirementAge: 67, retirementAgeMonths: 0, birthday: '', retirementDate: '', spouseBirthday: '', datesNeedReview: false, asOfDate: '', targetEndAge: 119, filingStatus: 'Single', gender: 'Male', spouseGender: 'Female', spouseCurrentAge: 60},
     accounts: {pretax: 500000, roth: 50000, taxable: 0, cash: 50000},
     rothHistory: {contributionBasis: 50000, firstContributionYear: 2021, conversions: [], needsReview: false},
     spending: {annualBaseSpending: 75000, generalInflationMean: .023, generalInflationStdDev: .016, spendingPathModel: 'EmpiricalAgeDecline', lowPortfolioSpendingReduction: .10},
@@ -159,18 +222,24 @@ export function validateScenario(s) {
   if (allNumbers.some(v=>!Number.isFinite(v))) errors.push('Financial and percentage assumptions must be finite numbers.');
   const structureErrors=validateScenarioStructure(s);
   if (structureErrors.length) return [...errors,...structureErrors];
-  const h=s.household, a=s.accounts, sp=s.spending;
+  const h=s.household, a=s.accounts, sp=s.spending,timeline=scenarioTimeline(s);
   if (!FILING_STATUSES.includes(h.filingStatus)) errors.push('Filing status must be Single, Married, or HeadOfHousehold.');
   if (!GENDERS.includes(h.gender) || (h.filingStatus === 'Married' && !GENDERS.includes(h.spouseGender))) errors.push('Longevity table must be Male or Female.');
   if (!SPENDING_PATH_MODELS.includes(sp.spendingPathModel)) errors.push('Spending path must be EmpiricalAgeDecline or Flat.');
   // Mortality and life-expectancy tables are indexed by whole years.
-  if (![h.currentAge,h.retirementAge,h.targetEndAge,...(h.filingStatus==='Married'?[h.spouseCurrentAge]:[])].every(Number.isInteger)) errors.push('Ages must be whole numbers.');
-  if (h.currentAge <= 0) errors.push('Current age must be positive.');
+  if (![h.targetEndAge,...(usesCalendarDates(s)?[]:[h.currentAge,h.retirementAge,...(h.filingStatus==='Married'?[h.spouseCurrentAge]:[])])].every(Number.isInteger)) errors.push('Ages must be whole numbers.');
+  if(usesCalendarDates(s)){
+    const today=h.asOfDate||localCalendarDate();
+    if(!calendarDate(today))errors.push('The calculation date must be a valid calendar date.');
+    if(!calendarDate(h.birthday)||h.birthday>=today||timeline.currentAge<=0||timeline.currentAge>=119)errors.push('Your birthday must be a valid date before today and within the modeling age range.');
+    if(!calendarDate(h.retirementDate)||h.retirementDate<today)errors.push('Retirement date must be a valid date today or later.');
+    if(h.filingStatus==='Married'&&(!calendarDate(h.spouseBirthday)||h.spouseBirthday>=today||calendarMonthsBetween(h.spouseBirthday,today)<=0))errors.push('Spouse birthday must be a valid date before today.');
+  }else if (h.currentAge <= 0) errors.push('Current age must be positive.');
   if (![h.retirementAgeMonths,s.guaranteedIncome.startAgeMonths,s.longTermCare.averageDurationMonths].every(v=>Number.isInteger(v)&&v>=0&&v<=11)) errors.push('Month fields must be whole numbers from 0 through 11.');
   if (![s.guaranteedIncome.startAge,s.longTermCare.averageDurationYears].every(Number.isInteger)) errors.push('Income start age and long-term care duration years must be whole numbers; use the month fields for extra months.');
-  if (retirementAge(s) < h.currentAge) errors.push('Retirement age must be at least current age.');
+  if (!usesCalendarDates(s)&&retirementAge(s) < h.currentAge) errors.push('Retirement age must be at least current age.');
   if (h.targetEndAge <= retirementAge(s) || h.targetEndAge > 119) errors.push('Maximum modeling age must be after retirement and at most 119.');
-  if (h.filingStatus === 'Married' && (h.spouseCurrentAge <= 0 || h.spouseCurrentAge + retirementAge(s) - h.currentAge >= h.targetEndAge)) errors.push('Spouse age at retirement must be below the maximum modeling age.');
+  if (h.filingStatus === 'Married' && ((!usesCalendarDates(s)&&h.spouseCurrentAge<=0) || timeline.spouseAtRet <= 0 || timeline.spouseAtRet >= h.targetEndAge)) errors.push('Spouse age at retirement must be below the maximum modeling age.');
   if (s.socialSecurity.claimAge < 62 || s.socialSecurity.claimAge > 70) errors.push('Social Security claim age must be 62–70.');
   if (h.filingStatus === 'Married' && (s.socialSecurity.spouseClaimAge < 60 || s.socialSecurity.spouseClaimAge > 70)) errors.push('Spouse claim age must be 60–70.');
   if (Object.values(a).some(v=>v<0) || sp.annualBaseSpending<0) errors.push('Balances and spending cannot be negative.');
@@ -323,7 +392,8 @@ export function scenarioWarnings(s) {
   if(!s.healthcare.includeMedicarePremiums)notes.push('Medicare premiums are excluded.');
   if(!s.longTermCare.enabled)notes.push('Long-term care risk is excluded.');
   if(s.rothHistory.needsReview)notes.push('Review Roth history: this older plan assumes its starting Roth value is remaining contributions, first funded in 2021, with no past conversions.');
-  if(s.withdrawalStrategy.ruleOf55Eligible&&!ruleOf55Applies(s))notes.push('Rule of 55 is not applied: it needs separation in or after the calendar year you turn 55, so it has no effect for a retirement age below 54.');
+  if(s.withdrawalStrategy.ruleOf55Eligible&&!ruleOf55Applies(s))notes.push('Rule of 55 is not applied: separation must be in or after the calendar year you turn 55. For a legacy age-only plan, it has no effect for a retirement age below 54.');
+  if(s.household.datesNeedReview)notes.push('Dates were estimated from the saved ages. Check your birthday, retirement date, and spouse birthday in Household, then mark the dates reviewed.');
   if(s.home.annualTaxesAndInsurance>s.spending.annualBaseSpending)notes.push('Property tax and home insurance exceed annual base spending. Base spending should include them; the model removes that amount after a home sale.');
   if(s.socialSecurity.annualBenefitAt67<=0)notes.push('No Social Security benefit is entered.');
   if(s.numberOfSimulations===4)notes.push('Four paths are only a preview. Use many more paths for serious comparisons and retirement decisions.');
