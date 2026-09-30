@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {baseScenario,sampleScenarios,budgetEstimate,applyBudgetEstimate,validateScenario,normalizeScenario,normalizeScenarios,ROTH_CONVERSION_RATES,DEFAULT_SEED} from '../dist/model.js';
-import {runSimulation,runOne,JavaRandom,estimateDecision,sampleDeathAge} from '../dist/engine.js';
+import {runSimulation,runOne,JavaRandom,estimateDecision,searchDecision,candidateReadiness,sampleDeathAge} from '../dist/engine.js';
 import {taxableSocialSecurity,taxableOrdinaryIncome,ordinaryIncomeTax,rothConversionPlan} from '../dist/tax.js';
 import {annualBenefitAtClaimAge} from '../dist/social-security.js';
 
@@ -10,25 +10,19 @@ const REFERENCE_SEED=20260429;
 // Keep the historical Android comparison inputs independent of site defaults.
 function referenceScenario(){const s=baseScenario();Object.assign(s.household,{currentAge:50,spouseCurrentAge:50});s.accounts={pretax:800000,roth:100000,taxable:0,cash:50000};s.rothHistory.contributionBasis=100000;return s;}
 
-// Seeded web snapshots, updated after independent annual moment and cash-flow
-// regressions verified RMDs, cash interest and calibrated monthly factors.
-// Starting balances and endings now differ from Android's monthly normal draws.
-// Independent annual accounting cases are in cashflow-regression.test.js.
-// The COLA recovery regressions in benefit-regressions.test.js independently
-// verify the revised reference-price rule. Restoring only the old COLA rule
-// reproduces the four former ending-balance snapshots to within one cent.
-// Annual senior eligibility, including the birthday at the modeled year boundary,
-// changes the early-retirement snapshot. roth-history.test.js independently
-// checks full-year eligibility, deaths, Roth earnings, and censored care timing.
-// The web results now report failed endings as zero instead of the raw negative shortfall.
+// Seeded web snapshots follow independent annual-moment, cash-flow, COLA,
+// Roth, and death-month regressions. Monthly mortality preserves the annual
+// probabilities and random draw counts, but changes death endpoints, care,
+// and survivor timing. Endings differ from the former birthday-only model
+// and Android; failed endings remain zero.
 const cases=[
-  ['base',s=>{},1,9712704.38886982,2963085.4111460363,null],
-  ['zero',s=>{Object.assign(s.household,{currentAge:65,retirementAge:65,targetEndAge:67});Object.assign(s.accounts,{pretax:0,roth:0,taxable:0,cash:100000});Object.assign(s.spending,{annualBaseSpending:12000,generalInflationMean:0,generalInflationStdDev:0});Object.assign(s.healthcare,{preMedicareMonthlyPremium:0,healthcareInflationMean:0,healthcareInflationStdDev:0,includeMedicarePremiums:false});s.socialSecurity.annualBenefitAt67=0;Object.assign(s.market,{preRetirementMeanReturn:0,preRetirementStdDev:0,stockMeanReturn:0,stockStdDev:0,bondMeanReturn:0,bondStdDev:0});s.longTermCare.enabled=false;},1,79973.35589502829,100000,null],
-  ['married',s=>Object.assign(s.household,{filingStatus:'Married',spouseCurrentAge:55}),1,3570157.386991288,2963085.4111460363,null],
-  ['early',s=>{s.household.retirementAge=55;s.withdrawalStrategy.applyEarlyWithdrawalPenalty=true;},1,2087642.7688098773,1377225.4206466398,null],
-  ['roth',s=>{s.rothConversion.enabled=true;},1,9645632.990991564,2963085.4111460363,null],
+  ['base',s=>{},1,8729176.514236286,2963085.4111460363,null],
+  ['zero',s=>{Object.assign(s.household,{currentAge:65,retirementAge:65,targetEndAge:67});Object.assign(s.accounts,{pretax:0,roth:0,taxable:0,cash:100000});Object.assign(s.spending,{annualBaseSpending:12000,generalInflationMean:0,generalInflationStdDev:0});Object.assign(s.healthcare,{preMedicareMonthlyPremium:0,healthcareInflationMean:0,healthcareInflationStdDev:0,includeMedicarePremiums:false});s.socialSecurity.annualBenefitAt67=0;Object.assign(s.market,{preRetirementMeanReturn:0,preRetirementStdDev:0,stockMeanReturn:0,stockStdDev:0,bondMeanReturn:0,bondStdDev:0});s.longTermCare.enabled=false;},1,79973.35771513257,100000,null],
+  ['married',s=>Object.assign(s.household,{filingStatus:'Married',spouseCurrentAge:55}),1,3635039.4832704654,2963085.4111460363,null],
+  ['early',s=>{s.household.retirementAge=55;s.withdrawalStrategy.applyEarlyWithdrawalPenalty=true;},1,2577942.2726794328,1377225.4206466398,null],
+  ['roth',s=>{s.rothConversion.enabled=true;},1,8625526.407125238,2963085.4111460363,null],
   ['home',s=>{Object.assign(s.accounts,{pretax:100000,roth:0,cash:0});s.home.currentValue=500000;},0,0,321452.59335404605,82.5],
-  ['fifty paths',s=>{s.numberOfSimulations=50;},1,21791991.405989997,5993512.06391697,null]
+  ['fifty paths',s=>{s.numberOfSimulations=50;},1,20504199.304398973,5993512.06391697,null]
 ];
 for(const [name,edit,success,ending,starting,failure] of cases){test(`Seeded web regression: ${name}`,()=>{const s=referenceScenario();s.seed=REFERENCE_SEED;s.numberOfSimulations=1;edit(s);const r=runSimulation(s);assert.equal(r.successProbability,success);assert.ok(Math.abs(r.medianEndingBalance-Math.max(0,ending))<.01,`${r.medianEndingBalance} != ${ending}`);assert.ok(Math.abs(r.balanceBands[0].median-starting)<.01);assert.equal(r.medianFailureAge,failure);});}
 
@@ -48,7 +42,7 @@ test('tax and benefit reference rules',()=>{assert.equal(taxableSocialSecurity(1
 // Android forces the early-withdrawal penalty on for early ages; the web search keeps the plan's setting.
 test('retirement and spending decision targets keep the penalty setting and flag the spending search limit',()=>{
   const s=referenceScenario();s.seed=REFERENCE_SEED;s.spending.annualBaseSpending=71000;const result=estimateDecision(s);
-  assert.equal(result.earliestRetirementAge,53);assert.equal(result.earliestRetirementReadiness,0.8111111111111111);
+  assert.equal(result.earliestRetirementAge,53);assert.equal(result.earliestRetirementReadiness,0.8166666666666667);
   assert.equal(result.safeAnnualSpending,250000);assert.equal(result.safeSpendingAtSearchLimit,true);assert.equal(result.safeSpendingSearchLimit,250000);
   s.withdrawalStrategy.applyEarlyWithdrawalPenalty=true;const withPenalty=estimateDecision(s);
   assert.equal(withPenalty.earliestRetirementAge,55);assert.equal(withPenalty.earliestRetirementReadiness,0.8722222222222222);
@@ -57,6 +51,53 @@ test('safe spending below the search limit is not flagged as a lower bound',()=>
   const s=baseScenario();s.household.currentAge=64;s.household.retirementAge=65;s.accounts={pretax:300000,roth:0,taxable:0,cash:0};
   const result=estimateDecision(s,.8,60);
   assert.ok(result.safeAnnualSpending!==null&&result.safeAnnualSpending<result.safeSpendingSearchLimit);assert.equal(result.safeSpendingAtSearchLimit,false);
+});
+
+test('spending targets do not recommend amounts below the retained home bills',async()=>{
+  const s=baseScenario();Object.assign(s.household,{currentAge:65,retirementAge:65,targetEndAge:80});
+  s.accounts={pretax:0,roth:10000,taxable:0,cash:0};s.rothHistory={contributionBasis:10000,firstContributionYear:2021,conversions:[],needsReview:false};
+  Object.assign(s.spending,{annualBaseSpending:60000,spendingPathModel:'Flat',generalInflationMean:0,generalInflationStdDev:0,lowPortfolioSpendingReduction:0});
+  for(const key of Object.keys(s.market))s.market[key]=0;
+  Object.assign(s.healthcare,{preMedicareMonthlyPremium:0,healthcareInflationMean:0,healthcareInflationStdDev:0,includeMedicarePremiums:false});
+  s.socialSecurity.annualBenefitAt67=0;s.longTermCare.enabled=false;s.home.currentValue=300000;s.home.annualTaxesAndInsurance=30000;
+  const original=structuredClone(s);
+  assert.deepEqual(validateScenario(s),[]);
+  // The old search claimed $1,500 at 100% readiness by omitting the $30,000
+  // bills before the home sale. No feasible $500 candidate meets 80% here.
+  const sequential=estimateDecision(s,.8,50);
+  assert.equal(sequential.safeAnnualSpending,null);assert.equal(sequential.safeSpendingReadiness,null);
+  assert.equal(sequential.safeSpendingAtSearchLimit,false);
+  assert.deepEqual(await searchDecision(s,{simulationCount:50,concurrency:4}),sequential);
+  assert.deepEqual(s,original);
+});
+
+test('spending targets round the home-bill minimum up to a feasible $500 amount',async()=>{
+  for(const [bills,minimum] of [[0,0],[30000,30000],[30000.01,30500],[250000,250000]]){
+    const s=baseScenario();s.home.annualTaxesAndInsurance=bills;
+    const result=await searchDecision(s,{simulationCount:50,concurrency:4,evaluate:task=>{
+      if(task.kind==='age')return .1;
+      assert.ok(task.value>=bills,'Every tested spending amount must cover the home bills.');
+      return task.value<=minimum?1:.1;
+    }});
+    assert.equal(result.safeAnnualSpending,minimum);assert.equal(result.safeSpendingReadiness,1);
+    // If only amounts below the rounded minimum would qualify, there is no
+    // feasible target, including when the entered bills contain cents.
+    const exhausted=await searchDecision(s,{simulationCount:50,concurrency:4,evaluate:task=>task.kind==='spending'&&task.value<minimum?1:.1});
+    assert.equal(exhausted.safeAnnualSpending,null);assert.equal(exhausted.safeSpendingReadiness,null);
+  }
+});
+
+test('spending targets find no amount when home bills exceed the search ceiling',async()=>{
+  for(const [bills,spending] of [[250000.01,60000],[1000000.01,1000000.01]]){
+    const s=baseScenario();s.home.annualTaxesAndInsurance=bills;s.spending.annualBaseSpending=spending;
+    let spendingChecks=0;
+    const result=await searchDecision(s,{simulationCount:50,concurrency:4,evaluate:task=>{
+      if(task.kind==='spending')spendingChecks++;
+      return 1;
+    }});
+    assert.equal(result.safeAnnualSpending,null);assert.equal(result.safeSpendingReadiness,null);
+    assert.equal(result.safeSpendingAtSearchLimit,false);assert.equal(spendingChecks,0);
+  }
 });
 
 test('extreme spending is rejected before target search and valid large plans have a bounded search',()=>{
@@ -73,7 +114,7 @@ test('extreme spending is rejected before target search and valid large plans ha
 });
 
 test('all modeled dollar inputs reject magnitudes that can overflow calculations',()=>{
-  const fields=['accounts.pretax','accounts.roth','accounts.taxable','accounts.cash','spending.annualBaseSpending','mortgage.monthlyPayment','mortgage.currentBalance','rent.monthlyRent','home.currentValue','healthcare.preMedicareMonthlyPremium','socialSecurity.annualBenefitAt67','guaranteedIncome.annualIncome','longTermCare.annualCost','budget.annualPropertyTaxes','budget.annualHomeInsurance','budget.annualAutoInsurance','budget.retirementAnnualAdjustment'];
+  const fields=['accounts.pretax','accounts.roth','accounts.taxable','accounts.cash','spending.annualBaseSpending','mortgage.monthlyPayment','mortgage.currentBalance','rent.monthlyRent','home.currentValue','home.annualTaxesAndInsurance','healthcare.preMedicareMonthlyPremium','socialSecurity.annualBenefitAt67','guaranteedIncome.annualIncome','longTermCare.annualCost','budget.annualPropertyTaxes','budget.annualHomeInsurance','budget.annualAutoInsurance','budget.retirementAnnualAdjustment'];
   for(const field of fields){
     const s=baseScenario(),[section,key]=field.split('.');s[section][key]=1e308;
     assert.match(validateScenario(s).join(' '),/supported dollar range/,field);
@@ -223,4 +264,51 @@ test('legacy timing migration does not conceal out-of-range fractional inputs',(
     const old=baseScenario();delete old.guaranteedIncome.startAgeMonths;delete old.longTermCare.averageDurationMonths;old[section][key]=value;
     assert.ok(validateScenario(normalizeScenario(old)).length>0);
   }
+});
+
+test('a 5% spending cut never adds shortfalls for a plan that relies on selling the home',()=>{
+  // With a $30,000 property tax budget inside $60,000 of spending, the old
+  // sensitivity check dropped the post-sale reduction and reported 26 added shortfalls.
+  const s=baseScenario();Object.assign(s.household,{currentAge:65,retirementAge:65,targetEndAge:105});
+  s.accounts={pretax:0,roth:0,taxable:0,cash:0};s.rothHistory={contributionBasis:0,firstContributionYear:0,conversions:[],needsReview:false};
+  s.spending.spendingPathModel='Flat';s.home.currentValue=900000;s.socialSecurity.annualBenefitAt67=24000;s.longTermCare.enabled=false;s.numberOfSimulations=128;
+  s.budget.annualPropertyTaxes=30000;s.budget.monthlyBudgets=[{month:'2026-01',checkingSavingsBills:[{monthlyAmount:2500}],creditCardBills:[]}];applyBudgetEstimate(s);
+  const check=runSimulation(s,()=>{},{includePathPoints:false}).riskBreakdown.checks.find(c=>c.key==='spending');
+  assert.equal(check.introducedShortfalls,0);assert.ok(check.avoidedShortfalls>0);
+});
+
+// Readiness from a small table, delayed at random so completion order varies.
+function syntheticSearch(s,readiness,{concurrency=4,seed=11}={}){
+  const pause=()=>new Promise(resolve=>setTimeout(resolve,(seed=seed*16807%2147483647)%4));
+  return searchDecision(s,{concurrency,simulationCount:50,evaluate:async task=>{await pause();return readiness(task);}});
+}
+test('parallel target searches keep the sequential answer and error order',async()=>{
+  const s=baseScenario();Object.assign(s.household,{currentAge:60,retirementAge:62,targetEndAge:95});s.spending.annualBaseSpending=90100;
+  const table=({kind,value})=>kind==='age'?(value===64||value===67?.85:.5):(value===120000||value===90000||value===270300?.9:.1);
+  for(const concurrency of [1,3,8]){
+    const found=await syntheticSearch(s,table,{concurrency});
+    assert.equal(found.earliestRetirementAge,64);assert.equal(found.earliestRetirementReadiness,.85);
+    assert.equal(found.safeAnnualSpending,120000);assert.equal(found.safeSpendingReadiness,.9);assert.equal(found.safeSpendingAtSearchLimit,false);
+    assert.equal(found.retirementAgeSearchStart,60);assert.equal(found.retirementAgeSearchEnd,70);
+  }
+  // A candidate past the answer is never reached by a sequential scan, so its error is ignored.
+  const skipped=task=>{if(task.kind==='spending'&&task.value<120000)throw new Error('not reached');return table(task);};
+  assert.equal((await syntheticSearch(s,skipped)).safeAnnualSpending,120000);
+  // An error before the answer is reported, as a sequential scan would report it.
+  await assert.rejects(syntheticSearch(s,task=>{if(task.kind==='spending'&&task.value===150000)throw new Error('reached first');return table(task);}),/reached first/);
+  // A qualifying top candidate checks the unrounded limit ($270,300) before claiming "At least".
+  const top=await syntheticSearch(s,task=>task.kind==='spending'&&task.value>=270000?.9:table(task));
+  assert.equal(top.safeAnnualSpending,270000);assert.equal(top.safeSpendingAtSearchLimit,true);assert.equal(top.safeSpendingSearchLimit,270300);
+});
+test('parallel target searches match the sequential engine search exactly',async()=>{
+  const wealthy=baseScenario();Object.assign(wealthy.household,{currentAge:64,retirementAge:65,targetEndAge:80});
+  wealthy.accounts={pretax:3000000,roth:0,taxable:0,cash:50000};wealthy.rothHistory={contributionBasis:0,firstContributionYear:0,conversions:[],needsReview:false};wealthy.longTermCare.enabled=false;
+  const late=structuredClone(wealthy);Object.assign(late.household,{currentAge:72,retirementAge:72,targetEndAge:80});late.accounts.pretax=1000000;
+  for(const s of [wealthy,late]){
+    const sequential=estimateDecision(s,.8,50,70);let seed=5,updates=0;
+    const pause=()=>new Promise(resolve=>setTimeout(resolve,(seed=seed*16807%2147483647)%3));
+    const parallel=await searchDecision(s,{concurrency:4,simulationCount:50,evaluate:async task=>{await pause();return candidateReadiness(s,task);},onProgress:()=>updates++});
+    assert.deepEqual(parallel,sequential);assert.ok(updates>1);
+  }
+  assert.equal(estimateDecision(late,.8,50,70).earliestRetirementAge,null);
 });

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../worker/index.js';
+import { identityKeyCache, IdentityKeysUnavailableError } from '../worker/auth.js';
 
 const origin = 'https://retirementforecast.us';
 const project = 'retirement-auth-test';
@@ -207,6 +208,22 @@ test('invalid claims and unknown signing keys remain authentication failures',as
   fixture.env.FIREBASE_JWKS_FETCH=async()=>Response.json({keys:[{...jwk,kid:'different-key'}]});
   const response=await worker.fetch(request('/api/billing/status',{user:'chatgpt-user',bearer:await token()}),fixture.env);
   assert.equal(response.status,401);assert.equal(fixture.writes.length,0);
+});
+
+test('unknown signing-key IDs refetch Google keys at most once a minute',async()=>{
+  let downloads=0,time=10000000,available=true;
+  const keyFor=identityKeyCache(async()=>{downloads++;return available?new Response(JSON.stringify({keys:[jwk]}),{headers:{'Content-Type':'application/json','Cache-Control':'public, max-age=3600'}}):new Response('Unavailable',{status:503});},()=>time);
+  assert.ok(await keyFor('test-kid'));assert.ok(await keyFor('test-kid'));assert.equal(downloads,1);
+  // A forged key ID cannot force another download while the key set is fresh.
+  await assert.rejects(keyFor('forged'),/Unrecognized identity key/);assert.equal(downloads,1);
+  // After a minute, concurrent unknown IDs share one download for a possible key rotation.
+  time+=60000;
+  await assert.rejects(Promise.all([keyFor('forged-1'),keyFor('forged-2')]),/Unrecognized identity key/);assert.equal(downloads,2);
+  await assert.rejects(keyFor('forged-3'),/Unrecognized identity key/);assert.equal(downloads,2);
+  // An expired set reloads; a failed download is reported and retried on the next request.
+  time+=3600000;available=false;
+  await assert.rejects(keyFor('test-kid'),IdentityKeysUnavailableError);assert.equal(downloads,3);
+  available=true;assert.ok(await keyFor('test-kid'));assert.equal(downloads,4);
 });
 
 test('ChatGPT-only billing continues without Google keys during a key-service outage',async()=>{

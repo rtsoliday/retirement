@@ -3,9 +3,10 @@ export const OWNER_CHATGPT_USER_ID = '028696a7-7846-4822-a4c1-67026aa2383f';
 export const OWNER_GOOGLE_EMAIL = 'rtsoliday@gmail.com';
 export const OWNER_FIREBASE_UID = 'xYPnJEpGrHfTJmBtFUnXlAQSdzU2';
 const JWKS_URL = 'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
-const encoder = new TextDecoder();
-let cachedKeys = new Map();
-let cacheUntil = 0;
+const decoder = new TextDecoder();
+// A fresh key set is refetched for an unknown key ID at most once a minute, so
+// forged tokens cannot force a Google key download on every request.
+const KEY_REFETCH_MS = 60000;
 
 // Key-service failures cannot establish whether a token is valid or invalid.
 // Keep them distinct from rejected credentials at the HTTP boundary.
@@ -18,33 +19,55 @@ function decodePart(part) {
   const value = part.replace(/-/g, '+').replace(/_/g, '/');
   return Uint8Array.from(atob(value.padEnd(Math.ceil(value.length / 4) * 4, '=')), c => c.charCodeAt(0));
 }
-function parsePart(part) { return JSON.parse(encoder.decode(decodePart(part))); }
+function parsePart(part) { return JSON.parse(decoder.decode(decodePart(part))); }
 function firebaseConfigured(env) {
   return Boolean(env.FIREBASE_API_KEY && env.FIREBASE_AUTH_DOMAIN && env.FIREBASE_PROJECT_ID && env.FIREBASE_APP_ID);
 }
-async function firebaseKey(kid, env) {
-  if (!env.FIREBASE_JWKS_FETCH && Date.now() < cacheUntil && cachedKeys.has(kid)) return cachedKeys.get(kid);
-  const next = new Map();
+async function loadIdentityKeys(fetcher) {
   try {
-    const response = await (env.FIREBASE_JWKS_FETCH || fetch)(JWKS_URL, { signal: AbortSignal.timeout(10000) });
+    const response = await fetcher(JWKS_URL, { signal: AbortSignal.timeout(10000) });
     if (!response.ok) throw new Error('Identity keys unavailable');
     const payload = await response.json();
     if (!Array.isArray(payload?.keys)) throw new Error('Invalid identity keys response');
+    const keys = new Map();
     for (const jwk of payload.keys) {
       if (!jwk || jwk.kty !== 'RSA' || (jwk.alg && jwk.alg !== 'RS256') || typeof jwk.kid !== 'string' || !jwk.kid) continue;
-      next.set(jwk.kid, await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']));
+      keys.set(jwk.kid, await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']));
     }
-    if (!next.size) throw new Error('No usable identity keys');
-    if (!env.FIREBASE_JWKS_FETCH) {
-      cachedKeys = next;
-      const maxAge = Number(response.headers.get('cache-control')?.match(/max-age=(\d+)/)?.[1] || 300);
-      cacheUntil = Date.now() + Math.min(Math.max(maxAge, 60), 3600) * 1000;
-    }
+    if (!keys.size) throw new Error('No usable identity keys');
+    const maxAge = Number(response.headers.get('cache-control')?.match(/max-age=(\d+)/)?.[1] || 300);
+    return { keys, maxAgeSeconds: Math.min(Math.max(maxAge, 60), 3600) };
   } catch { throw new IdentityKeysUnavailableError(); }
-  // A successfully loaded key set that excludes this token's key is a rejection.
-  const key = next.get(kid);
-  if (!key) throw new Error('Unrecognized identity key');
-  return key;
+}
+// Returns a key lookup that caches the key set for its max-age. Concurrent
+// refreshes share one download; failed downloads are retried on the next call.
+export function identityKeyCache(fetcher, now = () => Date.now()) {
+  let keys = new Map(), expires = 0, loadedAt = -Infinity, loading = null;
+  return async kid => {
+    const time = now();
+    if (time < expires) {
+      if (keys.has(kid)) return keys.get(kid);
+      // A successfully loaded key set that excludes this token's key is a rejection.
+      if (time - loadedAt < KEY_REFETCH_MS) throw new Error('Unrecognized identity key');
+    }
+    loading ||= loadIdentityKeys(fetcher).then(result => {
+      keys = result.keys; loadedAt = now(); expires = loadedAt + result.maxAgeSeconds * 1000;
+    }).finally(() => { loading = null; });
+    await loading;
+    const key = keys.get(kid);
+    if (!key) throw new Error('Unrecognized identity key');
+    return key;
+  };
+}
+const cachedIdentityKey = identityKeyCache((url, init) => fetch(url, init));
+async function firebaseKey(kid, env) {
+  // An injected fetch models each key-service response, so it is never cached.
+  if (env.FIREBASE_JWKS_FETCH) {
+    const key = (await loadIdentityKeys(env.FIREBASE_JWKS_FETCH)).keys.get(kid);
+    if (!key) throw new Error('Unrecognized identity key');
+    return key;
+  }
+  return cachedIdentityKey(kid);
 }
 export async function verifyFirebaseToken(token, env) {
   if (!firebaseConfigured(env) || typeof token !== 'string' || token.length > 8192) throw new Error('Invalid identity token');

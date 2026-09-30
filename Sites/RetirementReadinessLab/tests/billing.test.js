@@ -368,6 +368,24 @@ test('incomplete prices do not treat unrelated or malformed subscriptions as Pro
   }
 });
 
+test('site Checkout subscriptions keep Pro after the configured prices are replaced',async()=>{
+  const retired={items:{data:[{price:{id:'price_retired'}}]}};
+  const cases=[
+    [{...subscription,...retired,metadata:{retirement_plan:'pro',retirement_site_user_id:'user-123'}},'pro'],
+    [{...subscription,...retired,metadata:{retirement_site_user_id:'user-123'}},'pro'],
+    [{...subscription,...retired},'free'],
+    [{...subscription,...retired,metadata:{retirement_site_user_id:'another-user'}},'free'],
+  ];
+  for(const [paid,tier] of cases){
+    const env={...stripeEnv,STRIPE_FETCH:async(url,init)=>new URL(url).pathname==='/v1/subscriptions'?Response.json({data:[paid]}):stripeEnv.STRIPE_FETCH(url,init)};
+    const status=await (await worker.fetch(request('/api/billing/status',{user:'user-123'}),env)).json();
+    assert.equal(status.tier,tier);assert.equal(status.checkoutAvailable,true);
+    assert.equal(Boolean(await activeSubscription(env,customer.id,customer.metadata)),tier==='pro');
+    // A recognized subscriber is told they already have Pro instead of being sold a second plan.
+    if(tier==='pro'){const response=await worker.fetch(request('/api/billing/checkout',{user:'user-123',method:'POST',origin:site}),env);assert.equal(response.status,409);assert.match((await response.json()).error,/already has Pro/);}
+  }
+});
+
 // Shared fake Stripe backend: separate Worker requests coordinate only through
 // Stripe history and its idempotency store, rather than a process-local lock.
 function checkoutFixture(initial=[]) {

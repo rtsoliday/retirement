@@ -26,15 +26,16 @@ function priceIds(env) {
 }
 function configured(env) { const prices = priceIds(env); return Boolean(env.STRIPE_SECRET_KEY && prices.monthly && prices.yearly); }
 function testBilling(env) { return /^(sk|rk)_test_/.test(env.STRIPE_SECRET_KEY || ''); }
-function hasProPrice(subscription, env, customerMetadata = {}) {
+function isProSubscription(subscription, env, customerMetadata = {}) {
   const ids = new Set(Object.values(priceIds(env)).filter(id => typeof id === 'string' && id));
   if (subscription.items?.data?.some(item => ids.has(item.price?.id))) return true;
-  // Checkout configuration can be incomplete while an existing plan is paid.
-  // Only our server-written plan/identity metadata can identify a missing price;
-  // an arbitrary subscription on the customer is not proof of Pro access.
-  return !configured(env) && (subscription.metadata?.retirement_plan === 'pro' ||
+  // Stripe Prices cannot be edited, so a price change means new IDs. Every site
+  // Checkout writes plan and identity metadata to its subscription, which keeps
+  // earlier subscribers on Pro when prices are missing or replaced. Only this
+  // server-written metadata counts; an arbitrary subscription is not Pro access.
+  return subscription.metadata?.retirement_plan === 'pro' ||
     ['retirement_site_user_id', 'retirement_firebase_uid'].some(key =>
-      typeof customerMetadata[key] === 'string' && customerMetadata[key] && subscription.metadata?.[key] === customerMetadata[key]));
+      typeof customerMetadata[key] === 'string' && customerMetadata[key] && subscription.metadata?.[key] === customerMetadata[key]);
 }
 function asPrincipal(value) { return typeof value === 'string' ? { kind: 'chatgpt', id: value, provider: 'chatgpt' } : value; }
 function isOwnerAccount(user) {
@@ -162,7 +163,7 @@ async function activeSubscription(env, customerId, customerMetadata = {}) {
   do {
     const result = await stripe(env, 'subscriptions', { customer: customerId, status: 'all', limit: '100', ...(cursor ? { starting_after: cursor } : {}) });
     if(!Array.isArray(result.data))throw new Error('Unexpected subscription response');
-    const match=result.data.find(s => ACTIVE_STATUSES.has(s.status) && hasProPrice(s, env, customerMetadata));
+    const match=result.data.find(s => ACTIVE_STATUSES.has(s.status) && isProSubscription(s, env, customerMetadata));
     if(match)return match;
     cursor=result.has_more?result.data.at(-1)?.id:null;
     // An incomplete lookup must not be mistaken for permission to buy again.
@@ -267,8 +268,8 @@ async function linkPurchases(env,matches,user) {
     for(const purchase of history.completed){
       const subscription=await completedCheckoutSubscription(env,purchase);
       if(endedSubscription(subscription))continue;
-      if(ACTIVE_STATUSES.has(subscription.status)&&hasProPrice(subscription,env,customer.metadata))paid.set(customer.id,customer);
-      else throw new BillingConflict('A payment is still being confirmed. Check your plan before linking accounts.');
+      if(ACTIVE_STATUSES.has(subscription.status)&&isProSubscription(subscription,env,customer.metadata))paid.set(customer.id,customer);
+      else throw new BillingConflict('A subscription payment is still being confirmed or needs attention. Check Manage billing before linking accounts.');
     }
     if(await activeSubscription(env,customer.id,customer.metadata))paid.set(customer.id,customer);
   }

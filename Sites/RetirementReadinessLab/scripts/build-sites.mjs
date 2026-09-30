@@ -27,7 +27,10 @@ const index=await readFile(path.join(client,'index.html'),'utf8');
 await writeFile(path.join(client,'index.html'),index.replace(/src="\.\/app\.js(?:\?[^\"]*)?"/,`src="./assets/${release}/app.js"`));
 const workerSource = await readFile(path.join(root, 'worker/index.js'), 'utf8');
 const adminHtml = await readFile(path.join(root, 'dist/admin.html'), 'utf8');
-await writeFile(path.join(dist, 'server/index.js'), workerSource.replace("'__ADMIN_HTML__'", JSON.stringify(adminHtml)));
+if (!workerSource.includes("'__ADMIN_HTML__'")) throw new Error('Missing admin page placeholder in worker/index.js');
+// A replacer function inserts the page literally. A replacement string would
+// expand $&, $' and $$ if the page ever contained them.
+await writeFile(path.join(dist, 'server/index.js'), workerSource.replace("'__ADMIN_HTML__'", () => JSON.stringify(adminHtml)));
 await cp(path.join(root, 'worker/billing.js'), path.join(dist, 'server/billing.js'));
 await cp(path.join(root, 'worker/auth.js'), path.join(dist, 'server/auth.js'));
 await cp(path.join(root, '.openai/hosting.json'), path.join(output, '.openai/hosting.json'));

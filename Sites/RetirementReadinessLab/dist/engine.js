@@ -1,5 +1,5 @@
 import {buildPathPoints,buildBalanceBands,buildFundingSurvival,medianOfSorted} from './chart-data.js';
-import {ENGINE_VERSION, validateScenario, retirementAge, setAnnualBaseSpending} from './model.js';
+import {ENGINE_VERSION, validateScenario, retirementAge, ruleOf55Applies, setAnnualBaseSpending} from './model.js';
 import {maleMortality,femaleMortality} from './mortality.js';
 import {taxableSocialSecurity,ordinaryIncomeTax,rothConversionPlan} from './tax.js';
 import {RothConversionLedger} from './roth-conversions.js';
@@ -25,13 +25,23 @@ export class JavaRandom {
 }
 
 export function sampleDeathAge(gender,start,end,rng){
-  const table=gender==='Female'?femaleMortality:maleMortality;let age=start;
-  while(age<end&&age<120){
-    const next=Math.min(Math.floor(age)+1,end),fraction=next-age,q=table[Math.floor(age)]??1;
-    if(rng.nextDouble()<(fraction===1?q:1-Math.pow(1-q,fraction)))return next;
-    age=next;
+  const table=gender==='Female'?femaleMortality:maleMortality,limit=Math.min(Math.round(end*12),120*12);let month=Math.round(start*12);
+  while(month<limit){
+    const age=Math.floor(month/12),next=Math.min((age+1)*12,limit),fraction=(next-month)/12,q=table[age]??1;
+    const probability=fraction===1?q:1-Math.pow(1-q,fraction),draw=rng.nextDouble();
+    if(draw<probability){
+      // Constant hazard within the age year preserves its annual probability.
+      // Reuse the annual draw for timing: lower draws select later months,
+      // leaving the subsequent spouse, care and market draws unchanged.
+      for(let deathMonth=month+1;deathMonth<next;deathMonth++){
+        const laterDeathProbability=Math.pow(1-q,(deathMonth-month)/12)-(1-probability);
+        if(draw>=laterDeathProbability)return deathMonth/12;
+      }
+      return next/12;
+    }
+    month=next;
   }
-  return Math.min(age,end);
+  return limit/12;
 }
 function ltcStart(s,start,death,rng){const draw=rng.nextDouble();if(!s.longTermCare.enabled||death<65)return null;const p=death<75?.25:death<85?.45:death<95?.60:.70;return draw>p?null:Math.max(start,death-s.longTermCare.averageDurationYears-(s.longTermCare.averageDurationMonths??0)/12);}
 function allocation(s,b,annualSpending){if(annualSpending<=0)return s.postRetirementAllocation.stock50xOrMore;const ratio=invested(b)/annualSpending,a=s.postRetirementAllocation;return ratio<30?a.stockUnder30x:ratio<35?a.stock30xTo35x:ratio<40?a.stock35xTo40x:ratio<45?a.stock40xTo45x:ratio<50?a.stock45xTo50x:a.stock50xOrMore;}
@@ -89,7 +99,7 @@ function seppPayment(balance,age){const years=life[Math.max(0,Math.floor(age))];
 export function runOne(s,rng,{captureMonthlyBalances=false,captureTaxDetails=false,taxesEnabled=true,horizonReductionYears=0}={}){
   const h={...s.household,retirementAge:retirementAge(s)},b={...s.accounts},preMonths=Math.round((h.retirementAge-h.currentAge)*12),yearsToRet=preMonths/12;
   const preReturns=monthlyRateDistribution(s.market.preRetirementMeanReturn,s.market.preRetirementStdDev),cashGrowth=monthly(.02),incomeTax=taxesEnabled?ordinaryIncomeTax:()=>0;
-  const rh=s.rothHistory,rothLedger=new RothConversionLedger(rh.contributionBasis,rh.firstContributionYear,rh.conversions);
+  const rh=s.rothHistory,rothLedger=new RothConversionLedger(rh.contributionBasis,rh.firstContributionYear,rh.conversions),ruleOf55=ruleOf55Applies(s);
   for(let i=0;i<preMonths;i++){const growth=sampleMonthlyRate(preReturns,rng);b.pretax*=1+growth;b.roth*=1+growth;b.taxable*=1+growth;b.cash*=1+cashGrowth;sum(b);}
   const married=h.filingStatus==='Married',spouseAtRet=h.spouseCurrentAge+yearsToRet;
   // The reporting cutoff must not determine death or move terminal care sooner.
@@ -106,7 +116,8 @@ export function runOne(s,rng,{captureMonthlyBalances=false,captureTaxDetails=fal
   const retireBalance=sum(b),lowThreshold=retireBalance*.5;let pathFactor=spendingPath(s,0),spending=s.spending.annualBaseSpending/12*Math.pow(1+infMean,preMonths)*pathFactor;
   let rent=s.rent.monthlyRent*Math.pow(1+infMean,preMonths),home=s.home.currentValue*Math.pow(1+infMean,preMonths),seniorRent=3000*Math.pow(1+infMean,preMonths);
   const mortgage=mortgageAtRetirement(s.mortgage,preMonths);let mortgageMonths=mortgage.months,mortgageBalance=mortgage.balance;
-  let otherMonthly=s.guaranteedIncome.annualIncome/12*Math.pow(1+incomeGrowth,preMonths),homeCosts=s.budget.isAppliedToAnnualBaseSpending?(s.budget.appliedAnnualHomeCosts??(s.budget.annualPropertyTaxes+s.budget.annualHomeInsurance))/12*Math.pow(1+infMean,preMonths)*pathFactor:0;
+  // Property tax and home insurance are part of base spending and stop after a sale.
+  let otherMonthly=s.guaranteedIncome.annualIncome/12*Math.pow(1+incomeGrowth,preMonths),homeCosts=s.home.annualTaxesAndInsurance/12*Math.pow(1+infMean,preMonths)*pathFactor;
   let preMedicare=s.healthcare.preMedicareMonthlyPremium*Math.pow(1+healthMean,preMonths),healthIndex=Math.pow(1+healthMean,preMonths),taxIndex=Math.pow(1+infMean,preMonths),ssIndex=Math.max(1,taxIndex);
   let priorYearTaxIndex=Math.pow(1+infMean,Math.max(0,preMonths-12));
   const stockReturns=monthlyRateDistribution(s.market.stockMeanReturn,s.market.stockStdDev),bondReturns=monthlyRateDistribution(s.market.bondMeanReturn,s.market.bondStdDev);
@@ -197,8 +208,9 @@ export function runOne(s,rng,{captureMonthlyBalances=false,captureTaxDetails=fal
     const scheduledDistribution=seppDistribution+rmdDistribution;b.pretax-=scheduledDistribution;
     const cashFirst=s.withdrawalStrategy.useCashReserveDuringDrawdowns&&portReturn<s.withdrawalStrategy.drawdownTrigger&&b.cash>0;
     // Eligibility is an explicit assertion about the employer plan and calendar
-    // year of separation; the qualifying year can begin before the 55th birthday.
-    const penalty=taxesEnabled&&s.withdrawalStrategy.applyEarlyWithdrawalPenalty&&ownerAge<59.5&&!(s.withdrawalStrategy.ruleOf55Eligible&&!spouseOwns)&&(primaryAlive||spouseOwns)?.10:0;
+    // year of separation; the qualifying year can begin before the 55th birthday,
+    // but never for a retirement before 54.
+    const penalty=taxesEnabled&&s.withdrawalStrategy.applyEarlyWithdrawalPenalty&&ownerAge<59.5&&!(ruleOf55&&!spouseOwns)&&(primaryAlive||spouseOwns)?.10:0;
     const rothPenalty=taxesEnabled&&s.withdrawalStrategy.applyEarlyWithdrawalPenalty&&ownerAge<59.5&&(primaryAlive||spouseOwns)?.10:0;
     const plan=withdrawalPlan(need,social,status,guaranteed+scheduledDistribution,b,cashFirst,yearTaxIndex,seniors,taxYear,penalty,{ordinary:annualOrdinaryIncome+cashInterest,social:annualSocialSecurity,tax:annualTaxPaid},rothLedger,rothPenalty,{pretaxAvailable:seppProtected?0:b.pretax,incomeTax,rothQualified});
     let portfolioWithdrawal=plan.gross;if(cashFirst){const cashDraw=Math.min(b.cash,portfolioWithdrawal);b.cash-=cashDraw;portfolioWithdrawal-=cashDraw;}withdrawAccounts(b,portfolioWithdrawal,seppProtected?['roth','taxable']:['pretax','roth','taxable'],rothLedger,taxYear);
@@ -262,6 +274,8 @@ export function runSimulation(s,onProgress=()=>{},options={}){
   const errors=validateScenario(s);if(errors.length)throw new Error(errors.join(' '));
   const n=s.numberOfSimulations,paths=[],endings=[],failures=[];let successes=0;
   for(let i=0;i<n;i++){const seed=BigInt(s.seed)+BigInt(i)*STRIDE,path=runOne(s,new JavaRandom(seed),{captureMonthlyBalances:true});paths.push(path);endings.push(Math.max(0,path.yearEnd[path.yearEnd.length-1]));if(path.success)successes++;else if(path.failureAge!==null)failures.push(path.failureAge);if(i%25===0)onProgress((i+1)/n);}
+  // Every path is done; the summaries and sensitivity checks follow.
+  onProgress(1);
   const p=successes/n,sorted=endings.sort((a,b)=>a-b),bands=buildBalanceBands(paths,retirementAge(s));
   failures.sort((a,b)=>a-b);const buckets=new Map();for(const age of failures){const start=Math.floor(age/5)*5;buckets.set(start,(buckets.get(start)||0)+1);}
   const failureAgeBuckets=[...buckets].map(([start,count])=>({label:`${start}-${start+4}`,count,shareOfFailures:count/failures.length}));
@@ -270,47 +284,101 @@ export function runSimulation(s,onProgress=()=>{},options={}){
   return {scenarioId:s.id,successProbability:p,medianEndingBalance:medianOfSorted(sorted),pessimisticEndingBalance:percentile(sorted,.1),optimisticEndingBalance:percentile(sorted,.9),medianFailureAge:failures.length?medianOfSorted(failures):null,failureAgeBuckets,balanceBands:bands,notFailedByAge,meanPath,pathPoints:options.includePathPoints===false?[]:buildPathPoints(paths),riskBreakdown:options.includeRiskAnalysis===false?null:riskBreakdown(s,paths),provenance:{engineVersion:ENGINE_VERSION,engineCadence:'Monthly cashflow model with annual result bands',taxTableVersion:'2026 federal brackets with senior-aware deductions',mortalityModelVersion:'SSA Trustees Alt2 2025 annual death probabilities',randomSeed:s.seed,simulationCount:n},generatedAtEpochMillis:Date.now()};
 }
 
-export function estimateDecision(s,targetReadiness=.80,simulationCount=180,maxRetirementAge=70){
+// The candidates a planning-target search examines, in search order.
+export function decisionPlan(s,targetReadiness=.80,simulationCount=180,maxRetirementAge=70){
   const errors=validateScenario(s);if(errors.length)throw new Error(errors.join(' '));
   if(targetReadiness<0||targetReadiness>1)throw new Error('Target readiness must be between 0% and 100%.');
   const count=clamp(simulationCount,50,10000),h=s.household;
-  const last=Math.min(maxRetirementAge,h.targetEndAge-1,h.filingStatus==='Married'?h.currentAge+h.targetEndAge-h.spouseCurrentAge-1:Infinity);
-  let earliestRetirementAge=null,earliestRetirementReadiness=null;
-  for(let age=h.currentAge;age<=last;age++){
-    // Keep the plan's own early-withdrawal penalty setting so targets match a full run at that age.
-    const variant=structuredClone(s);variant.household.retirementAge=age;variant.household.retirementAgeMonths=0;variant.numberOfSimulations=count;variant.seed=s.seed+10000;
-    const readiness=runSimulation(variant,()=>{},{includePathPoints:false,includeRiskAnalysis:false}).successProbability;
-    if(readiness>=targetReadiness){earliestRetirementAge=age;earliestRetirementReadiness=readiness;break;}
-  }
-  const spendingResults=new Map();
-  function readinessFor(spending){
-    if(spendingResults.has(spending))return spendingResults.get(spending);
-    const variant=structuredClone(s);setAnnualBaseSpending(variant,spending);variant.numberOfSimulations=count;variant.seed=s.seed+20000;
-    const errors=validateScenario(variant);if(errors.length)throw new Error(errors.join(' '));
-    let successes=0;
-    for(let i=0;i<count;i++){
-      if(runOne(variant,new JavaRandom(BigInt(variant.seed)+BigInt(i)*STRIDE)).success)successes++;
-      // Candidates that cannot meet the target need no charts or remaining
-      // paths. Passing candidates retain their exact completed path count.
-      if((successes+count-i-1)/count<targetReadiness){spendingResults.set(spending,0);return 0;}
-    }
-    const readiness=successes/count;spendingResults.set(spending,readiness);return readiness;
-  }
-  let safeAnnualSpending=null,safeSpendingReadiness=null,safeSpendingAtSearchLimit=false;
+  const firstAge=h.currentAge,lastAge=Math.min(maxRetirementAge,h.targetEndAge-1,h.filingStatus==='Married'?h.currentAge+h.targetEndAge-h.spouseCurrentAge-1:Infinity);
+  const ages=[];for(let age=firstAge;age<=lastAge;age++)ages.push(age);
   // Bound the screening work even for very large, otherwise valid plans.
   // Qualifying amounts at this ceiling remain explicitly reported as "At least".
   const safeSpendingSearchLimit=Math.min(1000000,Math.max(s.spending.annualBaseSpending*3,250000));
   // Allocation depends on spending, so readiness need not be monotonic.
   // Search every reported $500 candidate from the upper bound downward.
-  const maximumCandidate=Math.floor(safeSpendingSearchLimit/500)*500;
-  for(let step=maximumCandidate/500;step>=0;step--){
-    const candidate=step*500;
-    const readiness=readinessFor(candidate);
-    if(readiness>=targetReadiness){
-      safeAnnualSpending=candidate;safeSpendingReadiness=readiness;
-      safeSpendingAtSearchLimit=candidate===maximumCandidate&&readinessFor(safeSpendingSearchLimit)>=targetReadiness;
-      break;
-    }
+  // Base spending includes the retained home bills; a smaller total would omit
+  // part of those costs before the home sale. Round the minimum upward.
+  const maximumCandidate=Math.floor(safeSpendingSearchLimit/500)*500,minimumCandidate=Math.ceil(s.home.annualTaxesAndInsurance/500)*500,amounts=[];
+  for(let step=maximumCandidate/500;step>=minimumCandidate/500;step--)amounts.push(step*500);
+  return {targetReadiness,count,ages,amounts,firstAge,lastAge,safeSpendingSearchLimit,maximumCandidate};
+}
+// Candidates that cannot meet the target need no remaining paths and report 0.
+// Qualifying candidates run every path, so their readiness is exact.
+function screenedReadiness(variant,count,targetReadiness){
+  const errors=validateScenario(variant);if(errors.length)throw new Error(errors.join(' '));
+  let successes=0;
+  for(let i=0;i<count;i++){
+    if(runOne(variant,new JavaRandom(BigInt(variant.seed)+BigInt(i)*STRIDE)).success)successes++;
+    if((successes+count-i-1)/count<targetReadiness)return 0;
   }
-  return {targetReadiness,simulationCount:count,earliestRetirementAge,earliestRetirementReadiness,safeAnnualSpending,safeSpendingReadiness,safeSpendingAtSearchLimit,safeSpendingSearchLimit};
+  return successes/count;
+}
+// Keep the plan's own early-withdrawal penalty setting so targets match a full run at that age.
+export function retirementAgeReadiness(s,age,count,targetReadiness){
+  const variant=structuredClone(s);variant.household.retirementAge=age;variant.household.retirementAgeMonths=0;variant.numberOfSimulations=count;variant.seed=s.seed+10000;
+  return screenedReadiness(variant,count,targetReadiness);
+}
+export function spendingReadiness(s,spending,count,targetReadiness){
+  const variant=structuredClone(s);setAnnualBaseSpending(variant,spending);variant.numberOfSimulations=count;variant.seed=s.seed+20000;
+  return screenedReadiness(variant,count,targetReadiness);
+}
+export function candidateReadiness(s,{kind,value,count,targetReadiness}){
+  return kind==='age'?retirementAgeReadiness(s,value,count,targetReadiness):spendingReadiness(s,value,count,targetReadiness);
+}
+function decisionResult(plan,age,spending,safeSpendingAtSearchLimit){
+  return {targetReadiness:plan.targetReadiness,simulationCount:plan.count,earliestRetirementAge:age?.value??null,earliestRetirementReadiness:age?.readiness??null,safeAnnualSpending:spending?.value??null,safeSpendingReadiness:spending?.readiness??null,safeSpendingAtSearchLimit,safeSpendingSearchLimit:plan.safeSpendingSearchLimit,retirementAgeSearchStart:plan.firstAge,retirementAgeSearchEnd:plan.lastAge};
+}
+export function estimateDecision(s,targetReadiness=.80,simulationCount=180,maxRetirementAge=70){
+  const plan=decisionPlan(s,targetReadiness,simulationCount,maxRetirementAge);
+  const task=(kind,value)=>({kind,value,count:plan.count,targetReadiness:plan.targetReadiness});
+  const first=(kind,values)=>{for(const value of values){const readiness=candidateReadiness(s,task(kind,value));if(readiness>=plan.targetReadiness)return {value,readiness};}return null;};
+  const age=first('age',plan.ages),spending=first('spending',plan.amounts);
+  const atLimit=spending?.value===plan.maximumCandidate&&(plan.safeSpendingSearchLimit===plan.maximumCandidate||candidateReadiness(s,task('spending',plan.safeSpendingSearchLimit))>=plan.targetReadiness);
+  return decisionResult(plan,age,spending,atLimit);
+}
+// Finds the first qualifying value in order while evaluating up to `concurrency`
+// candidates at once. A later candidate never wins over an earlier one, and an
+// error counts only where a sequential scan would have reached it. The answer
+// settles once every earlier candidate is known; later speculative work is ignored.
+function firstQualifying(values,evaluate,targetReadiness,concurrency,onChecked){
+  return new Promise((resolve,reject)=>{
+    const outcomes=new Map();let next=0,active=0,known=0,winner=Infinity,failed=Infinity,failure=null,done=false;
+    const settle=()=>{
+      const limit=Math.min(values.length,winner,failed);
+      while(known<limit&&outcomes.has(known))known++;
+      if(known<limit)return;
+      done=true;
+      if(failed<winner)reject(failure);else resolve(winner<values.length?{value:values[winner],readiness:outcomes.get(winner)}:null);
+    };
+    const launch=()=>{
+      while(!done&&active<concurrency&&next<Math.min(values.length,winner,failed)){
+        const index=next++;active++;
+        Promise.resolve().then(()=>evaluate(values[index])).then(value=>{
+          outcomes.set(index,value);if(value>=targetReadiness&&index<winner)winner=index;
+        },error=>{outcomes.set(index,undefined);if(index<failed){failed=index;failure=error;}}).then(()=>{
+          active--;
+          if(done)return;
+          try{onChecked?.();}catch{}
+          settle();launch();
+        });
+      }
+    };
+    launch();settle();
+  });
+}
+// The same search as estimateDecision, with candidates evaluated through an
+// asynchronous `evaluate(task)` so a caller can spread them across workers.
+export async function searchDecision(s,{evaluate,concurrency=1,onProgress,targetReadiness=.80,simulationCount=180,maxRetirementAge=70}={}){
+  const plan=decisionPlan(s,targetReadiness,simulationCount,maxRetirementAge);
+  const run=evaluate??(task=>candidateReadiness(s,task)),width=Math.max(1,Math.floor(concurrency)||1);
+  const task=(kind,value)=>({kind,value,count:plan.count,targetReadiness:plan.targetReadiness});
+  const progress={phase:'ages',checkedAges:0,totalAges:plan.ages.length,checkedAmounts:0,totalAmounts:plan.amounts.length};
+  const report=()=>onProgress?.({...progress});
+  report();
+  const age=await firstQualifying(plan.ages,value=>run(task('age',value)),plan.targetReadiness,width,()=>{progress.checkedAges++;report();});
+  progress.phase='spending';report();
+  const spending=await firstQualifying(plan.amounts,value=>run(task('spending',value)),plan.targetReadiness,width,()=>{progress.checkedAmounts++;report();});
+  let atLimit=false;
+  if(spending?.value===plan.maximumCandidate)atLimit=plan.safeSpendingSearchLimit===plan.maximumCandidate||await run(task('spending',plan.safeSpendingSearchLimit))>=plan.targetReadiness;
+  return decisionResult(plan,age,spending,atLimit);
 }

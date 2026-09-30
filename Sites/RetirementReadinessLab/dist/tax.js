@@ -36,14 +36,6 @@ export function taxLiability(taxable,status='Single',inflation=1) {
 }
 export function ordinaryIncomeTax(income,status='Single',inflation=1,seniors=0,taxYear=2026){return taxLiability(taxableOrdinaryIncome(income,status,inflation,seniors,taxYear),status,inflation);}
 
-export function grossWithdrawalForNetNeed(netNeed,annualSocialSecurity,status,otherIncome=0,penaltyRate=0,taxableLimit=Infinity,inflation=1,seniors=0,taxYear=2026){
-  function netCash(w){const ss=taxableSocialSecurity(otherIncome+w,annualSocialSecurity,status);return w+otherIncome+annualSocialSecurity-ordinaryIncomeTax(otherIncome+w+ss,status,inflation,seniors,taxYear)-Math.min(w,taxableLimit)*Math.max(0,penaltyRate);}
-  if(netCash(0)>=netNeed)return 0;
-  let low=0,high=Math.max(0,netNeed-annualSocialSecurity-otherIncome)*1.8+10000;
-  while(netCash(high)<netNeed)high*=2;
-  for(let i=0;i<24;i++){const mid=(low+high)/2;if(netCash(mid)>=netNeed)high=mid;else low=mid;}
-  return high;
-}
 // income excludes Social Security; converted dollars can make more of the benefit taxable.
 export function rothConversionPlan(pretax,income,rateCap,status,inflation=1,seniors=0,taxYear=2026,annualSocialSecurity=0){
   const none={amount:0,tax:0,taxableSocialSecurityIncrease:0};

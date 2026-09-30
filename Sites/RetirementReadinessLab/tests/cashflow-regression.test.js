@@ -262,8 +262,7 @@ test('two living spouses in care sell the home without adding replacement rent',
 
 test('a spouse outside care keeps the home and its mortgage and budgeted carrying costs',()=>{
   const s=flatPlan(65);Object.assign(s.household,{filingStatus:'Married',spouseCurrentAge:65});
-  s.accounts.roth=300000;s.spending.annualBaseSpending=12000;s.home.currentValue=500000;
-  Object.assign(s.budget,{isAppliedToAnnualBaseSpending:true,appliedAnnualHomeCosts:12000});
+  s.accounts.roth=300000;s.spending.annualBaseSpending=12000;s.home.currentValue=500000;s.home.annualTaxesAndInsurance=12000;
   Object.assign(s.mortgage,{monthlyPayment:1000,yearsLeft:1,currentBalance:12000});
   s.longTermCare.enabled=true;
   const draws=[0,.999999,0,.999999];

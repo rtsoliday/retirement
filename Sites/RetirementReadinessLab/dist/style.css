@@ -239,3 +239,6 @@ main{container-type:inline-size}
 @media(prefers-reduced-motion:reduce){.fan-data{animation:none}}
 @media print{.fan-data{animation:none}}
 .timing-inputs{display:grid;grid-template-columns:minmax(0,1fr) minmax(90px,.6fr);gap:12px;align-items:end}.timing-months{display:grid;gap:6px}.timing-months label{font-size:.72rem}
+/* Running calculation: progress, what is being checked, and a cancel action. */
+.busy-panel{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin-bottom:20px;padding:12px 16px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:.8rem;color:var(--muted)}.busy-panel progress{flex:1 1 200px;height:8px;accent-color:var(--accent)}.busy-panel span{flex:1 1 220px;font-variant-numeric:tabular-nums}
+@media print{.busy-panel{display:none}}

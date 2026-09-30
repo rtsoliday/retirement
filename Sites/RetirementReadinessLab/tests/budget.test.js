@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {baseScenario,budgetEstimate,budgetBreakdown,budgetMonthTotals,validateBudget,applyBudgetEstimate,markBudgetEdited,normalizeScenario} from '../dist/model.js';
+import {baseScenario,budgetEstimate,budgetBreakdown,budgetMonthTotals,validateBudget,validateScenario,applyBudgetEstimate,markBudgetEdited,normalizeScenario,setAnnualBaseSpending} from '../dist/model.js';
 import {runSimulation} from '../dist/engine.js';
 const month=(date,spending=4500,adjustments={})=>({month:date,checkingSavingsBills:[{monthlyAmount:spending}],creditCardBills:[],cashAndAtmWithdrawals:0,adjustments});
 test('quarter containing a $6000 tax payment adds tax exactly once per year',()=>{
@@ -56,8 +56,35 @@ test('budget edits leave the applied plan and home-sale calculation unchanged un
   const s=baseScenario();s.numberOfSimulations=1;s.accounts.pretax=10000;s.accounts.roth=0;s.accounts.cash=0;s.home.currentValue=500000;
   s.budget.monthlyBudgets=[month('2026-01')];s.budget.annualPropertyTaxes=6000;applyBudgetEstimate(s);
   const before=runSimulation(s);markBudgetEdited(s.budget);s.budget.annualPropertyTaxes=15000;s.budget.monthlyBudgets[0].checkingSavingsBills[0].monthlyAmount=6000;
-  assert.equal(s.spending.annualBaseSpending,60000);assert.equal(s.budget.appliedAnnualHomeCosts,6000);assert.equal(s.budget.estimateNeedsReview,true);
-  const after=runSimulation(s);delete before.generatedAtEpochMillis;delete after.generatedAtEpochMillis;assert.deepEqual(after,before);applyBudgetEstimate(s);assert.equal(s.spending.annualBaseSpending,87000);assert.equal(s.budget.appliedAnnualHomeCosts,15000);assert.equal(s.budget.estimateNeedsReview,false);
+  assert.equal(s.spending.annualBaseSpending,60000);assert.equal(s.home.annualTaxesAndInsurance,6000);assert.equal(s.budget.estimateNeedsReview,true);
+  const after=runSimulation(s);delete before.generatedAtEpochMillis;delete after.generatedAtEpochMillis;assert.deepEqual(after,before);applyBudgetEstimate(s);assert.equal(s.spending.annualBaseSpending,87000);assert.equal(s.home.annualTaxesAndInsurance,15000);assert.equal(s.budget.estimateNeedsReview,false);
+});
+test('older applied budgets carry their home costs into the plan input',()=>{
+  const legacy=baseScenario();delete legacy.home.annualTaxesAndInsurance;
+  Object.assign(legacy.budget,{annualPropertyTaxes:9000,annualHomeInsurance:3000,monthlyBudgets:[month('2026-01')],isAppliedToAnnualBaseSpending:true});
+  assert.equal(normalizeScenario(structuredClone(legacy)).home.annualTaxesAndInsurance,12000);
+  legacy.budget.appliedAnnualHomeCosts=7000;
+  const migrated=normalizeScenario(structuredClone(legacy));
+  assert.equal(migrated.home.annualTaxesAndInsurance,7000);assert.equal('appliedAnnualHomeCosts' in migrated.budget,false);
+  legacy.budget.isAppliedToAnnualBaseSpending=false;assert.equal(normalizeScenario(structuredClone(legacy)).home.annualTaxesAndInsurance,0);
+  // An entered amount is never replaced, and a malformed old snapshot is still rejected.
+  assert.equal(normalizeScenario({...structuredClone(legacy),home:{currentValue:0,annualTaxesAndInsurance:500}}).home.annualTaxesAndInsurance,500);
+  legacy.budget.appliedAnnualHomeCosts='7000';
+  assert.match(validateScenario(normalizeScenario(structuredClone(legacy))).join(' '),/appliedAnnualHomeCosts/);
+});
+test('the same spending gives the same result whether typed or taken from the budget',()=>{
+  // With no savings the home is sold while the owner still lives there, so the
+  // property tax and insurance inside spending stop partway through each path.
+  const s=baseScenario();Object.assign(s.household,{currentAge:65,retirementAge:65,targetEndAge:100});
+  s.accounts={pretax:0,roth:0,taxable:0,cash:0};s.rothHistory={contributionBasis:0,firstContributionYear:0,conversions:[],needsReview:false};
+  s.spending.spendingPathModel='Flat';s.home.currentValue=900000;s.socialSecurity.annualBenefitAt67=24000;s.longTermCare.enabled=false;s.numberOfSimulations=40;
+  s.budget.annualPropertyTaxes=30000;s.budget.monthlyBudgets=[month('2026-01',2500)];applyBudgetEstimate(s);
+  assert.equal(s.spending.annualBaseSpending,60000);assert.equal(s.home.annualTaxesAndInsurance,30000);
+  const typed=structuredClone(s);setAnnualBaseSpending(typed,60000);
+  const strip=r=>{delete r.generatedAtEpochMillis;return r;},applied=strip(runSimulation(s));
+  assert.deepEqual(strip(runSimulation(typed)),applied);
+  // The amount matters in this plan, so the equality above is meaningful.
+  typed.home.annualTaxesAndInsurance=0;assert.ok(runSimulation(typed).successProbability<applied.successProbability);
 });
 test('legacy budgets keep estimates and new adjustments survive JSON backup',()=>{
   const s=normalizeScenario({budget:{annualPropertyTaxes:4000,monthlyBudgets:[month('2026-01',1000)]}});assert.equal(budgetEstimate(s.budget),16000);

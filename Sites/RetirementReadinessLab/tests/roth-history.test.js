@@ -164,6 +164,19 @@ test('confirmed Rule of 55 eligibility applies before the birthday in the separa
   s.withdrawalStrategy.ruleOf55Eligible=false;const ineligible=path(s);assert.equal(ineligible.success,false);near(ineligible.failureAge,54+11/12);
 });
 
+test('a Rule of 55 declaration has no effect for a retirement before 54 and is flagged',()=>{
+  const plan=(age,months=0,declared=false)=>{
+    const s=flat(age,2);s.household.retirementAgeMonths=months;s.accounts={pretax:120000,roth:0,taxable:0,cash:0};
+    s.rothHistory={contributionBasis:0,firstContributionYear:0,conversions:[],needsReview:false};s.spending.annualBaseSpending=30000;
+    Object.assign(s.withdrawalStrategy,{applyEarlyWithdrawalPenalty:true,ruleOf55Eligible:declared});return s;
+  };
+  for(const [age,months,applies] of [[50,0,false],[53,11,false],[54,0,true],[56,0,true]]){
+    const declared=plan(age,months,true),withRule=path(declared).yearEnd.at(-1),without=path(plan(age,months)).yearEnd.at(-1);
+    if(applies)assert.ok(withRule>without+1000,`${age} years ${months} months`);else near(withRule,without);
+    assert.equal(scenarioWarnings(declared).some(note=>/Rule of 55 is not applied/.test(note)),!applies);
+  }
+});
+
 test('the modeling age limit does not move care or force a home sale before actual death',()=>{
   const s=flat(65,5);s.accounts.roth=250000;s.spending.annualBaseSpending=0;s.home.currentValue=200000;
   Object.assign(s.longTermCare,{enabled:true,annualCost:100000,averageDurationYears:3});

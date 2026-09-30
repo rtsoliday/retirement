@@ -1,4 +1,4 @@
-export const ENGINE_VERSION = '2026.09-roth-history-senior-horizon';
+export const ENGINE_VERSION = '2026.09-monthly-mortality';
 export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
 // Retained across engine revisions for repeatable scenario comparisons.
 // Android still uses 20260429.
@@ -12,6 +12,10 @@ export const GENDERS = ['Male', 'Female'];
 export const SPENDING_PATH_MODELS = ['EmpiricalAgeDecline', 'Flat'];
 
 export const retirementAge = s => s.household.retirementAge + (s.household.retirementAgeMonths ?? 0) / 12;
+// Separation must fall in or after the calendar year the person turns 55. With
+// no birthday entered, a separation at 54 can still be in that year; earlier cannot.
+const RULE_OF_55_EARLIEST_AGE = 54;
+export const ruleOf55Applies = s => s.withdrawalStrategy.ruleOf55Eligible === true && retirementAge(s) >= RULE_OF_55_EARLIEST_AGE;
 export function ageLabel(value) {
   const months = Math.round(value * 12), years = Math.floor(months / 12), extra = months % 12;
   return extra ? `${years} years ${extra} months` : String(years);
@@ -26,7 +30,7 @@ export function baseScenario() {
     spending: {annualBaseSpending: 75000, generalInflationMean: .023, generalInflationStdDev: .016, spendingPathModel: 'EmpiricalAgeDecline', lowPortfolioSpendingReduction: .10},
     budget: {annualPropertyTaxes: 0, annualHomeInsurance: 0, annualAutoInsurance: 0, monthlyBudgets: [], retirementAnnualAdjustment: 0, estimateNeedsReview: false, isAppliedToAnnualBaseSpending: false},
     mortgage: {monthlyPayment: 0, yearsLeft: 0, monthsLeft: 0, currentBalance: 0},
-    rent: {monthlyRent: 0}, home: {currentValue: 0},
+    rent: {monthlyRent: 0}, home: {currentValue: 0, annualTaxesAndInsurance: 0},
     healthcare: {preMedicareMonthlyPremium: 1250, healthcareInflationMean: .04, healthcareInflationStdDev: .018, includeMedicarePremiums: true},
     socialSecurity: {annualBenefitAt67: 30000, claimAge: 67, spouseClaimAge: 67},
     guaranteedIncome: {annualIncome: 0, startAge: 65, startAgeMonths: 0, annualIncrease: 0, survivorPercent: 1},
@@ -85,6 +89,16 @@ export function normalizeScenario(raw) {
   if(raw.rothHistory===undefined){
     result.rothHistory={contributionBasis:result.accounts.roth,firstContributionYear:result.accounts.roth>0?2021:0,conversions:[],needsReview:result.accounts.roth>0};
   }
+  // Older plans kept home costs only while a budget was applied. Carry that
+  // amount into the explicit field so their results do not change.
+  const budget=result.budget;
+  if(raw.home?.annualTaxesAndInsurance===undefined){
+    const legacy=budget.isAppliedToAnnualBaseSpending===true?(budget.appliedAnnualHomeCosts??amount(budget.annualPropertyTaxes)+amount(budget.annualHomeInsurance)):0;
+    result.home.annualTaxesAndInsurance=typeof legacy==='number'&&Number.isFinite(legacy)?legacy:0;
+  }
+  // The field replaces the old snapshot. A malformed snapshot stays so the
+  // structure check still rejects it.
+  if(typeof budget.appliedAnnualHomeCosts==='number'&&Number.isFinite(budget.appliedAnnualHomeCosts))delete budget.appliedAnnualHomeCosts;
   // Older backups used fractional pension ages and care durations. Split these
   // into years and months once; explicit month fields must already be valid.
   for (const [section, years, months] of [['guaranteedIncome','startAge','startAgeMonths'],['longTermCare','averageDurationYears','averageDurationMonths']]) {
@@ -160,8 +174,7 @@ export function validateScenario(s) {
   if (s.socialSecurity.claimAge < 62 || s.socialSecurity.claimAge > 70) errors.push('Social Security claim age must be 62–70.');
   if (h.filingStatus === 'Married' && (s.socialSecurity.spouseClaimAge < 60 || s.socialSecurity.spouseClaimAge > 70)) errors.push('Spouse claim age must be 60–70.');
   if (Object.values(a).some(v=>v<0) || sp.annualBaseSpending<0) errors.push('Balances and spending cannot be negative.');
-  const dollars=[...Object.values(a),sp.annualBaseSpending,s.mortgage.monthlyPayment,s.mortgage.currentBalance,s.rent.monthlyRent,s.home.currentValue,s.healthcare.preMedicareMonthlyPremium,s.socialSecurity.annualBenefitAt67,s.guaranteedIncome.annualIncome,s.longTermCare.annualCost];
-  if(s.budget.isAppliedToAnnualBaseSpending)dollars.push(s.budget.appliedAnnualHomeCosts??(s.budget.annualPropertyTaxes+s.budget.annualHomeInsurance));
+  const dollars=[...Object.values(a),sp.annualBaseSpending,s.mortgage.monthlyPayment,s.mortgage.currentBalance,s.rent.monthlyRent,s.home.currentValue,s.home.annualTaxesAndInsurance,s.healthcare.preMedicareMonthlyPremium,s.socialSecurity.annualBenefitAt67,s.guaranteedIncome.annualIncome,s.longTermCare.annualCost];
   if (dollars.some(v=>Math.abs(v)>MAX_DOLLAR_AMOUNT)) errors.push('Financial amounts exceed the supported dollar range.');
   const rh=s.rothHistory;
   if(rh.contributionBasis<0||rh.contributionBasis>MAX_DOLLAR_AMOUNT)errors.push('Remaining Roth contributions must be a supported amount of 0 or more. Contributions may exceed the balance after investment losses.');
@@ -177,7 +190,7 @@ export function validateScenario(s) {
   if (!Number.isSafeInteger(s.seed)) errors.push('Seed must be an integer.');
   if (![s.mortgage.yearsLeft,s.mortgage.monthsLeft].every(Number.isInteger) || s.mortgage.yearsLeft < 0 || s.mortgage.yearsLeft > 80 || s.mortgage.monthsLeft < 0 || s.mortgage.monthsLeft > 11 || s.mortgage.monthlyPayment < 0 || s.mortgage.currentBalance < 0) errors.push('Mortgage payment, balance, or term is invalid. Enter whole years and whole extra months (0–11).');
   if (s.mortgage.currentBalance > 0 && (s.mortgage.monthlyPayment <= 0 || s.mortgage.yearsLeft * 12 + s.mortgage.monthsLeft <= 0 || s.mortgage.monthlyPayment * (s.mortgage.yearsLeft * 12 + s.mortgage.monthsLeft) + .000001 < s.mortgage.currentBalance)) errors.push('Mortgage payments over the remaining term must cover the balance. Enter a positive payment and remaining term for an outstanding mortgage.');
-  if (s.rent.monthlyRent < 0 || s.home.currentValue < 0) errors.push('Housing amounts cannot be negative.');
+  if (s.rent.monthlyRent < 0 || s.home.currentValue < 0 || s.home.annualTaxesAndInsurance < 0) errors.push('Housing amounts cannot be negative.');
   if (s.healthcare.preMedicareMonthlyPremium < 0) errors.push('Healthcare premium cannot be negative.');
   if (s.socialSecurity.annualBenefitAt67 < 0) errors.push('Social Security estimate cannot be negative.');
   if (s.guaranteedIncome.annualIncome < 0 || s.guaranteedIncome.startAge < 0 || s.guaranteedIncome.annualIncrease < -.02 || s.guaranteedIncome.annualIncrease > .15 || (h.filingStatus === 'Married' && (s.guaranteedIncome.survivorPercent < 0 || s.guaranteedIncome.survivorPercent > 1))) errors.push('Guaranteed income assumptions are outside the supported range.');
@@ -274,8 +287,8 @@ function budgetDollarRangeErrors(budget,d=budgetBreakdown(budget)){
   return [...Object.values(d.totals),...Object.values(d).filter(v=>typeof v==='number')].some(v=>!supported(v))?error:[];
 }
 export function budgetEstimate(budget) { return budgetBreakdown(budget).estimate; }
+// Draft edits leave the applied spending and the plan's home costs unchanged.
 export function markBudgetEdited(budget) {
-  if(budget.isAppliedToAnnualBaseSpending&&budget.appliedAnnualHomeCosts===undefined)budget.appliedAnnualHomeCosts=amount(budget.annualPropertyTaxes)+amount(budget.annualHomeInsurance);
   budget.estimateNeedsReview=true;
 }
 export function applyBudgetEstimate(scenario) {
@@ -283,13 +296,16 @@ export function applyBudgetEstimate(scenario) {
   if(errors.length)throw new Error(errors.join(' '));
   const b=scenario.budget;
   scenario.spending.annualBaseSpending=budgetEstimate(b);
-  b.appliedAnnualHomeCosts=amount(b.annualPropertyTaxes)+amount(b.annualHomeInsurance);
+  // The estimate includes these bills, so they are the spending that stops after a home sale.
+  scenario.home.annualTaxesAndInsurance=amount(b.annualPropertyTaxes)+amount(b.annualHomeInsurance);
+  delete b.appliedAnnualHomeCosts;
   b.isAppliedToAnnualBaseSpending=true;b.estimateNeedsReview=false;
   return scenario.spending.annualBaseSpending;
 }
 
-// Manually chosen spending replaces the applied worksheet. Keep the editor,
-// comparisons and spending-target candidates on the same cash-flow assumptions.
+// Manually chosen spending replaces the applied worksheet. Home costs are a
+// separate plan input, so the same spending gives the same result however it
+// was entered, including in comparisons and spending-target candidates.
 export function setAnnualBaseSpending(scenario,amount) {
   scenario.spending.annualBaseSpending=amount;
   scenario.budget.isAppliedToAnnualBaseSpending=false;
@@ -307,6 +323,8 @@ export function scenarioWarnings(s) {
   if(!s.healthcare.includeMedicarePremiums)notes.push('Medicare premiums are excluded.');
   if(!s.longTermCare.enabled)notes.push('Long-term care risk is excluded.');
   if(s.rothHistory.needsReview)notes.push('Review Roth history: this older plan assumes its starting Roth value is remaining contributions, first funded in 2021, with no past conversions.');
+  if(s.withdrawalStrategy.ruleOf55Eligible&&!ruleOf55Applies(s))notes.push('Rule of 55 is not applied: it needs separation in or after the calendar year you turn 55, so it has no effect for a retirement age below 54.');
+  if(s.home.annualTaxesAndInsurance>s.spending.annualBaseSpending)notes.push('Property tax and home insurance exceed annual base spending. Base spending should include them; the model removes that amount after a home sale.');
   if(s.socialSecurity.annualBenefitAt67<=0)notes.push('No Social Security benefit is entered.');
   if(s.numberOfSimulations===4)notes.push('Four paths are only a preview. Use many more paths for serious comparisons and retirement decisions.');
   else if(s.numberOfSimulations<500)notes.push('Fewer than 500 paths can make comparisons unstable. Use more paths before relying on small differences.');

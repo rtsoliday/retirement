@@ -876,3 +876,69 @@ test('explicit linking retains paid-customer hints across Google sign-in and unp
   // The lookup hints also survive a sign-in redirect/reload of the page.
   const b=app(null,{identity,session,fetch});await b.linkAccounts();assert.match(requests.at(-1).options.headers['x-retirement-link-customers'],/cus_paid/);
 });
+
+test('a running calculation can be canceled without losing completed results',async()=>{
+  for(const task of ['run','runDecision','runLab']){
+    const a=app();a.state.access.tier='pro';a.current().numberOfSimulations=4;
+    const earlier=runSimulation({...a.current(),numberOfSimulations:4});a.state.results.set(a.current().id,earlier);
+    const pending=a[task]();assert.equal(a.state.busy,true);
+    assert.match(a.element('#main').innerHTML,/data-action="cancel-calculation"/);
+    await a.click('cancel-calculation');await pending;
+    assert.equal(a.state.busy,false);assert.equal(a.workers.at(-1).terminated,true);assert.match(a.state.message,/canceled/);
+    assert.equal(a.state.results.get(a.current().id),earlier);assert.doesNotMatch(a.element('#main').innerHTML,/cancel-calculation/);
+    // Nothing stays blocked: another calculation starts and finishes normally.
+    const next=a.run();a.workers.at(-1).onmessage({data:{type:'result',result:earlier}});await next;assert.equal(a.state.busy,false);
+  }
+});
+
+test('worker progress updates the running status without finishing the calculation',async()=>{
+  const a=app(),pending=a.run(),worker=a.workers[0];
+  worker.onmessage({data:{type:'progress',fraction:.5}});
+  assert.equal(a.state.busy,true);assert.equal(a.element('#busy-progress').value,.5);
+  assert.match(a.element('#busy-detail').textContent,/2 of 4 lifetimes simulated/);assert.match(a.element('#result-state').textContent,/50%/);
+  worker.onmessage({data:{type:'result',result:runSimulation(worker.data.scenario)}});await pending;
+  assert.equal(a.state.busy,false);assert.equal(a.state.progress,null);assert.equal(a.state.results.size,1);
+  const b=app();b.state.access.tier='pro';const search=b.runDecision();
+  b.workers[0].onmessage({data:{type:'progress',phase:'spending',checkedAges:3,totalAges:7,checkedAmounts:10,totalAmounts:501}});
+  assert.match(b.element('#busy-detail').textContent,/10 of up to 501 spending amounts/);assert.equal(b.element('#busy-progress').value,17/508);
+  b.workers[0].onmessage({data:{type:'result',result:{targetReadiness:.8,simulationCount:180}}});await search;assert.equal(b.state.busy,false);
+});
+
+test('a comparison that already matches the plan is reported instead of rerun',async()=>{
+  const s=model.baseScenario();Object.assign(s.withdrawalStrategy,{useCashReserveDuringDrawdowns:true,drawdownTrigger:-.01});
+  const a=app({scenarios:[s],selectedId:s.id}),pending=a.runLab();
+  for(let i=0;i<6;i++){const w=a.workers[i];assert.ok(w);w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});await Promise.resolve();}
+  await pending;assert.equal(a.workers.length,6);assert.equal(a.state.labResults.length,7);
+  const row=a.state.labResults.at(-1);assert.equal(row.label,'Use cash first in months below −1%');assert.equal(row.result,null);
+  assert.match(a.lab(),/Already matches the current plan/);assert.doesNotMatch(a.lab(),/Larger cash reserve/);
+});
+
+test('warnings and progress use the neutral notice style; completed actions use success styling',()=>{
+  const a=app();
+  for(const [message,className] of [
+    ['Subscription status is unavailable. New runs use the four-path free preview; your completed results are kept.','notice'],
+    ['Sign in again to verify your plan. Your completed results are still available.','notice'],
+    ['Planning targets require Pro because four paths are too coarse.','notice'],
+    ['Calculation canceled. Completed results are unchanged.','notice'],
+    ['Results updated for Base plan.','notice good'],
+    ['Error: Something failed.','notice error'],
+  ]){a.state.message=message;assert.match(a.dashboard(),new RegExp(`<div class="${className}" role="status">`),message);}
+});
+
+test('planning targets report the whole-year ages actually searched',()=>{
+  const a=app();a.state.access.tier='pro';
+  a.state.decision={targetReadiness:.8,simulationCount:180,earliestRetirementAge:null,safeAnnualSpending:null,safeSpendingAtSearchLimit:false,safeSpendingSearchLimit:250000,retirementAgeSearchStart:60,retirementAgeSearchEnd:67};
+  assert.match(a.lab(),/ages 60 through 67 with 180 paths per age/);assert.doesNotMatch(a.lab(),/through 70/);
+  a.state.decision={...a.state.decision,retirementAgeSearchStart:72,retirementAgeSearchEnd:70};
+  assert.match(a.lab(),/No whole-year retirement age before the maximum modeling age/);
+});
+
+test('property tax and home insurance are a Housing input that typing spending never changes',async()=>{
+  const a=app();a.state.view='setup';a.state.setupSection=3;
+  const html=a.setup();assert.match(html,/data-field="home\.annualTaxesAndInsurance" data-type="money"/);
+  assert.match(html,/data-field="rent\.monthlyRent"/);assert.match(html,/data-field="longTermCare\.annualCost"/);
+  await a.change('#main',{dataset:{field:'home.annualTaxesAndInsurance',type:'money'},value:'8000'});
+  await a.change('#main',{dataset:{field:'spending.annualBaseSpending',type:'money'},value:'70000'});
+  const saved=a.saved().scenarios[0];assert.equal(saved.home.annualTaxesAndInsurance,8000);assert.equal(saved.spending.annualBaseSpending,70000);
+  assert.match(a.reportText(a.current()),/Property tax & home insurance \/ year: \$8,000\.00/);
+});
