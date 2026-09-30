@@ -4,6 +4,7 @@ import {baseScenario,validateScenario,applyBudgetEstimate} from '../dist/model.j
 import {runOne,runSimulation} from '../dist/engine.js';
 import {ordinaryIncomeTax,taxableSocialSecurity} from '../dist/tax.js';
 import {retirementBenefitFactor} from '../dist/social-security.js';
+import {RothConversionLedger} from '../dist/roth-conversions.js';
 
 function flatPlan(age=62,years=1){
   const s=baseScenario();
@@ -18,6 +19,86 @@ function flatPlan(age=62,years=1){
 const fullLife={nextDouble:()=>.999999,normal:()=>0};
 function ending(s,rng=fullLife){assert.deepEqual(validateScenario(s),[]);return runOne(s,rng).yearEnd.at(-1);}
 const near=(actual,expected)=>assert.ok(Math.abs(actual-expected)<.01,`${actual} != ${expected}`);
+
+test('failure age records the actual month after crossing a birthday and bucket boundary',()=>{
+  const s=flatPlan(69,2);s.household.retirementAgeMonths=6;s.accounts.roth=8500;s.spending.annualBaseSpending=12000;
+  const path=runOne(s,fullLife);assert.equal(path.failureAge,842/12);assert.equal(path.success,false);
+  const result=runSimulation(s);assert.equal(result.medianFailureAge,842/12);assert.equal(result.failureAgeBuckets[0].label,'70-74');
+  assert.deepEqual(result.balanceBands.map(b=>b.age),[69.5,842/12]);assert.equal(result.balanceBands[0].median,8500);assert.equal(result.balanceBands[1].median,0);
+  assert.equal(result.notFailedByAge[0].notFailedShare,1);assert.equal(result.notFailedByAge[1].notFailedShare,0);
+});
+
+test('mortgage inputs cannot erase principal without sufficient payments',()=>{
+  for(const edit of [m=>{m.monthlyPayment=0;},m=>{m.monthlyPayment=1000;},m=>{m.yearsLeft=0;}]){
+    const s=flatPlan(65,3);Object.assign(s.mortgage,{monthlyPayment:5000,yearsLeft:1,currentBalance:50000});edit(s.mortgage);
+    assert.match(validateScenario(s).join(' '),/Mortgage payments over the remaining term/);assert.throws(()=>runSimulation(s),/Mortgage payments/);
+  }
+});
+
+test('home sales deduct amortized principal after payments before and during retirement',()=>{
+  const balance=100000,rate=.05/12,months=120,payment=balance*rate/(1-(1+rate)**-months);
+  for(const preMonths of [0,6,18]){
+    const s=flatPlan(65,4);s.household.retirementAge=65+Math.floor(preMonths/12);s.household.retirementAgeMonths=preMonths%12;
+    s.accounts.roth=300000;s.spending.annualBaseSpending=0;s.home.currentValue=200000;
+    Object.assign(s.mortgage,{monthlyPayment:payment,yearsLeft:10,currentBalance:balance});
+    // Death at 69 with two years of care: the home sells at age 67.
+    Object.assign(s.longTermCare,{enabled:true,annualCost:0,averageDurationYears:2});
+    let calls=0;const rng={nextDouble:()=>calls++<4-Math.floor(preMonths/12)? .999999:0,normal:()=>0};
+    const path=runOne(s,rng),paidMonths=24-preMonths;
+    const remaining=balance*(1+rate)**24-payment*((1+rate)**24-1)/rate;
+    const expected=300000-paidMonths*payment+(200000-remaining)*1.02**2;
+    near(path.yearEnd.at(-1),expected);
+  }
+});
+
+test('paying conversion tax from a new Roth conversion grosses up its recapture penalty',()=>{
+  const s=flatPlan(55);s.accounts={pretax:100000,roth:0,taxable:0,cash:0};s.spending.annualBaseSpending=0;
+  Object.assign(s.rothConversion,{enabled:true,marginalRateCap:.37});s.withdrawalStrategy.applyEarlyWithdrawalPenalty=true;
+  const tax=ordinaryIncomeTax(100000,'Single');
+  near(ending(s),100000-tax/.9);
+  s.withdrawalStrategy.ruleOf55Eligible=true;near(ending(s),100000-tax/.9,'Rule of 55 does not exempt Roth conversion recapture');
+  s.withdrawalStrategy.applyEarlyWithdrawalPenalty=false;near(ending(s),100000-tax);
+});
+
+test('later spending from a recent conversion also pays recapture without double-counting ordinary income',()=>{
+  const s=flatPlan(55,2);s.accounts={pretax:100000,roth:0,taxable:0,cash:0};s.spending.annualBaseSpending=6000;
+  Object.assign(s.rothConversion,{enabled:true,marginalRateCap:.37});s.withdrawalStrategy.applyEarlyWithdrawalPenalty=true;
+  const path=runOne(s,fullLife),tax=ordinaryIncomeTax(100000,'Single');
+  near(path.yearEnd[1],100000-6000/.9-tax/.9);
+  near(path.yearEnd[2],100000-12000/.9-tax/.9);
+});
+
+test('opening Roth savings and external cash can pay conversion tax without conversion recapture',()=>{
+  for(const account of ['roth','cash']){
+    const s=flatPlan(55);s.accounts={pretax:100000,roth:0,taxable:0,cash:0};s.accounts[account]=100000;s.spending.annualBaseSpending=0;
+    Object.assign(s.rothConversion,{enabled:true,marginalRateCap:.37});s.withdrawalStrategy.applyEarlyWithdrawalPenalty=true;
+    near(ending(s),100000+(account==='cash'?102000:100000)-ordinaryIncomeTax(100000,'Single'));
+  }
+});
+
+test('conversion recapture stops at age 59 and six months including fractional retirement timing',()=>{
+  const s=flatPlan(59,2);s.household.retirementAgeMonths=6;s.accounts={pretax:100000,roth:0,taxable:0,cash:0};s.spending.annualBaseSpending=0;
+  Object.assign(s.rothConversion,{enabled:true,marginalRateCap:.37});s.withdrawalStrategy.applyEarlyWithdrawalPenalty=true;
+  near(ending(s),100000-ordinaryIncomeTax(100000,'Single'));
+});
+
+test('conversion principal uses separate five-tax-year clocks and oldest-first withdrawals',()=>{
+  const ledger=new RothConversionLedger(1000);ledger.add(2000,2026);ledger.add(3000,2027);
+  assert.equal(ledger.withdrawal(4000,6000,2030),3000);
+  assert.equal(ledger.withdrawal(4000,6000,2031),1000);
+  assert.equal(ledger.withdrawal(4000,6000,2031,true),1000);
+  assert.equal(ledger.withdrawal(2000,2000,2031),2000);
+  assert.equal(ledger.withdrawal(2000,2000,2032),0);
+});
+
+test('market gains do not increase conversion principal and losses cap its available withdrawal',()=>{
+  const ledger=new RothConversionLedger();ledger.add(10000,2026);
+  assert.equal(ledger.withdrawal(11000,11000,2027),10000);
+  assert.equal(ledger.withdrawal(10000,5000,2027,true),5000);
+  assert.equal(ledger.withdrawal(5000,0,2027),0);
+  const mixed=new RothConversionLedger(1000);mixed.add(2000,2026);mixed.grow(.5);
+  assert.equal(mixed.withdrawal(1500,1500,2027),1000);
+});
 
 test('a pretax-to-Roth transition below the annual deduction stays funded',()=>{
   const s=flatPlan();s.accounts={pretax:16100,roth:14600,taxable:0,cash:0};
@@ -44,6 +125,66 @@ test('Social Security taxation uses actual annual pretax draws and pension incom
   s.guaranteedIncome.annualIncome=10000;s.spending.annualBaseSpending=80000;
   const ordinary=30000,tax=ordinaryIncomeTax(ordinary+taxableSocialSecurity(ordinary,30000,'Single'),'Single',1,1,2026);
   near(ending(s),120000-80000+40000-tax);
+});
+
+test('either spouse dying midyear retains joint tax and senior deductions until the next modeled year',()=>{
+  for(const deceased of ['primary','spouse']){
+    const s=flatPlan(65,2);
+    Object.assign(s.household,{retirementAgeMonths:6,filingStatus:'Married',spouseCurrentAge:65});
+    s.spending.annualBaseSpending=120000;
+    Object.assign(s.guaranteedIncome,{annualIncome:60000,startAge:65,survivorPercent:1});
+    let calls=0;const deathCall=deceased==='primary'?0:2;
+    const path=runOne(s,{nextDouble:()=>calls++===deathCall?0:.999999,normal:()=>0});
+    assert.equal(path.success,true);
+    // Six months of two-person spending, then six months of survivor spending.
+    const firstYear=100000+60000-60000-60000*.84-ordinaryIncomeTax(60000,'Married',1,2,2026);
+    near(path.yearEnd[1],firstYear);
+    // The final six months use Single status and just the living senior's deduction.
+    near(path.yearEnd[2],firstYear+30000-60000*.84-ordinaryIncomeTax(30000,'Single',1,1,2027));
+  }
+});
+
+test('a death on an annual boundary keeps joint status for that new modeled year',()=>{
+  const s=flatPlan(65,3);Object.assign(s.household,{filingStatus:'Married',spouseCurrentAge:65});
+  s.accounts.roth=1000000;s.spending.annualBaseSpending=120000;
+  Object.assign(s.guaranteedIncome,{annualIncome:60000,startAge:65,survivorPercent:1});
+  let calls=0;const path=runOne(s,{nextDouble:()=>calls++===0?0:.999999,normal:()=>0});
+  near(path.yearEnd[0]-path.yearEnd[1],60000+ordinaryIncomeTax(60000,'Married',1,2,2026));
+  near(path.yearEnd[1]-path.yearEnd[2],120000*.84-60000+ordinaryIncomeTax(60000,'Married',1,2,2027));
+  near(path.yearEnd[2]-path.yearEnd[3],120000*.84-60000+ordinaryIncomeTax(60000,'Single',1,1,2028));
+});
+
+test('a spouse who dies before 65 cannot acquire a senior deduction after death',()=>{
+  const s=flatPlan(63,4);
+  Object.assign(s.household,{retirementAgeMonths:6,filingStatus:'Married',spouseCurrentAge:65});
+  s.spending.annualBaseSpending=120000;
+  Object.assign(s.guaranteedIncome,{annualIncome:60000,startAge:63,survivorPercent:1});
+  let calls=0;const path=runOne(s,{nextDouble:()=>calls++===0?0:.999999,normal:()=>0});
+  near(path.yearEnd[1],100000+60000-60000-60000*.84-ordinaryIncomeTax(60000,'Married',1,1,2026));
+});
+
+test('Social Security uses joint taxation thresholds in the death year while payments change immediately',()=>{
+  const s=flatPlan(67,2);
+  Object.assign(s.household,{retirementAgeMonths:6,filingStatus:'Married',spouseCurrentAge:67});
+  s.spending.annualBaseSpending=120000;s.socialSecurity.annualBenefitAt67=30000;
+  Object.assign(s.guaranteedIncome,{annualIncome:30000,startAge:67,survivorPercent:1});
+  let calls=0;const path=runOne(s,{nextDouble:()=>calls++===0?0:.999999,normal:()=>0});
+  // Six months of worker + spousal benefits, then six months of survivor benefits.
+  const spousal=30000/retirementBenefitFactor(1959,67*12)*.5;
+  const social=30000*.5+spousal*.5+30000*.5;
+  const tax=ordinaryIncomeTax(30000+taxableSocialSecurity(30000,social,'Married'),'Married',1,2,2026);
+  near(path.yearEnd[1],100000+30000+social-60000-60000*.84-tax);
+});
+
+test('year-end Roth conversions fill the joint bracket in the death year',()=>{
+  const s=flatPlan(65,2);
+  Object.assign(s.household,{retirementAgeMonths:6,filingStatus:'Married',spouseCurrentAge:65});
+  s.accounts={pretax:1000000,roth:100000,taxable:0,cash:0};s.spending.annualBaseSpending=120000;
+  Object.assign(s.guaranteedIncome,{annualIncome:60000,startAge:65,survivorPercent:1});
+  Object.assign(s.rothConversion,{enabled:true,marginalRateCap:.12});
+  let calls=0;const path=runOne(s,{nextDouble:()=>calls++===0?0:.999999,normal:()=>0});
+  // The top of the joint 12% bracket has $11,600 liability, including spending draws.
+  near(path.yearEnd[1],1100000+60000-60000-60000*.84-11600);
 });
 
 test('early withdrawal penalty applies only to actual pretax draws',()=>{
@@ -192,7 +333,9 @@ test('Medicare retains the lookback filing status for two years after a spouse d
   const withoutMedicare=runOne(s,rng());
   const charges=withMedicare.yearEnd.map((balance,i)=>withoutMedicare.yearEnd[i]-balance);
   const basic=(202.90+38.99)*12,singleHigh=(202.90+38.99+324.60+60.40)*12;
-  for(let year=1;year<=7;year++)near(charges[year]-charges[year-1],year<=3?basic*2:year<=5?basic:singleHigh);
+  // The first death is at the start of year 4, which remains a joint tax year.
+  // Its joint filing status still applies to Medicare's lookback in year 6.
+  for(let year=1;year<=7;year++)near(charges[year]-charges[year-1],year<=3?basic*2:year<=6?basic:singleHigh);
 });
 
 test('initial Medicare estimates follow cash-first triggers and cap spending covered by cash',()=>{
@@ -220,14 +363,14 @@ test('initial Medicare estimates follow cash-first triggers and cap spending cov
 
 test('an underwater care-triggered sale pays the full mortgage instead of forgiving debt',()=>{
   const s=flatPlan(65);s.spending.annualBaseSpending=0;s.accounts={pretax:0,roth:0,taxable:0,cash:200000};
-  s.home.currentValue=100000;Object.assign(s.mortgage,{currentBalance:200000,monthlyPayment:1000,yearsLeft:10});
+  s.home.currentValue=100000;Object.assign(s.mortgage,{currentBalance:200000,monthlyPayment:2000,yearsLeft:10});
   Object.assign(s.longTermCare,{enabled:true,annualCost:0});
   near(ending(s,{nextDouble:()=>0,normal:()=>0}),102000);
 });
 
 test('an underwater sale funds its remaining payoff from pretax with ordinary tax',()=>{
   const s=flatPlan(65);s.spending.annualBaseSpending=0;s.accounts={pretax:200000,roth:0,taxable:0,cash:0};
-  s.home.currentValue=100000;Object.assign(s.mortgage,{currentBalance:200000,monthlyPayment:1000,yearsLeft:10});
+  s.home.currentValue=100000;Object.assign(s.mortgage,{currentBalance:200000,monthlyPayment:2000,yearsLeft:10});
   Object.assign(s.longTermCare,{enabled:true,annualCost:0});
   const balance=ending(s,{nextDouble:()=>0,normal:()=>0}),draw=200000-balance;
   near(draw-ordinaryIncomeTax(draw,'Single',1,1,2026),100000);
@@ -235,7 +378,7 @@ test('an underwater sale funds its remaining payoff from pretax with ordinary ta
 
 test('an unaffordable underwater sale fails even with no other care expenses',()=>{
   const s=flatPlan(65);s.accounts.roth=0;s.spending.annualBaseSpending=0;s.home.currentValue=100000;
-  Object.assign(s.mortgage,{currentBalance:200000,monthlyPayment:1000,yearsLeft:10});
+  Object.assign(s.mortgage,{currentBalance:200000,monthlyPayment:2000,yearsLeft:10});
   Object.assign(s.longTermCare,{enabled:true,annualCost:0});
   const path=runOne(s,{nextDouble:()=>0,normal:()=>0});assert.equal(path.success,false);assert.equal(path.failureAge,65);
 });

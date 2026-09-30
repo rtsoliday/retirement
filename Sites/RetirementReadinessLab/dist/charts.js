@@ -31,7 +31,7 @@ function mount(el,result,age,dialog=null){
   const min=log?bounds.min:type==='bands'?Math.min(0,...bands.map(p=>p.pessimistic)):0,max=log?bounds.max:type==='survival'?1:Math.max(1,...bands.map(p=>p.optimistic))*1.04;
   let width=0,height=0,scale=1,offsetX=0,offsetY=0,selected=start,drag=null,moved=false;
   if(type==='paths')el.querySelector('[data-point-count]').textContent=`Showing ${points.length.toLocaleString()} sampled points from ${result.provenance.simulationCount.toLocaleString()} simulated lifetimes.`;
-  slider.min=start;slider.max=end;slider.value=start;canvas.tabIndex=0;
+  slider.min=start;slider.max=end;slider.step=log?'1':'any';slider.value=start;canvas.tabIndex=0;
   const inset={left:68,right:16,top:22,bottom:44};
   const span=()=>({w:Math.max(1,width-inset.left-inset.right),h:Math.max(1,height-inset.top-inset.bottom)});
   function constrain(){const {w,h}=span();offsetX=Math.max(w*(1-scale),Math.min(0,offsetX));offsetY=Math.max(h*(1-scale),Math.min(0,offsetY));}
@@ -53,7 +53,7 @@ function mount(el,result,age,dialog=null){
     ctx.strokeStyle='#d3dde0';ctx.strokeRect(inset.left,inset.top,w,h);
     if(type==='paths'&&!points.length&&!mean.length){ctx.fillStyle='#60757d';ctx.textAlign='center';ctx.fillText('No positive balances to plot',inset.left+w/2,inset.top+h/2);}
   }
-  function inspect(a){selected=Math.max(start,Math.min(end,start+Math.round(a-start)));slider.value=selected;output.textContent=description(selected);draw();}
+  function inspect(a){const rows=type==='bands'?bands:type==='survival'?survival:[];selected=rows.length?rows.reduce((nearest,p)=>Math.abs(p.age-a)<Math.abs(nearest.age-a)?p:nearest).age:Math.max(start,Math.min(end,start+Math.round(a-start)));slider.value=selected;output.textContent=description(selected);draw();}
   slider.oninput=()=>{const next=Number(slider.value),{w}=span();const px=(next-start)/Math.max(1,end-start)*w*scale+offsetX;if(px<0||px>w)offsetX=w/2-(next-start)/Math.max(1,end-start)*w*scale;constrain();inspect(next);};
   function resize(){const rect=canvas.getBoundingClientRect();width=rect.width;height=rect.height;const ratio=window.devicePixelRatio||1;canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);ctx.setTransform(ratio,0,0,ratio,0,0);constrain();draw();}
   const observer=new ResizeObserver(resize);observer.observe(canvas);output.textContent=description(start);

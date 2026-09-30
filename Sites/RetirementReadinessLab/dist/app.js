@@ -20,7 +20,8 @@ try{
   }
 }catch{savedLoadError='Error: Saved plans could not be loaded. Your stored backup has not been changed. Export it before replacing it. Edits stay in this page until you import a valid backup or choose to replace the unreadable plans.';}
 const hasSavedScenarios=Boolean(savedScenarios);
-const state={scenarios:savedScenarios||sampleScenarios(),selectedId:saved?.selectedId||'base-plan',view:'dashboard',results:new Map(),labResults:null,decision:null,busy:false,message:savedLoadError,access:{tier:'free',maxPaths:FREE_SIMULATION_PATHS,signedIn:false,checkoutAvailable:false},auth:{configured:false,chatgptSignedIn:false,signedIn:false,linkedProviders:[],enabledProviders:{google:false}},advancedOpen:false,allocationOpen:false,setupSection:0};
+const savedSelectedId=typeof saved?.selectedId==='string'||typeof saved?.selectedId==='number'?String(saved.selectedId).trim():'';
+const state={scenarios:savedScenarios||sampleScenarios(),selectedId:savedSelectedId||'base-plan',view:'dashboard',results:new Map(),labResults:null,decision:null,busy:false,message:savedLoadError,access:{tier:'free',maxPaths:FREE_SIMULATION_PATHS,signedIn:false,checkoutAvailable:false},auth:{configured:false,chatgptSignedIn:false,signedIn:false,linkedProviders:[],enabledProviders:{google:false}},advancedOpen:false,allocationOpen:false,setupSection:0};
 if(!state.scenarios.some(s=>s.id===state.selectedId))state.selectedId=state.scenarios[0].id;
 state.hasStartedPlan=hasSavedScenarios&&(saved.hasStartedPlan??true);
 function current(){return state.scenarios.find(s=>s.id===state.selectedId)||state.scenarios[0];}
@@ -125,10 +126,10 @@ const assumptionHelp={
   'spending.generalInflationMean':'The average yearly increase assumed for general living and housing costs.',
   'socialSecurity.claimAge':'Age when the model starts your Social Security benefit. It adjusts the age-67 estimate above for this claiming age.',
   'guaranteedIncome.startAge':'Age when the pension or annuity income begins in the simulation.',
-  'mortgage.monthlyPayment':'Monthly mortgage payment added separately to living costs while the loan remains. Enter 0 if there is no mortgage.',
+  'mortgage.monthlyPayment':'Monthly principal-and-interest mortgage payment added separately to living costs while the loan remains. Enter taxes and insurance in the budget rather than including escrow here. Enter 0 if there is no mortgage.',
   'mortgage.yearsLeft':'Full years remaining on the mortgage. Add any extra months in the next field.',
   'mortgage.monthsLeft':'Extra months remaining beyond the full years above, from 0 through 11.',
-  'mortgage.currentBalance':'Estimated unpaid mortgage principal. The model uses it to calculate home-sale proceeds if savings run out.',
+  'mortgage.currentBalance':'Estimated unpaid mortgage principal. The model infers a fixed interest rate from your balance, payment, and remaining term, then deducts the remaining loan at a home sale. The payment must cover the balance over that term; use principal and interest only, with taxes and insurance entered in the budget.',
   'rent.monthlyRent':'Monthly rent added separately to living costs during retirement. Leave at 0 if you are not renting.',
   'healthcare.healthcareInflationMean':'Average yearly growth assumed for healthcare premiums and long-term care costs.',
   'longTermCare.annualCost':'Annual cost per person during a modeled long-term care episode, before future healthcare inflation.',
@@ -154,11 +155,11 @@ const assumptionHelp={
   'market.preRetirementMeanReturn':'Average annual investment return before retirement. This strongly affects the assets available at retirement.',
   'market.preRetirementStdDev':'How much pre-retirement investment returns vary around their average. Higher values widen the range of outcomes.',
   'market.stockStdDev':'How much modeled stock returns vary around their average after retirement.',
-  'rothConversion.enabled':'Moves some pre-tax savings into Roth savings at year end and pays the estimated conversion tax from the portfolio.',
+  'rothConversion.enabled':'Moves some pre-tax savings into Roth savings at year end and pays the estimated conversion tax from the portfolio. With early-withdrawal penalties enabled, withdrawals of newly converted principal before age 59½ can incur a 10% penalty for five modeled tax years, including money used to pay conversion tax.',
   'rothConversion.marginalRateCap':'The highest federal income tax bracket the model fills with Roth conversions. For example, 22% fills available room through the 22% bracket; it is not a flat 22% tax on the whole conversion. Applies only when Roth conversions are on. The 37% bracket has no upper income limit, so the model may convert the entire remaining pre-tax balance.',
   'withdrawalStrategy.useCashReserveDuringDrawdowns':'Uses the cash reserve before invested accounts when the modeled monthly portfolio return falls below the trigger.',
   'withdrawalStrategy.drawdownTrigger':'The monthly portfolio return that activates cash-first withdrawals. For example, -1% means a month below -1%.',
-  'withdrawalStrategy.applyEarlyWithdrawalPenalty':'Adds a modeled 10% penalty to applicable early retirement-account withdrawals before age 59½, subject to the Rule of 55 setting.',
+  'withdrawalStrategy.applyEarlyWithdrawalPenalty':'Adds a modeled 10% penalty to applicable withdrawals before age 59½. Rule of 55 can exempt pre-tax withdrawals in this model, but not distributions of recent Roth conversions. Opening Roth savings are assumed available without a penalty.',
   'withdrawalStrategy.ruleOf55Eligible':'In this model, removes that early withdrawal penalty when retirement age is at least 55. Verify your actual eligibility separately.',
   'withdrawalStrategy.seppEligible':'Models a series of pre-tax distributions using the app’s life-expectancy formula. Verify the actual 72(t) rules before relying on it.',
   'numberOfSimulations':'Number of simulated lifetimes. More paths make the readiness estimate steadier but take longer to run.',
@@ -241,6 +242,7 @@ function billingView(){
     account=`<p><strong>Signed in with ${method}.</strong> Pro access follows this account.</p>`;
     if(a.ownerAccess){
       account+='<p class="form-note">Owner Pro access is active for your known ChatGPT account and verified Google account. Linking is not required.</p>';
+      if(a.billingLookupUnavailable)account+='<p class="form-note">Billing lookup is temporarily unavailable. Owner Pro remains active; Manage billing can retry the lookup.</p>';
     }else if(auth.configured&&auth.chatgptSignedIn&&auth.signedIn){
       account+='<p class="form-note">Connect these two verified sign-ins to use one subscription with either method.</p><div class="actions account-actions"><button class="secondary" data-action="social-link-accounts">I agree to link these accounts</button></div>';
     }else if(auth.configured&&auth.chatgptSignedIn){
@@ -256,7 +258,8 @@ function billingView(){
   }
   const choices=`<div class="billing-options"><div class="billing-option"><strong>$9.99 <small>/ month</small></strong>${a.checkoutAvailable&&a.signedIn?'<button class="primary" data-action="checkout" data-interval="monthly">Choose monthly</button>':''}</div><div class="billing-option"><strong>$79 <small>/ year</small></strong>${a.checkoutAvailable&&a.signedIn?'<button class="primary" data-action="checkout" data-interval="yearly">Choose yearly</button>':''}</div></div>`;
   const portalAction=a.billingPortalAvailable?'<div class="actions"><button class="secondary" data-action="billing-portal">Manage billing</button></div>':'';
-  const proActions=isPro()?`<span class="tag">${a.ownerAccess?'Owner access':'Active on this account'}</span><div class="field billing-paths"><label for="billing-path-count">Paths for the next full run</label><input id="billing-path-count" type="number" inputmode="numeric" min="4" max="${MAX_SIMULATION_PATHS}" step="1" data-field="numberOfSimulations" data-type="number" value="${escapeHTML(current().numberOfSimulations)}"></div>${portalAction}`:`${portalAction}${choices}${!a.checkoutAvailable?'<p class="form-note">Paid access is not configured yet. Stripe confirms the final price before payment.</p>':''}`;
+  const ownerTestCheckout=a.ownerAccess&&a.testBilling&&a.checkoutAvailable?`<p class="form-note">Stripe test mode: these checkouts do not charge real money. Owner Pro remains active.</p>${choices}`:'';
+  const proActions=isPro()?`<span class="tag">${a.ownerAccess?'Owner access':'Active on this account'}</span><div class="field billing-paths"><label for="billing-path-count">Paths for the next full run</label><input id="billing-path-count" type="number" inputmode="numeric" min="4" max="${MAX_SIMULATION_PATHS}" step="1" data-field="numberOfSimulations" data-type="number" value="${escapeHTML(current().numberOfSimulations)}"></div>${portalAction}${ownerTestCheckout}`:`${portalAction}${choices}${!a.checkoutAvailable?'<p class="form-note">Paid access is not configured yet. Stripe confirms the final price before payment.</p>':''}`;
   return `${pageHead('Plans & billing','Choose the number of Monte Carlo paths for your plan.')}${notice()}${card('Your account',account,'account-card')}<div class="grid two">${isPro()?'':card('Free preview',`<div class="metric-value">4 paths</div><p>A quick look at possible lifetimes. The preview uses only four simulations.</p><p>Your scenarios and calculations stay on this device.</p>`)}${card('Pro',`<div class="metric-value">${isPro()?'10,000 paths by default':'Up to 10,000 paths'}</div><p>${isPro()?'Adjust the path count for a full run or use planning targets.':'Choose a higher path count for full runs and comparisons, and use planning targets.'} Calculations still run on your device.</p>${proActions}`)}</div><p class="billing-footnote">Subscriptions renew automatically until canceled. Manage cancellation in Plans &amp; billing → Manage billing; Stripe shows the effective date. <a href="./terms.html#subscriptions">Subscription terms</a> · <a href="./support.html#refunds">Refund requests</a> · <a href="./privacy.html">Privacy</a> · <a href="./support.html">Contact support</a></p><p class="billing-footnote">Subscriptions are linked to the account used to sign in. Link accounts explicitly to share a subscription. Stripe handles payment details; this Site does not receive card numbers or your retirement scenarios. Browser-side calculation limits can be bypassed by changing local code.</p>`;
 }
 function reports(){const text=reportText(current(),result());return `${pageHead('Monte Carlo reports & backup','Export the current plan, its simulation assumptions, and its results.',`<button class="secondary" data-action="print">Print / save PDF</button>`)}${notice()}<div class="grid two">${card('Current plan report',`<div class="actions"><button class="secondary" data-action="download-report">Download text</button><button class="secondary" data-action="copy-report">Copy report</button></div><pre class="report-text">${escapeHTML(text)}</pre>`)}${card('Scenario backup',`<p>Save all plans in one JSON file or restore a previous backup.</p><div class="actions"><button class="primary" data-action="export-backup">Export JSON</button><button class="secondary" data-action="import-backup">Import JSON</button></div><p class="form-note">Imports web backups or Android scenario JSON arrays. Import replaces the plans saved in this browser, so export a backup first if you want to keep them.</p>`)}</div>`;}
@@ -424,7 +427,7 @@ async function loadAccess({force=false}={}){
     }
     if(!['free','pro'].includes(access.tier))throw new Error('Invalid subscription response');
     clearAccessGraceTimer();state.access=access;state.accessStale=false;accessConfirmedAt=Date.now();verified=true;
-    billingReference=access.billingCustomerId?{customerId:access.billingCustomerId}:{};saveBillingReference();rememberLinkCustomer(access.billingCustomerId);
+    if(!access.billingLookupUnavailable){billingReference=access.billingCustomerId?{customerId:access.billingCustomerId}:{};saveBillingReference();rememberLinkCustomer(access.billingCustomerId);}
     if(access.tier==='pro'){let changed=false;for(const scenario of state.scenarios)changed=applyProSimulationDefault(scenario)||changed;if(changed){persist(false);rerender=true;}}
     if(query.get('checkout')==='success')message=access.tier==='pro'?'Pro is active for this account.':PAYMENT_PENDING;
     else if(query.get('checkout')==='canceled')message='Checkout was canceled.';

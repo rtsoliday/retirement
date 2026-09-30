@@ -35,6 +35,45 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
 function seedExploration(a){a.state.labResults=[{label:'Old plan',result:null}];a.state.decision={targetReadiness:.8,simulationCount:180};}
 function assertCleared(a){assert.equal(a.state.labResults,null);assert.equal(a.state.decision,null);}
 
+test('repairing a missing or duplicate scenario ID preserves later IDs and the selected plan',()=>{
+  for(const repeated of [false,true]){
+    const missing=model.baseScenario(),selected=model.baseScenario();delete missing.id;
+    missing.name='Needs an ID';selected.id='plan-imported-1';selected.name='Selected plan';
+    const scenarios=repeated?[{...model.baseScenario(),id:'duplicate'}, {...missing,id:'duplicate'}, selected]:[missing,selected];
+    const a=app({scenarios,selectedId:selected.id});
+    assert.equal(a.current().name,'Selected plan');assert.equal(a.current().id,selected.id);
+    assert.equal(new Set(a.state.scenarios.map(s=>s.id)).size,scenarios.length);
+    a.persist();const restored=app(a.saved());assert.equal(restored.current().name,'Selected plan');
+  }
+});
+
+test('saved selections follow normalized numeric and trimmed scenario IDs',()=>{
+  for(const id of [7,' selected ']){
+    const selected={...model.baseScenario(),id,name:'Selected plan'};
+    const a=app({scenarios:[model.baseScenario(),selected],selectedId:id});
+    assert.equal(a.current().name,'Selected plan');assert.equal(a.state.selectedId,String(id).trim());
+  }
+});
+
+test('owner billing shows existing portal access and explicitly labeled sandbox checkout',()=>{
+  const a=app();
+  a.state.access={tier:'pro',signedIn:true,ownerAccess:true,billingPortalAvailable:true,checkoutAvailable:true,testBilling:true};
+  let html=a.billingView();
+  assert.match(html,/data-action="billing-portal"/);assert.match(html,/data-action="checkout"/);assert.match(html,/do not charge real money/);
+  a.state.access.testBilling=false;html=a.billingView();
+  assert.match(html,/data-action="billing-portal"/);assert.doesNotMatch(html,/data-action="checkout"/);
+  a.state.access.ownerAccess=false;a.state.access.testBilling=true;
+  assert.doesNotMatch(a.billingView(),/data-action="checkout"/);
+});
+
+test('owner billing outages retain customer lookup hints and complimentary Pro',async()=>{
+  const session=new Map([['retirement-billing-reference',JSON.stringify({customerId:'cus_owner'})]]);
+  const a=app(null,{session,fetch:async()=>Response.json({tier:'pro',signedIn:true,ownerAccess:true,accountKey:'owner',billingPortalAvailable:true,billingLookupUnavailable:true,checkoutAvailable:false})});
+  await a.loadAccess();
+  assert.equal(a.isPro(),true);assert.equal(JSON.parse(session.get('retirement-billing-reference')).customerId,'cus_owner');
+  assert.match(a.billingView(),/Billing lookup is temporarily unavailable/);assert.match(a.billingView(),/data-action="billing-portal"/);
+});
+
 test('malformed backup structures cannot replace saved scenarios',async()=>{
   const edits=[s=>s.budget.monthlyBudgets={},s=>s.budget.monthlyBudgets=null,s=>s.budget.monthlyBudgets=[null],s=>s.budget.monthlyBudgets=[{month:'2026-01',checkingSavingsBills:{}}],s=>s.budget.monthlyBudgets=[{month:'2026-01',creditCardBills:[null]}],s=>s.budget.monthlyBudgets=[{month:'2026-01',creditCardBills:[{monthlyAmount:'100'}]}],s=>s.budget.monthlyBudgets=[{month:'2026-01',adjustments:[]}]];
   for(const edit of edits){

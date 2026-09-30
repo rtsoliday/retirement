@@ -1,5 +1,5 @@
 import vm from 'node:vm';
-import {readFileSync} from 'node:fs';
+import {readFileSync,existsSync} from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker, { analyticsQuery, normalizeDaily, utcWindow } from '../worker/index.js';
@@ -22,6 +22,22 @@ test('admin route redirects anonymous visitors and rejects other signed-in users
   assert.equal(await allowed.text(), '__ADMIN_HTML__');
   assert.equal(allowed.headers.get('cache-control'), 'no-store');
   assert.equal((await worker.fetch(request('/admin', 'site-scoped-owner-id', ' RTSOLIDAY@gmail.com '), { ASSETS: assets })).status, 200);
+});
+
+test('admin assets and planner links resolve to existing files from every supported route',async()=>{
+  const html=readFileSync(new URL('../dist/admin.html',import.meta.url),'utf8');
+  const localLinks=[...html.matchAll(/(?:href|src)="([/.][^"]+)"/g)].map(match=>match[1]);
+  assert.ok(localLinks.includes('/admin.js'));
+  assert.ok(localLinks.includes('/admin.css'));
+  assert.ok(localLinks.includes('/index.html'));
+  for(const route of ['/admin','/admin/','/admin.html']){
+    const response=await worker.fetch(request(route,owner),{ASSETS:assets});
+    assert.equal(response.status,200);
+    for(const link of localLinks){
+      const url=new URL(link,request(route,owner).url);
+      assert.ok(existsSync(new URL('../dist'+url.pathname,import.meta.url)),`${route}: missing ${url.pathname}`);
+    }
+  }
 });
 
 test('analytics API fails closed and never calls Cloudflare for unauthorized visitors', async () => {

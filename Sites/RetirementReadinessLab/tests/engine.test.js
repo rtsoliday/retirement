@@ -11,22 +11,33 @@ const REFERENCE_SEED=20260429;
 function referenceScenario(){const s=baseScenario();Object.assign(s.household,{currentAge:50,spouseCurrentAge:50});return s;}
 
 // Seeded web cashflow snapshots; starting balances retain the Android references.
-// Corrected tax timing, Medicare estimates and lookback filing status change endings.
+// Corrected tax timing, death-year joint treatment, Medicare estimates and lookback filing status change endings.
 // Independent annual accounting cases are in cashflow-regression.test.js.
 // The web results now report failed endings as zero instead of the raw negative shortfall.
 const cases=[
   ['base',s=>{},1,8824327.086129352,2576022.7361081364,null],
   ['zero',s=>{Object.assign(s.household,{currentAge:65,retirementAge:65,targetEndAge:67});Object.assign(s.accounts,{pretax:0,roth:0,taxable:0,cash:100000});Object.assign(s.spending,{annualBaseSpending:12000,generalInflationMean:0,generalInflationStdDev:0});Object.assign(s.healthcare,{preMedicareMonthlyPremium:0,healthcareInflationMean:0,healthcareInflationStdDev:0,includeMedicarePremiums:false});s.socialSecurity.annualBenefitAt67=0;Object.assign(s.market,{preRetirementMeanReturn:0,preRetirementStdDev:0,stockMeanReturn:0,stockStdDev:0,bondMeanReturn:0,bondStdDev:0});s.longTermCare.enabled=false;},1,79973.35589502829,100000,null],
-  ['married',s=>Object.assign(s.household,{filingStatus:'Married',spouseCurrentAge:55}),1,1204666.8008202799,2576022.7361081364,null],
+  ['married',s=>Object.assign(s.household,{filingStatus:'Married',spouseCurrentAge:55}),1,1289628.2640126306,2576022.7361081364,null],
   ['early',s=>{s.household.retirementAge=55;s.withdrawalStrategy.applyEarlyWithdrawalPenalty=true;},1,1387594.4694501134,1309702.0532638722,null],
   ['roth',s=>{s.rothConversion.enabled=true;},1,8761885.136671377,2576022.7361081364,null],
-  ['home',s=>{Object.assign(s.accounts,{pretax:100000,roth:0,cash:0});s.home.currentValue=500000;},0,-2341.10536489225,278445.629460946,80],
-  ['fifty paths',s=>{s.numberOfSimulations=50;},.98,24464017.210152686,6074093.048540814,78]
+  ['home',s=>{Object.assign(s.accounts,{pretax:100000,roth:0,cash:0});s.home.currentValue=500000;},0,-2341.10536489225,278445.629460946,961/12],
+  // The two middle endings are 24355833.01249265 and 24464017.210152686;
+  // the two middle starting balances are 5380044.310699925 and 6074093.048540814.
+  ['fifty paths',s=>{s.numberOfSimulations=50;},.98,24409925.111322667,5727068.679620369,947/12]
 ];
 for(const [name,edit,success,ending,starting,failure] of cases){test(`Seeded web regression: ${name}`,()=>{const s=referenceScenario();s.seed=REFERENCE_SEED;s.numberOfSimulations=1;edit(s);const r=runSimulation(s);assert.equal(r.successProbability,success);assert.ok(Math.abs(r.medianEndingBalance-Math.max(0,ending))<.01,`${r.medianEndingBalance} != ${ending}`);assert.ok(Math.abs(r.balanceBands[0].median-starting)<.01);assert.equal(r.medianFailureAge,failure);});}
 
 test('budget estimate uses fixed costs and monthly spending',()=>{const b=baseScenario().budget;b.annualPropertyTaxes=4000;b.annualHomeInsurance=2000;b.monthlyBudgets=[{month:'2026-01',checkingSavingsBills:[{monthlyAmount:1000}],creditCardBills:[{monthlyAmount:500}],cashAndAtmWithdrawals:100}];assert.equal(budgetEstimate(b),25200);});
 test('invalid retirement age is rejected before simulation',()=>{const s=baseScenario();s.household.retirementAge=49;assert.match(validateScenario(s).join(' '),/Retirement age/);});
+test('mortgage terms require whole years and whole extra months',()=>{
+  for(const key of ['yearsLeft','monthsLeft'])for(const value of [.5,1.1]){
+    const s=baseScenario();s.mortgage[key]=value;
+    assert.match(validateScenario(s).join(' '),/Mortgage.*whole years.*whole extra months/);
+    assert.throws(()=>runSimulation(s),/Mortgage/);
+  }
+  const s=baseScenario();s.mortgage.yearsLeft=1;s.mortgage.monthsLeft=11;
+  assert.deepEqual(validateScenario(s),[]);
+});
 test('tax and benefit reference rules',()=>{assert.equal(taxableSocialSecurity(10000,30000,'Single'),0);assert.equal(ordinaryIncomeTax(16100,'Single',1,0,2026),0);assert.ok(Math.abs(annualBenefitAtClaimAge(30000,67)-30000)<.001);});
 
 // Android forces the early-withdrawal penalty on for early ages; the web search keeps the plan's setting.
@@ -70,6 +81,14 @@ test('imported scenarios need known choices, matching value types and distinct I
 });
 
 test('Android and legacy JSON scenarios can be imported',()=>{const android=normalizeScenario({id:'android',household:{currentAge:60,retirementAge:65},accounts:{pretax:120000,roth:0,taxable:0,cash:0},spending:{annualBaseSpending:50000},socialSecurity:{annualBenefitAt67:30000}});assert.equal(android.accounts.pretax,120000);assert.equal(android.accounts.roth,0);const legacy=normalizeScenario({id:'legacy',currentAge:50,retirementAge:67,annualSpending:75000,pretaxBalance:800000,rothBalance:100000,cashBalance:50000,socialSecurityAt67:30000});assert.equal(legacy.spending.annualBaseSpending,75000);assert.equal(legacy.accounts.cash,50000);});
+
+test('generated scenario IDs never displace an existing normalized ID',()=>{
+  const input=[{}, {id:'plan-imported-1'}, {id:'duplicate'}, {id:'duplicate'}, {id:' plan-imported-4 '}, {id:7}];
+  const plans=normalizeScenarios(input);
+  assert.deepEqual(plans.map(s=>s.id),['plan-imported-2','plan-imported-1','duplicate','plan-imported-5','plan-imported-4','7']);
+  assert.equal(new Set(plans.map(s=>s.id)).size,input.length);
+  assert.deepEqual(normalizeScenarios(plans),plans);
+});
 
 test('single households do not require dormant spouse settings',()=>{const s=baseScenario();s.household.spouseCurrentAge=-1;s.socialSecurity.spouseClaimAge=99;s.guaranteedIncome.survivorPercent=2;assert.deepEqual(validateScenario(s),[]);s.household.filingStatus='Married';const errors=validateScenario(s).join(' ');assert.match(errors,/Spouse age/);assert.match(errors,/Spouse claim age/);assert.match(errors,/Guaranteed income/);});
 

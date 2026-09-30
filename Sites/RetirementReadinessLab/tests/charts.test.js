@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {buildPathPoints,pathBounds,valueToFraction,fractionToValue} from '../dist/chart-data.js';
 import {baseScenario} from '../dist/model.js';
 import {runSimulation} from '../dist/engine.js';
+import {mountCharts,disposeCharts} from '../dist/charts.js';
 
 test('Android scatter classification uses whole-run outcome and strict separation at each age',()=>{
   const paths=[{success:true,chart:[100,200,300]},{success:false,chart:[100,50,0]},{success:true,chart:[80,40,-1]}];
@@ -36,4 +37,41 @@ test('scatter output does not change simulation results and mean uses observed p
   assert.ok(a.pathPoints.some(p=>!p.successfulPath));assert.ok(a.pathPoints.every(p=>p.balance>0));
   for(const m of a.meanPath){const points=a.pathPoints.filter(p=>p.yearsInRetirement===m.yearsInRetirement);assert.ok(Math.abs(m.balance-points.reduce((sum,p)=>sum+p.balance,0)/points.length)<.001);}
   delete a.generatedAtEpochMillis;delete b.generatedAtEpochMillis;delete a.pathPoints;delete b.pathPoints;assert.deepEqual(a,b);
+});
+
+test('balance chart inspection can reach a failure between annual observations',()=>{
+  const original=globalThis.ResizeObserver;
+  globalThis.ResizeObserver=class{observe(){}disconnect(){}};
+  try{
+    const ctx=new Proxy({},{get:(target,key)=>target[key]??(()=>{})});
+    const canvas={getContext:()=>ctx,setAttribute(){},getAttribute:()=>'',getBoundingClientRect:()=>({width:600,height:300,left:0,top:0})};
+    const slider={},output={textContent:''},caption={textContent:''};
+    const el={dataset:{plot:'bands'},querySelector:selector=>selector==='canvas'?canvas:selector==='input[type=range]'?slider:selector==='output'?output:caption};
+    const root={querySelectorAll:selector=>selector==='[data-plot]'?[el]:[]};
+    const result={provenance:{simulationCount:4},balanceBands:[{age:829/12,median:8500,pessimistic:8500,optimistic:8500,pathCount:4},{age:69.75,median:0,pessimistic:0,optimistic:0,pathCount:4}]};
+    mountCharts(root,result,829/12);assert.equal(slider.step,'any');
+    slider.value=69.72;slider.oninput();assert.equal(slider.value,69.75);assert.match(output.textContent,/69 years 9 months.*Median \$0/);
+    slider.value=829/12;slider.oninput();assert.match(output.textContent,/69 years 1 months.*Median \$8,500/);
+  }finally{disposeCharts();globalThis.ResizeObserver=original;}
+});
+
+test('funding chart inspection reaches monthly failures and final death endpoints',()=>{
+  const original=globalThis.ResizeObserver;
+  globalThis.ResizeObserver=class{observe(){}disconnect(){}};
+  try{
+    const ctx=new Proxy({},{get:(target,key)=>target[key]??(()=>{})});
+    const canvas={getContext:()=>ctx,setAttribute(){},getAttribute:()=>'',getBoundingClientRect:()=>({width:600,height:300,left:0,top:0})};
+    const slider={},output={textContent:''},caption={textContent:''};
+    const el={dataset:{plot:'survival'},querySelector:selector=>selector==='canvas'?canvas:selector==='input[type=range]'?slider:selector==='output'?output:caption};
+    const root={querySelectorAll:selector=>selector==='[data-plot]'?[el]:[]};
+    const result={provenance:{simulationCount:4},notFailedByAge:[
+      {age:65,notFailedShare:1,aliveShare:1},
+      {age:791/12,notFailedShare:0,aliveShare:1},
+      {age:66,notFailedShare:0,aliveShare:0}
+    ]};
+    mountCharts(root,result,65);assert.equal(slider.step,'any');assert.equal(slider.max,66);
+    slider.value=791/12;slider.oninput();
+    assert.match(output.textContent,/65 years 11 months.*Still funded 0 of 4.*Still alive 4 of 4/);
+    slider.value=66;slider.oninput();assert.match(output.textContent,/Still funded 0 of 4.*Still alive 0 of 4/);
+  }finally{disposeCharts();globalThis.ResizeObserver=original;}
 });

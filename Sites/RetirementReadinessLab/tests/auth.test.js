@@ -56,6 +56,7 @@ function stripeFixture(initial = []) {
       const customer=customers.get(path.split('/').at(-1));
       return Response.json(customer||{}, {status:customer?200:404});
     }
+    if (path === '/v1/checkout/sessions' && init.method === 'GET') return Response.json({data:[],has_more:false});
     if (path === '/v1/checkout/sessions' && init.method === 'POST') return Response.json({ url: 'https://checkout.stripe.com/c/pay/example' });
     if (path === '/v1/billing_portal/sessions' && init.method === 'POST') return Response.json({ url: 'https://billing.stripe.com/p/session/example' });
     return Response.json({}, { status: 404 });
@@ -89,14 +90,14 @@ test('only the signed, verified owner Google identity receives complimentary Pro
   const owner = await (await worker.fetch(request('/api/billing/status', { bearer: ownerToken }), fixture.env)).json();
   assert.equal(owner.tier, 'pro'); assert.equal(owner.maxPaths, 10000);
   assert.equal(owner.ownerAccess, true); assert.equal(owner.checkoutAvailable, false);
-  assert.equal(fixture.writes.length, 0);
+  assert.equal(fixture.writes.filter(call=>call.method==='POST').length, 0);
   const ownerByUid = await (await worker.fetch(request('/api/billing/status', { bearer: await token({ sub: 'xYPnJEpGrHfTJmBtFUnXlAQSdzU2' }) }), fixture.env)).json();
   assert.equal(ownerByUid.tier, 'pro'); assert.equal(ownerByUid.ownerAccess, true);
   const testMode = await (await worker.fetch(request('/api/billing/status', { bearer: ownerToken }), { ...fixture.env, STRIPE_SECRET_KEY: 'rk_test_fake' })).json();
   assert.equal(testMode.tier, 'pro');
   const checkout = await worker.fetch(request('/api/billing/checkout', { bearer: ownerToken, method: 'POST', body: { interval: 'monthly' } }), fixture.env);
   assert.equal(checkout.status, 409);
-  assert.equal(fixture.writes.length, 0);
+  assert.equal(fixture.writes.filter(call=>call.method==='POST').length, 0);
   const otherGoogle = await (await worker.fetch(request('/api/billing/status', { user: '028696a7-7846-4822-a4c1-67026aa2383f', bearer: await token({ email: 'other@example.com', email_verified: true }) }), fixture.env)).json();
   assert.equal(otherGoogle.tier, 'free');
   for (const claims of [
@@ -106,6 +107,17 @@ test('only the signed, verified owner Google identity receives complimentary Pro
     const visitor = await (await worker.fetch(request('/api/billing/status', { bearer: await token(claims) }), fixture.env)).json();
     assert.equal(visitor.tier, 'free'); assert.equal(visitor.maxPaths, 4);
   }
+});
+
+test('verified Google owner can use sandbox Checkout but other Google identities cannot borrow ChatGPT owner access',async()=>{
+  const fixture=stripeFixture([{id:'cus_owner',metadata:{retirement_firebase_uid:'xYPnJEpGrHfTJmBtFUnXlAQSdzU2'}}]);
+  const env={...fixture.env,STRIPE_SECRET_KEY:'rk_test_fake',STRIPE_PRO_MONTHLY_PRICE_ID:'price_test_monthly',STRIPE_PRO_YEARLY_PRICE_ID:'price_test_yearly'};
+  const bearer=await token({sub:'xYPnJEpGrHfTJmBtFUnXlAQSdzU2'});
+  const access=await (await worker.fetch(request('/api/billing/status',{bearer}),env)).json();
+  assert.equal(access.tier,'pro');assert.equal(access.checkoutAvailable,true);assert.equal(access.testBilling,true);
+  assert.equal((await worker.fetch(request('/api/billing/checkout',{bearer,method:'POST',body:{interval:'monthly'}}),env)).status,200);
+  assert.equal(fixture.writes.find(call=>call.path==='/v1/checkout/sessions' && call.method==='POST').values.get('line_items[0][price]'),'price_test_monthly');
+  assert.equal((await worker.fetch(request('/api/billing/checkout',{user:'028696a7-7846-4822-a4c1-67026aa2383f',bearer:await token(),method:'POST',body:{interval:'monthly'}}),env)).status,403);
 });
 
 test('forged, expired, wrong-project and unsupported tokens never fall back to ChatGPT', async () => {
@@ -223,6 +235,28 @@ test('linking rejects hidden paid-customer conflicts before modifying any metada
   }
 });
 
+test('linking rejects paid-customer conflicts found on later subscription pages',async()=>{
+  const fixture=stripeFixture([
+    {id:'cus_paid1',metadata:{retirement_site_user_id:'chatgpt-user'},paid:true},
+    {id:'cus_paid2',metadata:{retirement_firebase_uid:'firebase-user'},paid:true}
+  ]);
+  const upstream=fixture.env.STRIPE_FETCH;
+  let laterPages=0;
+  fixture.env.STRIPE_FETCH=async(url,init)=>{
+    const parsed=new URL(url);
+    if(parsed.pathname==='/v1/subscriptions'&&parsed.searchParams.get('customer')==='cus_paid2'){
+      if(!parsed.searchParams.has('starting_after'))return Response.json({data:[{id:'sub_old',status:'canceled'}],has_more:true});
+      assert.equal(parsed.searchParams.get('starting_after'),'sub_old');laterPages++;
+    }
+    return upstream(url,init);
+  };
+  const before=JSON.stringify([...fixture.customers.values()]);
+  const response=await worker.fetch(request('/api/billing/link',{user:'chatgpt-user',bearer:await token(),method:'POST'}),fixture.env);
+  assert.equal(response.status,409);assert.equal(laterPages,1);
+  assert.equal(JSON.stringify([...fixture.customers.values()]),before);
+  assert.equal(fixture.writes.some(w=>w.method==='POST'),false);
+});
+
 test('linked customer reference restores either sign-in without waiting for search updates',async()=>{
   for(const paid of ['chatgpt','firebase']){
     const fixture=stripeFixture([
@@ -245,7 +279,7 @@ test('Firebase checkout uses its verified UID, without borrowing ChatGPT entitle
   const fixture = stripeFixture();
   const response = await worker.fetch(request('/api/billing/checkout', { bearer: await token(), method: 'POST', body: { interval: 'yearly' } }), fixture.env);
   assert.equal(response.status, 200);
-  const checkout = fixture.writes.find(w => w.path === '/v1/checkout/sessions');
+  const checkout = fixture.writes.find(w => w.path === '/v1/checkout/sessions' && w.method === 'POST');
   assert.equal(checkout.values.get('client_reference_id'), 'firebase:firebase-user');
   assert.equal(checkout.values.get('line_items[0][price]'), 'price_yearly');
   assert.equal(fixture.customers.get('cus_1').metadata.retirement_firebase_uid, 'firebase-user');

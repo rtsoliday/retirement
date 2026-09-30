@@ -1,4 +1,4 @@
-export const ENGINE_VERSION = '2026.09-monthly-timing';
+export const ENGINE_VERSION = '2026.09-medians-survival-endpoints';
 export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
 // Chosen so each sample plan's four-path preview includes at least one shortfall.
 // Android still uses 20260429.
@@ -95,11 +95,13 @@ export function normalizeScenario(raw) {
 
 // Scenario IDs key selection, deletion and results, so each must be a distinct string.
 export function normalizeScenarios(list) {
-  const used = new Set();
-  return list.map((raw, i) => {
-    const s = normalizeScenario(raw);
-    let id = typeof raw?.id === 'string' || typeof raw?.id === 'number' ? String(raw.id).trim() : '';
-    if (!id || used.has(id)) { let n = i + 1; do id = `plan-imported-${n++}`; while (used.has(id)); }
+  const scenarios=list.map(normalizeScenario);
+  const ids=list.map(raw=>typeof raw.id==='string'||typeof raw.id==='number'?String(raw.id).trim():'');
+  // A generated ID must not take a later plan's valid ID and redirect selection.
+  const reserved=new Set(ids.filter(Boolean)),used=new Set();
+  return scenarios.map((s, i) => {
+    let id=ids[i];
+    if (!id || used.has(id)) { let n = i + 1; do id = `plan-imported-${n++}`; while (reserved.has(id)||used.has(id)); }
     used.add(id); s.id = id;
     return s;
   });
@@ -147,7 +149,8 @@ export function validateScenario(s) {
   if (s.healthcare.healthcareInflationMean < 0 || s.healthcare.healthcareInflationMean > .2 || s.healthcare.healthcareInflationStdDev < 0 || s.healthcare.healthcareInflationStdDev > .3) errors.push('Healthcare inflation assumptions are outside the supported range.');
   if (s.numberOfSimulations < 1 || s.numberOfSimulations > MAX_SIMULATION_PATHS || !Number.isInteger(s.numberOfSimulations)) errors.push('Simulation count must be between 1 and 10,000.');
   if (!Number.isSafeInteger(s.seed)) errors.push('Seed must be an integer.');
-  if (s.mortgage.yearsLeft < 0 || s.mortgage.yearsLeft > 80 || s.mortgage.monthsLeft < 0 || s.mortgage.monthsLeft > 11 || s.mortgage.monthlyPayment < 0 || s.mortgage.currentBalance < 0) errors.push('Mortgage payment, balance, or term is invalid.');
+  if (![s.mortgage.yearsLeft,s.mortgage.monthsLeft].every(Number.isInteger) || s.mortgage.yearsLeft < 0 || s.mortgage.yearsLeft > 80 || s.mortgage.monthsLeft < 0 || s.mortgage.monthsLeft > 11 || s.mortgage.monthlyPayment < 0 || s.mortgage.currentBalance < 0) errors.push('Mortgage payment, balance, or term is invalid. Enter whole years and whole extra months (0–11).');
+  if (s.mortgage.currentBalance > 0 && (s.mortgage.monthlyPayment <= 0 || s.mortgage.yearsLeft * 12 + s.mortgage.monthsLeft <= 0 || s.mortgage.monthlyPayment * (s.mortgage.yearsLeft * 12 + s.mortgage.monthsLeft) + .000001 < s.mortgage.currentBalance)) errors.push('Mortgage payments over the remaining term must cover the balance. Enter a positive payment and remaining term for an outstanding mortgage.');
   if (s.rent.monthlyRent < 0 || s.home.currentValue < 0) errors.push('Housing amounts cannot be negative.');
   if (s.healthcare.preMedicareMonthlyPremium < 0) errors.push('Healthcare premium cannot be negative.');
   if (s.socialSecurity.annualBenefitAt67 < 0) errors.push('Social Security estimate cannot be negative.');
