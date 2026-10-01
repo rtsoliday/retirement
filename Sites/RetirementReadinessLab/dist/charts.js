@@ -25,7 +25,7 @@ export function mountCharts(root,result,retirementAge){
 function mount(el,result,age,dialog=null){
   const type=el.dataset.plot,canvas=el.querySelector('canvas'),ctx=canvas.getContext('2d'),slider=el.querySelector('input[type=range]'),output=el.querySelector('output');
   const preview=isPreviewResult(result),count=result.provenance.simulationCount;
-  if(preview){el.querySelector('.chart-caption').textContent+=' Sample preview only: four lifetimes cannot estimate retirement readiness.';canvas.setAttribute('aria-label',canvas.getAttribute('aria-label')+' Sample preview only: four lifetimes.');}
+  if(preview){el.querySelector('.chart-caption').textContent+=` Sample preview only: ${count} lifetimes cannot estimate retirement readiness.`;canvas.setAttribute('aria-label',canvas.getAttribute('aria-label')+` Sample preview only: ${count} lifetimes.`);}
   const survival=result.notFailedByAge||[],bands=result.balanceBands||[],points=result.pathPoints||[],mean=result.meanPath||[],bounds=pathBounds(points,mean),log=type==='paths';
   const start=age,end=type==='survival'?(survival.at(-1)?.age??age):type==='bands'?(bands.at(-1)?.age??age):age+bounds.maxYear;
   const ageSpan=end>start?end-start:1;

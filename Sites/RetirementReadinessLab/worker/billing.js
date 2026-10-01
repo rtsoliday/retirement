@@ -1,7 +1,7 @@
 // Stripe grants subscriber access; verified owner identities have complimentary Pro access.
 // Financial scenarios never reach this Worker.
 import { chatgptPrincipal, firebasePrincipal, principal as requestPrincipal, IdentityKeysUnavailableError, OWNER_CHATGPT_USER_ID, OWNER_GOOGLE_EMAIL, OWNER_FIREBASE_UID } from './auth.js';
-const FREE_PATHS = 4;
+const FREE_PATHS = 10;
 const PRO_PATHS = 10000;
 const ACTIVE_STATUSES = new Set(['active', 'trialing']);
 class BillingConflict extends Error {}

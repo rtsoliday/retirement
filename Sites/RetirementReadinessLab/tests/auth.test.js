@@ -145,7 +145,7 @@ test('only the signed, verified owner Google identity receives complimentary Pro
     { email: 'other@example.com', email_verified: true },
   ]) {
     const visitor = await (await worker.fetch(request('/api/billing/status', { bearer: await token(claims) }), fixture.env)).json();
-    assert.equal(visitor.tier, 'free'); assert.equal(visitor.maxPaths, 4);
+    assert.equal(visitor.tier, 'free'); assert.equal(visitor.maxPaths, 10);
   }
 });
 

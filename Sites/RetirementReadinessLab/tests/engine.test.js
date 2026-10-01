@@ -223,12 +223,12 @@ test('Roth conversion cap accepts only supported brackets when enabled',()=>{
   s.rothConversion.enabled=false;assert.deepEqual(validateScenario(s),[]);
 });
 
-test('sample plans retain their comparison seed and use four-path previews',()=>{
+test('sample plans retain their comparison seed and use ten-path previews',()=>{
   for(const s of sampleScenarios()){
     assert.equal(s.household.currentAge,60);assert.equal(s.household.spouseCurrentAge,60);
     assert.equal(s.accounts.pretax,500000);assert.equal(s.accounts.roth,50000);
-    assert.equal(s.seed,DEFAULT_SEED);assert.equal(s.numberOfSimulations,4);
-    const r=runSimulation(s);assert.equal(r.provenance.randomSeed,DEFAULT_SEED);assert.equal(r.provenance.simulationCount,4);assert.equal(r.riskBreakdown.simulationCount,4);assert.match(r.riskBreakdown.summary,/preview only/);
+    assert.equal(s.seed,DEFAULT_SEED);assert.equal(s.numberOfSimulations,10);
+    const r=runSimulation(s);assert.equal(r.provenance.randomSeed,DEFAULT_SEED);assert.equal(r.provenance.simulationCount,10);assert.equal(r.riskBreakdown.simulationCount,10);assert.match(r.riskBreakdown.summary,/preview only/);
   }
 });
 

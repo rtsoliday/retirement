@@ -264,3 +264,20 @@ main{container-type:inline-size}
 /* Running calculation: progress, what is being checked, and a cancel action. */
 .busy-panel{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin-bottom:20px;padding:12px 16px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:.8rem;color:var(--muted)}.busy-panel progress{flex:1 1 200px;height:8px;accent-color:var(--accent)}.busy-panel span{flex:1 1 220px;font-variant-numeric:tabular-nums}
 @media print{.busy-panel{display:none}}
+/* Keep long monthly histories usable at desktop and phone widths. */
+.monthly-balances{max-height:480px;overflow:auto;border:1px solid #e0e7e1;border-radius:10px}
+.monthly-balances table{width:max-content;min-width:100%;font-variant-numeric:tabular-nums}
+.monthly-balances th,.monthly-balances td{white-space:nowrap}
+.monthly-balances thead th{position:sticky;top:0;background:#f4f7f4;z-index:2}
+.monthly-balances tbody th{position:sticky;left:0;background:#fff;z-index:1;text-transform:none;letter-spacing:0;color:#405b4c;font-size:.84rem}
+.monthly-balances thead th:first-child{left:0;z-index:3}
+.monthly-balances tbody th small{display:block;color:#68796e;font-weight:400;margin-top:4px}
+.monthly-balances td{text-align:right}
+.monthly-balances tbody tr:nth-child(even) td,.monthly-balances tbody tr:nth-child(even) th{background:#f8faf8}
+.monthly-balances:focus-visible{outline:3px solid #176b5b;outline-offset:3px}
+@media print{.monthly-balances{max-height:none;overflow:visible;border:0}.monthly-balances table{width:100%;font-size:.6rem}.monthly-balances th,.monthly-balances td{padding:5px 3px}.monthly-balances th{font-size:.6rem}.monthly-balances thead th,.monthly-balances tbody th{position:static}.monthly-balances tr{break-inside:avoid}.card:has(.monthly-balances){break-inside:auto}}
+/* Plain-language withdrawal walkthrough and the selected month's cash flows. */
+.withdrawals-page p,.withdrawal-notes{line-height:1.65}.withdrawal-settings{margin:0 0 18px}.withdrawal-settings>div{display:grid;grid-template-columns:minmax(160px,.35fr) minmax(0,1fr);gap:12px;padding:14px 0;border-bottom:1px solid var(--line)}.withdrawal-settings dt{font-weight:700}.withdrawal-settings dd{margin:0;color:var(--muted)}
+.withdrawal-steps{padding-left:26px;margin:0 0 20px}.withdrawal-steps li{padding-left:8px;margin-bottom:18px}.withdrawal-steps li::marker{color:var(--accent);font-weight:800}.withdrawal-steps p{margin:5px 0 0;color:var(--muted)}.withdrawal-order{font-size:clamp(1rem,2.5vw,1.35rem);font-weight:750;color:var(--accent)}.withdrawal-order span{padding:0 6px}.withdrawal-notes{padding-left:22px}.withdrawal-notes li{margin:12px 0}.withdrawals-page details>summary{cursor:pointer;font-weight:700}.withdrawals-page details>div.withdrawal-notes{padding:12px 0 0}
+.withdrawal-month-picker{max-width:320px;margin:20px 0}.withdrawal-example-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}.withdrawal-example-grid h3{font-size:.95rem}.withdrawal-ledger{margin:0}.withdrawal-ledger>div{display:flex;justify-content:space-between;gap:18px;padding:10px 0;border-bottom:1px solid var(--line)}.withdrawal-ledger dt{color:var(--muted)}.withdrawal-ledger dd{margin:0;text-align:right;font-weight:650;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+@container(max-width:650px){.withdrawal-settings>div,.withdrawal-example-grid{grid-template-columns:1fr}.withdrawal-settings>div{gap:5px}.withdrawal-example-grid{gap:16px}.withdrawal-ledger>div{gap:12px}}

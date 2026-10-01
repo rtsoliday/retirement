@@ -3,7 +3,9 @@ export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
 // Retained across engine revisions for repeatable scenario comparisons.
 // Android still uses 20260429.
 export const DEFAULT_SEED = 20260766;
-export const FREE_SIMULATION_PATHS = 4;
+export const FREE_SIMULATION_PATHS = 10;
+// Keep the existing Pro selection range independent of the free allowance.
+export const MIN_SIMULATION_PATHS = 4;
 export const MAX_SIMULATION_PATHS = 10000;
 export const MAX_DOLLAR_AMOUNT = Number.MAX_SAFE_INTEGER;
 export const ALLOCATION_KEYS = ['stockUnder30x', 'stock30xTo35x', 'stock35xTo40x', 'stock40xTo45x', 'stock45xTo50x', 'stock50xOrMore'];
@@ -204,7 +206,7 @@ export function normalizeScenarios(list) {
 }
 
 export function applyProSimulationDefault(s) {
-  if (s.simulationPathsCustomized || s.numberOfSimulations !== FREE_SIMULATION_PATHS) return false;
+  if (s.simulationPathsCustomized || ![MIN_SIMULATION_PATHS,FREE_SIMULATION_PATHS].includes(s.numberOfSimulations)) return false;
   s.numberOfSimulations = MAX_SIMULATION_PATHS;
   return true;
 }
@@ -408,7 +410,7 @@ export function scenarioWarnings(s) {
   if(s.household.datesNeedReview)notes.push('Dates were estimated from the saved ages. Check your birthday, retirement date, and spouse birthday in Household, then mark the dates reviewed.');
   if(s.home.annualTaxesAndInsurance>s.spending.annualBaseSpending)notes.push('Property tax and home insurance exceed annual base spending. Base spending should include them; the model removes that amount after a home sale.');
   if(s.socialSecurity.annualBenefitAt67<=0)notes.push('No Social Security benefit is entered.');
-  if(s.numberOfSimulations===4)notes.push('Four paths are only a preview. Use many more paths for serious comparisons and retirement decisions.');
+  if(s.numberOfSimulations<=FREE_SIMULATION_PATHS)notes.push('Small runs are only a preview. Use many more paths for serious comparisons and retirement decisions.');
   else if(s.numberOfSimulations<500)notes.push('Fewer than 500 paths can make comparisons unstable. Use more paths before relying on small differences.');
   return notes;
 }
