@@ -6,6 +6,7 @@ import * as model from '../dist/model.js';
 import * as format from '../dist/result-format.js';
 import * as guidance from '../dist/ux-guidance.js';
 import * as withdrawalsView from '../dist/withdrawals-view.js';
+import * as growthHelper from '../dist/growth-helper.js';
 import {runSimulation} from '../dist/engine.js';
 
 // Execute the actual app and event handlers. Only browser IO is replaced;
@@ -25,7 +26,7 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
     return elements.get(selector);
   }
   const document={activeElement:null,querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement(){return {click(){downloads.push({name:this.download,blob:downloadBlobs.get(this.href)});}};}};
-  const context=vm.createContext({...model,...format,...guidance,...withdrawalsView,structuredClone,Intl,URLSearchParams:params,Blob,URL:class extends URL{static createObjectURL(blob){const url='blob:test-'+downloadBlobs.size;downloadBlobs.set(url,blob);return url;}static revokeObjectURL(url){downloadBlobs.delete(url);}},console,Date:class extends Date{static now(){return clock.now;}},
+  const context=vm.createContext({...model,...format,...guidance,...withdrawalsView,...growthHelper,structuredClone,Intl,URLSearchParams:params,Blob,URL:class extends URL{static createObjectURL(blob){const url='blob:test-'+downloadBlobs.size;downloadBlobs.set(url,blob);return url;}static revokeObjectURL(url){downloadBlobs.delete(url);}},console,Date:class extends Date{static now(){return clock.now;}},
     location,history:{replaceState(_state,_title,url){const next=new URL(url,'https://example.test');location.search=next.search;location.hash=next.hash;}},confirm,
     setTimeout(fn,delay){const id=++nextTimer;timers.set(id,{fn,at:clock.now+delay});return id;},clearTimeout(id){timers.delete(id);},
     sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value)},socialState:()=>({...identity}),
@@ -1275,6 +1276,63 @@ test('guided setup offers household choices, progress, a skippable editor and ed
   a.state.setupSection=2;assert.match(a.setup(),/Your pension or annuity \/ year/);assert.match(a.setup(),/One stream with your start age/);assert.match(a.setup(),/Enter their own age-67 benefit/);
   await a.click('household-choice',{kind:'individual'});a.state.setupSection=0;
   assert.equal(a.current().household.filingStatus,'Single');assert.doesNotMatch(a.setup(),/<h3>Spouse<\/h3>/);
+});
+
+test('guided setup puts each person’s inputs together and keeps optional detail out of the way',async()=>{
+  const a=app();await a.click('start-plan');await a.click('household-choice',{kind:'couple'});const s=a.current();
+  let html=a.setup();assert.doesNotMatch(html,/section-picker/);assert.match(html,/class="setup-steps"/);assert.doesNotMatch(html,/Separate-person model/);
+  assert.ok(html.indexOf('household-choice')<html.indexOf('f-household-birthday'));
+  assert.ok(html.indexOf('f-household-spouseRetirementDate')<html.indexOf('f-household-spouseGender'),'Spouse dates come before their longevity table');
+  await a.click('setup-section',{index:'1'});html=a.setup();
+  const firstExtra=html.indexOf('guided-extra');
+  for(const id of ['f-accounts-pretax','f-accounts-roth','f-spouseAccounts-pretax','f-spouseAccounts-roth','f-accounts-taxable'])assert.ok(html.indexOf(id)>0&&html.indexOf(id)<firstExtra,id+' stays visible');
+  assert.ok(html.indexOf('f-spouseRothHistory-contributionBasis')>firstExtra,'Roth records are optional detail');
+  assert.ok(html.indexOf('How earnings, savings and growth fit together')<html.indexOf('Your future savings'));
+  await a.click('setup-section',{index:'2'});html=a.setup();
+  assert.ok(html.indexOf('f-spouseIncome-annualBenefitAt67')<html.indexOf('f-socialSecurity-spouseClaimAge'));
+  assert.match(html,/Working household support · only if one of you works after the other retires/);
+  s.household.spouseRetirementDate=model.addCalendarMonths(s.household.retirementDate,24);
+  assert.doesNotMatch(a.setup(),/only if one of you works after the other retires/);
+  await a.click('toggle-guided');assert.match(a.setup(),/section-picker/);
+});
+
+test('one-year statement check separates new savings, transfers and investment growth',()=>{
+  const values={start:'400000',end:'470000',yours:'18000',employer:'6000',transfersIn:'0',out:'0'};
+  const r=growthHelper.oneYearGrowth(values);
+  assert.equal(r.savings,24000);assert.equal(r.growth,46000);assert.equal(r.rate,46000/412000);
+  const moved=growthHelper.oneYearGrowth({...values,transfersIn:'50000',out:'10000'});
+  assert.equal(moved.savings,24000,'Rollovers are not new savings');assert.equal(moved.net,64000);assert.equal(moved.growth,6000);
+  assert.equal(growthHelper.oneYearGrowth({...values,out:''}).complete,false,'A missing cash flow is unknown, not zero');
+  assert.match(growthHelper.oneYearGrowth({...values,yours:'-5'}).error,/\$0 or more/);
+  const roth=growthHelper.oneYearGrowth({...values,employer:''},{employer:false});assert.equal(roth.complete,true);assert.equal(roth.savings,18000);
+  assert.equal(growthHelper.oneYearGrowth({...values,start:'0',yours:'0',employer:'0',end:'0'}).rate,null);
+});
+
+test('statement check applies only contributions, marked Estimated, and never the return',async()=>{
+  const a=app(),s=a.current(),returnBefore=s.market.preRetirementMeanReturn;a.state.setupSection=1;
+  assert.match(a.setup(),/Check last year’s statements/);assert.doesNotMatch(a.setup(),/id="growth-owner"/,'Individuals have no owner choice');
+  const type=(key,value)=>a.element('#main').listeners.input({target:{dataset:{growthHelper:key},value}});
+  for(const [key,value] of Object.entries({start:'400000',end:'470000',yours:'18000',employer:'6000',transfersIn:'50000'}))type(key,value);
+  assert.match(a.element('#growth-helper-result').innerHTML,/Enter every amount/);
+  type('out','0');const html=a.element('#growth-helper-result').innerHTML;
+  assert.match(html,/Investment growth after fees.*−\$4,000\.00/s);assert.match(html,/not applied to your plan/);
+  await a.click('apply-growth-savings');
+  assert.equal(s.contributions.pretax,18000);assert.equal(s.contributions.employerPretax,6000);assert.equal(s.market.preRetirementMeanReturn,returnBefore);
+  assert.equal(a.state.inputSources[s.id]['contributions.pretax'],'Estimated');assert.equal(a.state.inputSources[s.id]['contributions.employerPretax'],'Estimated');
+  await a.click('household-choice',{kind:'couple'});a.state.setupSection=1;assert.match(a.setup(),/id="growth-owner"/);
+  type('owner','spouseContributions');type('account','roth');await a.click('apply-growth-savings');
+  assert.equal(s.spouseContributions.roth,18000);assert.equal(s.spouseContributions.employerPretax,0,'Employer amounts apply only to pre-tax accounts');
+  assert.doesNotMatch(a.stored(),/470000/,'Statement balances are not saved with the plan');
+});
+
+test('review leads with a short summary and names each Unknown input',async()=>{
+  const a=app();await a.click('start-plan');
+  await a.change('#main',{dataset:{field:'guaranteedIncome.annualIncome',type:'money'},value:''});
+  await a.click('setup-section',{index:'5'});const html=a.setup();
+  assert.match(html,/At a glance/);assert.match(html,/Savings today/);assert.match(html,/Includes sample values/);
+  assert.match(html,/<li>Your pension or annuity \/ year · <button[^>]*data-index="2"/);
+  assert.match(html,/<details class="card review-all">/);assert.match(html,/Past Roth conversions/);
+  assert.doesNotMatch(html,/id="f-accounts-roth"/,'Review summarizes rather than embedding stray editors');
 });
 
 test('blank assumption amounts remain Unknown across saves and backups; explicit zero is a real input',async()=>{

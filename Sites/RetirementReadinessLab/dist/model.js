@@ -96,7 +96,7 @@ export function earlyWithdrawalContext(s) {
 }
 export function ageLabel(value) {
   const months = Math.round(value * 12), years = Math.floor(months / 12), extra = months % 12;
-  return extra ? `${years} years ${extra} months` : String(years);
+  return extra ? `${years} years ${extra} ${extra === 1 ? 'month' : 'months'}` : String(years);
 }
 
 export function baseScenario() {

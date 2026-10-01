@@ -292,3 +292,10 @@ main{container-type:inline-size}
 :focus-visible{outline:3px solid #9a6b10;outline-offset:3px}
 @media(max-width:600px){.result-explanations{grid-template-columns:1fr;gap:8px}.household-choice{display:grid;grid-template-columns:1fr}.input-source{flex-wrap:wrap}.assumption-summary>div{grid-template-columns:1fr}.assumption-summary dd{text-align:left}.steady-explanation{font-size:.9rem}.review-actions button{width:100%}}
 .field.checkbox{flex-wrap:wrap}.field.checkbox .field-guidance{flex:0 0 100%}.source-label{font-size:.78rem;color:#60767c}.field.checkbox .source-label{flex:0 0 100%}
+/* Guided setup uses the step list instead of the section sidebar. */
+.setup-layout.guided{display:block}
+.setup-steps{display:flex;flex-wrap:wrap;gap:2px 14px;list-style:none;margin:0;padding:0;font-size:.85rem}.setup-steps button{min-height:32px;color:#52676e;text-decoration:none}.setup-steps button[aria-current]{color:#176b5b;font-weight:700;text-decoration:underline}
+.earnings-note,.steady-explanation{margin:18px 0}.earnings-note ul,.steady-explanation ul{margin:8px 0;padding-left:20px}.earnings-note li,.steady-explanation li{margin:4px 0}.earnings-note p,.steady-explanation p{margin:6px 0}
+.form-group+.setup-notice{margin:0 0 20px}
+@media(max-width:600px){.setup-steps{flex-wrap:nowrap;overflow-x:auto;white-space:nowrap;padding-bottom:4px}}
+.notice.error ul{margin:8px 0 0;padding-left:20px}.review-all>summary{font-weight:700;cursor:pointer}.review-all[open]>summary{margin-bottom:16px}.form-group h4{margin:18px 0 8px}

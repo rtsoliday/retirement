@@ -16,12 +16,19 @@ export function normalizeInputSources(raw,scenarios,fallback='Saved value; sourc
   return result;
 }
 export function inputSource(s,sources,path){return sources[s.id]?.[path]||sources[s.id]?._origin||'Sample/default';}
-export const EARNINGS_EXPLANATION='Salary is not an input. Enter annual future savings deposits separately from balances today. They are funded by earnings outside this model, added monthly after investment growth, and stop at retirement. Investment returns grow existing investments; cash earns 2% annually. During retirement, benefits and pensions pay costs and savings cover the gap. Separate-person couples can add take-home household support while one person is still working; enter it after taxes and savings deposits to avoid double counting.';
+// The same four points appear as a list in setup and as one paragraph in review and reports.
+export const EARNINGS_POINTS=[
+  ['Salary is not an input.','Paychecks affect the plan only through the annual future savings deposits you enter (employee and employer), which stop when that person retires.'],
+  ['Investment returns grow savings.','Returns apply to today’s balances and to new deposits. Cash earns 2% a year. Deposits are not returns, and returns are not deposits.'],
+  ['In retirement, income pays first.','Social Security and pensions cover costs first; withdrawals from savings cover the rest, plus any taxes on those withdrawals.'],
+  ['Still working after a spouse retires?','Couples with separate dates can enter take-home household support (after taxes and savings deposits) for the overlap.']
+];
+export const EARNINGS_EXPLANATION=EARNINGS_POINTS.map(([lead,text])=>lead+' '+text).join(' ');
 export const FIELD_GUIDANCE={
   'household.filingStatus':'Household · Couples use Married filing status in this model. Single and Head of household model one person.',
   'household.birthday':'You · Use your date of birth, not a retirement age.',
-  'household.retirementDate':'Household · This one date starts retirement for the whole model. Separate spouse retirement dates are not supported.',
-  'household.spouseBirthday':'Spouse · Use their date of birth. Their age is calculated at the household retirement date.',
+  'household.retirementDate':'Household · In this saved shared-date plan, this one date starts retirement for both of you. Choose Use separate-person inputs to give your spouse their own date.',
+  'household.spouseBirthday':'Spouse · Use their date of birth. Their ages for benefits, healthcare and longevity follow from it.',
   'accounts.pretax':'Household total today · Add traditional 401(k), 403(b), IRA and similar pre-tax balances from statements. No separate plan-specific rules or account owners are modeled.',
   'accounts.roth':'Household total today · Roth IRA balances only, including contributions and earnings. Employer Roth 401(k) rules are not modeled.',
   'accounts.taxable':'Household total today · Brokerage investments outside retirement accounts, from account statements. Capital-gains and dividend taxes are not modeled.',
@@ -30,7 +37,7 @@ export const FIELD_GUIDANCE={
   'spending.annualBaseSpending':'Household · Annual living costs in today’s purchasing power. For $4,000 per month, enter $48,000. Include property tax and home insurance; exclude mortgage, rent and healthcare premiums entered separately. Use statements or the Budget builder.',
   'socialSecurity.annualBenefitAt67':'You · Annual benefit at age 67 in today’s purchasing power. Find your estimate at my Social Security. A $2,000 monthly estimate means $24,000 per year here.',
   'socialSecurity.claimAge':'You · The age when your own Social Security begins.',
-  'socialSecurity.spouseClaimAge':'Spouse · Spousal/survivor benefits are derived from your benefit. Your spouse’s separate earnings-based Social Security benefit is not modeled.',
+  'socialSecurity.spouseClaimAge':'Spouse · In this saved shared-date plan, spousal/survivor benefits are derived from your benefit. Choose Use separate-person inputs to enter your spouse’s own earnings-based benefit.',
   'guaranteedIncome.annualIncome':'You · Annual pension or annuity payments in today’s purchasing power, from a benefit statement. $1,500 monthly means $18,000 yearly. Enter income, not the pension’s account or lump-sum value. One stream with your start age and survivor share is modeled here. Separate-person couples have an additional spouse pension input.',
   'guaranteedIncome.startAge':'You · Age when this pension or annuity starts paying. Add extra months if needed; use the benefit statement.',
   'guaranteedIncome.annualIncrease':'Annual % · From the pension’s payment-increase terms. This rate applies from today, including before payments begin. A future quoted payment needs adjustment to today’s dollars; do not also count it as today’s amount.',
@@ -42,8 +49,8 @@ export const FIELD_GUIDANCE={
   'home.annualTaxesAndInsurance':'Household · Annual property tax and home insurance today, from bills. Also include these in base spending; this identifies the portion that stops after a home sale.',
   'healthcare.preMedicareMonthlyPremium':'Each adult · Monthly premium today from your insurance quote or bill. Added for each retired adult under 65; use 0 only if no premium applies.',
   'longTermCare.annualCost':'Each person · Annual care cost today from a care-provider estimate, modeled only when the care-risk option is on.',
-  'market.preRetirementMeanReturn':'Annual % · An investment-growth assumption, not salary or savings contributions. 5 means 5% yearly. Your statement’s balance growth may include deposits or transfers.',
-  'market.stockMeanReturn':'Annual % · Assumed stock investment return after retirement, before inflation. This is an estimate, not a promised rate.',
+  'market.preRetirementMeanReturn':'Annual % · Investment growth only, before inflation. Enter new savings under Future savings, not here. The sample 13.3% is close to the S&P 500’s average yearly return with dividends over the last 50 years, so it assumes an all-stock portfolio. Balance growth on a statement also includes deposits; use the one-year statement check to separate them.',
+  'market.stockMeanReturn':'Annual % · Average yearly stock return after retirement, before inflation and fees. The sample 13.3% (volatility 16.2%) is close to the S&P 500 with dividends over the last 50 years. Past returns are not a forecast; the full 1928–2025 average was 11.9%.',
   'market.bondMeanReturn':'Annual % · Assumed bond investment return after retirement, before inflation.',
   'spending.generalInflationMean':'Annual % · Estimated yearly price growth for living and housing costs. 2.3 means 2.3% per year.',
   'healthcare.healthcareInflationMean':'Annual % · Estimated yearly price growth for healthcare premiums and care costs.'
@@ -64,7 +71,7 @@ export const FIELD_GUIDANCE={
 };
 for(const prefix of ['contributions','spouseContributions'])for(const key of ['pretax','roth','taxable','cash','employerPretax','annualIncrease']){
   const who=prefix==='contributions'?'You':'Spouse',account={pretax:'employee pre-tax',roth:'Roth IRA',taxable:'shared taxable investment',cash:'shared cash',employerPretax:'employer pre-tax'}[key];
-  FIELD_GUIDANCE[prefix+'.'+key]=key==='annualIncrease'?who+' · Annual % increase in these deposits from today; 0 keeps the nominal amount unchanged.':`${who} · Annual ${account} deposits from payroll or savings records. $500 monthly means $6,000 yearly. Enter 0 if none; choose Unknown if not known.`;
+  FIELD_GUIDANCE[prefix+'.'+key]=key==='annualIncrease'?who+' · Annual % increase in these deposits from today; 0 keeps the nominal amount unchanged.':`${who} · Annual ${account} deposits from ${key==='roth'?'IRA contribution':'payroll or savings'} records. $500 monthly means $6,000 yearly. Enter 0 if none; choose Unknown if not known.`;
 }
 export function unknownInputPaths(s,sources){
   return Object.entries(sources[s.id]||{}).filter(([path,source])=>{

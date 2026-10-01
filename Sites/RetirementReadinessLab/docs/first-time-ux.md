@@ -101,6 +101,27 @@ Before images are live-site captures taken before source edits. After images are
 | Mobile results | [Before](ux-evidence/before-mobile-results.jpg) | [After](ux-evidence/after-mobile-results.jpg) |
 | Mobile review | No guided review step | [Editable review](ux-evidence/after-mobile-review.jpg) |
 
+## Follow-up review (October 1, 2026)
+
+An independent check of both passes reran the engine before and after the change. The pre-change (`c9fb1c5`) and current engines produce byte-identical results for all four fixture scenarios. Under Node 16 the `couple-pension` fixture hash differs for both engines alike, so that mismatch is a runtime-version artifact, not a regression. No engine defect was found.
+
+Usability problems remained in the guided flow, and these were fixed:
+
+- On a 375-pixel phone, the Individual/Couple choice sat about 1,150 pixels down the page, below three notices, the section list and help text. Guided mode now uses a compact step list instead of the sidebar. The sample-values notice now follows the household choice, and the separate-person ownership note appears only for couples on the accounts step.
+- In guided mode, your Roth IRA total was hidden inside a collapsed "Roth IRA savings" disclosure. Spouse balances also came after both savings-contribution groups, with spouse Roth records and conversions fully expanded. The accounts step is now ordered: your accounts, spouse accounts, shared balances, a collapsed Roth history for both people, living costs, the earnings explanation, then future savings.
+- The spouse's own Social Security amount now comes before their claim age, matching your section. Spouse dates come before the longevity table. Working household support is collapsed unless the two retirement dates differ.
+- The review listed about 90 rows, then ended with unlabeled, editable Roth fields. It now opens with an "At a glance" summary that shows sources and Edit links, and names each Unknown input with a link to fix it. The full grouped list sits in a disclosure, and past conversions are summarized read-only.
+- The earnings explanation is a four-point list placed beside the future-savings inputs. It warns against using total balance growth as a return assumption.
+- The steady-growth explanation leads with "An illustration, not a forecast" and lists its lifespan, return, inflation and other assumptions. It states that steady average returns often exceed the middle Monte Carlo path, and that it can show balances at ages no simulated path reached.
+- Shared-date guidance for saved plans now points to **Use separate-person inputs** instead of saying spouse dates and benefits are unsupported. Roth IRA deposit guidance no longer mentions payroll. Ages read "1 month" rather than "1 months".
+
+Still needs a product decision:
+
+- Resolved: the 13.3% sample return stays as the default. It is close to the S&P 500's simple average yearly total return over the last 50 years: 13.2% for 1976–2025 and 13.6% for 1975–2024 (Damodaran data). The field guidance and the methodology section `#sample-returns` now explain this, along with its caveats: returns are before inflation and fees, the sample assumes an all-stock portfolio, and the window is a strong period. The 2.3% sample inflation is below the 1976–2025 CPI average of about 3.6%; it is disclosed and intentionally unchanged for now.
+- Resolved: savings belong in the future-savings deposits, not in a higher pre-retirement return. The one-year statement check separates the two.
+- Open: the steady-growth illustration compounds at the entered average (13.3%), while the middle Monte Carlo path compounds at about 12.2%. Using the median rate would make the illustration less optimistic, but it changes a calculation.
+- Employer Roth 401(k) and 403(b) balances have no clear home. The Roth fields model Roth IRA ordering only.
+
 ## Changed files
 
 - `dist/app.js`: guided setup, household grouping, labels/help, editable review, provenance persistence, missing-input behavior and result explanations.

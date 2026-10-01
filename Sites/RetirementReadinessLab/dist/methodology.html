@@ -67,9 +67,24 @@
         <p>Pre-tax and Roth accounts retain each owner’s age, birth-cohort RMD, Roth history, early penalties and declared early-access choices. SEPP starts at the owner’s retirement and protects only that owner’s pre-tax balance. Default spending uses your eligible pre-tax balance, spouse pre-tax, your Roth, spouse Roth, then shared taxable and cash; the drawdown cash-first option still applies. Spouse inherited accounts become their own after the modeled death year, merging Roth basis, conversion history and the earliest funding year. This is a simplified spouse inheritance assumption, not a beneficiary election planner. Non-spouse inheritance, non-Roth after-tax basis, employer-plan RMD deferrals and employer Roth distribution rules are not modeled. See <a href="https://www.irs.gov/publications/p590b">IRS Publication 590-B</a>.</p>
         <p>Guided setup and the detailed editor use identical calculations. Input-source notes are saved locally alongside scenarios and included in web JSON backups. Unknown inputs retain their prior numerical value for editing but block simulations and comparisons until resolved. Entering 0 explicitly means none. Older plans’ sources are not inferred from their amounts; legacy dates inferred from ages are marked estimated.</p>
       </section>
+      <section class="card" id="sample-returns">
+        <h2>Why the sample plan uses 13.3%</h2>
+        <p>The sample stock and pre-retirement average return is 13.3% a year with 16.2% volatility. These are close to the S&amp;P 500’s yearly total returns, with dividends reinvested, over the last 50 years: a 13.2% simple average and 16.0% standard deviation for 1976–2025, or 13.6% and 16.3% for 1975–2024. Data: <a href="https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/histretSP.html" rel="noopener noreferrer" target="_blank">Damodaran, NYU Stern</a>.</p>
+        <p>The model treats an entered return as the simple average of yearly returns and applies the entered volatility, so a typical simulated year grows less than the average. For these sample values the middle path compounds at about 12.2% a year, close to the 11.9% the S&amp;P 500 actually compounded over that period.</p>
+        <p>Keep in mind:</p>
+        <ul>
+          <li>Returns are before inflation and fees. Consumer prices rose about 3.6% a year over 1976–2025, more than the sample’s 2.3% inflation assumption.</li>
+          <li>The sample pre-retirement return assumes an all-stock portfolio. A portfolio with bonds would usually have a lower average.</li>
+          <li>The 50-year window is one of the strongest periods in U.S. market history. The full 1928–2025 average was 11.9%, compounding at 10.0%.</li>
+          <li>Past returns do not predict future returns. Replace the sample values with your own assumptions.</li>
+        </ul>
+        <p>Enter investment growth only. New savings belong in the future-savings fields. Folding them into the return would count them twice, and it would scale them with your balance and market swings.</p>
+      </section>
       <section class="card" id="planned-balance-history">
-        <h2>Planned later: a balance-history helper</h2>
-        <p>We intend to add an optional helper using account statements over time. It is not available yet. It will distinguish deposits, withdrawals, transfers and investment returns; total balance growth will never automatically become a return assumption. Missing cash flows must remain unknown. A return estimate would be clearly identified, editable and explicitly chosen before use. Bank linking is not part of this work.</p>
+        <h2>One-year statement check</h2>
+        <p>The accounts step includes an optional check that separates last year’s savings from investment growth for one account. Enter the balance about a year ago, the balance today, your contributions, any employer contributions, other money moved in (such as rollovers) and money taken out. Each must be entered, using 0 for none, so a missing cash flow is never treated as zero.</p>
+        <p>Investment growth is today’s balance minus last year’s balance minus the net money moved in. The return estimate divides that growth by last year’s balance plus half the net money moved in, which assumes cash flows were spread evenly through the year. Reinvested dividends and fees are part of growth, not contributions.</p>
+        <p>Applying the result copies only your contributions and employer contributions into that owner’s yearly savings for the chosen account type. Rollovers and transfers are not new savings. The one-year return is shown for information only. It is never applied to the return assumption, because one year of returns is far too variable to use as a long-term average. A multi-year history, statement import and checks across accounts remain planned. Bank linking is not part of this work. The values stay in this browser tab and are not saved.</p>
       </section>
       <section class="card">
         <h2>U.S. scope and laws</h2>

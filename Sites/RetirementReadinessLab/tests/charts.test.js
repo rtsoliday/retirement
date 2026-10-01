@@ -75,7 +75,7 @@ test('balance chart inspection can reach a failure between annual observations',
     const result={provenance:{simulationCount:4},balanceBands:[{age:829/12,median:8500,pessimistic:8500,optimistic:8500,pathCount:4},{age:69.75,median:0,pessimistic:0,optimistic:0,pathCount:4}]};
     mountCharts(root,result,829/12);assert.equal(slider.step,'any');
     slider.value=69.72;slider.oninput();assert.equal(slider.value,69.75);assert.match(output.textContent,/69 years 9 months.*Median \$0/);
-    slider.value=829/12;slider.oninput();assert.match(output.textContent,/69 years 1 months.*Median \$8,500/);
+    slider.value=829/12;slider.oninput();assert.match(output.textContent,/69 years 1 month · .*Median \$8,500/);
   }finally{disposeCharts();globalThis.ResizeObserver=original;}
 });
 
