@@ -8,7 +8,7 @@ import {annualBenefitAtClaimAge} from '../dist/social-security.js';
 // Historical comparison seed; the site default seed differs.
 const REFERENCE_SEED=20260429;
 // Keep the historical Android comparison inputs independent of site defaults.
-function referenceScenario(){const s=baseScenario();Object.assign(s.household,{currentAge:50,spouseCurrentAge:50});s.accounts={pretax:800000,roth:100000,taxable:0,cash:50000};s.rothHistory.contributionBasis=100000;return s;}
+function referenceScenario(){const s=baseScenario();Object.assign(s.household,{currentAge:50,spouseCurrentAge:50});s.accounts={pretax:800000,roth:100000,taxable:0,cash:50000};s.rothHistory.contributionBasis=100000;s.withdrawalStrategy.applyEarlyWithdrawalPenalty=false;return s;}
 
 // Seeded web snapshots follow independent annual-moment, cash-flow, COLA,
 // Roth, and death-month regressions. Monthly mortality preserves the annual

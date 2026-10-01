@@ -21,6 +21,24 @@ function flatPlan(age=75,years=1){
 }
 const detail=s=>runOne(s,fullLife,{captureTaxDetails:true});
 
+test('the new default charges applicable early pretax withdrawals and preserves exemptions',()=>{
+  const s=flatPlan(55);s.accounts={pretax:100000,roth:0,taxable:0,cash:0};s.spending.annualBaseSpending=9000;
+  assert.equal(s.withdrawalStrategy.applyEarlyWithdrawalPenalty,true);
+  near(detail(s).yearEnd.at(-1),90000);
+  const noPenalty=structuredClone(s);noPenalty.withdrawalStrategy.applyEarlyWithdrawalPenalty=false;
+  near(detail(noPenalty).yearEnd.at(-1),91000);
+  const employer=structuredClone(s);employer.withdrawalStrategy.ruleOf55Eligible=true;
+  near(detail(employer).yearEnd.at(-1),91000);
+  for(const account of ['roth','taxable','cash']){
+    const exempt=structuredClone(s);exempt.accounts={pretax:0,roth:0,taxable:0,cash:0};exempt.accounts[account]=100000;
+    exempt.rothHistory.contributionBasis=account==='roth'?100000:0;
+    const without=structuredClone(exempt);without.withdrawalStrategy.applyEarlyWithdrawalPenalty=false;
+    near(detail(exempt).yearEnd.at(-1),detail(without).yearEnd.at(-1));
+  }
+  const older=flatPlan(60),without=structuredClone(older);without.withdrawalStrategy.applyEarlyWithdrawalPenalty=false;
+  near(detail(older).yearEnd.at(-1),detail(without).yearEnd.at(-1));
+});
+
 test('RMD cohorts and Uniform Lifetime factors match IRS tables',()=>{
   assert.equal(rmdStartAge(1959),73);assert.equal(rmdStartAge(1960),75);
   assert.equal(requiredMinimumDistribution(1000000,72,1953),0);

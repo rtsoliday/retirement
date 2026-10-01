@@ -34,7 +34,8 @@ test('Roth withdrawals include nonqualified earnings income tax and gross up the
 });
 
 test('turning off penalties still taxes nonqualified Roth earnings',()=>{
-  const s=flat(55),p=path(s),gross=annualGross(50000,20000);
+  const s=flat(55);s.withdrawalStrategy.applyEarlyWithdrawalPenalty=false;
+  const p=path(s),gross=annualGross(50000,20000);
   near(p.yearEnd.at(-1),100000-gross);near(p.taxYears[0].ordinaryIncome,gross-20000);
 });
 

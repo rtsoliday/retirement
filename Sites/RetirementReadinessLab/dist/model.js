@@ -78,7 +78,16 @@ export function delayRetirement(s,years) {
 // Separation must fall in or after the calendar year the person turns 55. With
 // no birthday entered, a separation at 54 can still be in that year; earlier cannot.
 const RULE_OF_55_EARLIEST_AGE = 54;
-export const ruleOf55Applies = s => s.withdrawalStrategy.ruleOf55Eligible === true && (usesCalendarDates(s)?scenarioTimeline(s).retirementYear>=scenarioTimeline(s).birthYear+55:retirementAge(s)>=RULE_OF_55_EARLIEST_AGE);
+export const ruleOf55TimingMatches = s => usesCalendarDates(s)?scenarioTimeline(s).retirementYear>=scenarioTimeline(s).birthYear+55:retirementAge(s)>=RULE_OF_55_EARLIEST_AGE;
+export const ruleOf55Applies = s => s.withdrawalStrategy.ruleOf55Eligible === true && ruleOf55TimingMatches(s);
+export function earlyWithdrawalContext(s) {
+  const t=scenarioTimeline(s);
+  return {
+    earlyRetirement:Number.isFinite(t.retirementAge)&&t.retirementAge<59.5,
+    youngerSpouse:s.household.filingStatus==='Married'&&Number.isFinite(t.spouseAtRet)&&t.spouseAtRet<59.5,
+    ruleOf55Timing:Number.isFinite(t.retirementAge)&&t.retirementAge<59.5&&ruleOf55TimingMatches(s)
+  };
+}
 export function ageLabel(value) {
   const months = Math.round(value * 12), years = Math.floor(months / 12), extra = months % 12;
   return extra ? `${years} years ${extra} months` : String(years);
@@ -100,7 +109,7 @@ export function baseScenario() {
     market: {preRetirementMeanReturn: .133, preRetirementStdDev: .162, stockMeanReturn: .133, stockStdDev: .162, bondMeanReturn: .03, bondStdDev: .06},
     postRetirementAllocation: {stockUnder30x: 1, stock30xTo35x: .9, stock35xTo40x: .8, stock40xTo45x: .7, stock45xTo50x: .6, stock50xOrMore: .5},
     rothConversion: {enabled: false, marginalRateCap: .22},
-    withdrawalStrategy: {useCashReserveDuringDrawdowns: false, drawdownTrigger: -.01, applyEarlyWithdrawalPenalty: false, ruleOf55Eligible: false, seppEligible: false},
+    withdrawalStrategy: {useCashReserveDuringDrawdowns: false, drawdownTrigger: -.01, applyEarlyWithdrawalPenalty: true, ruleOf55Eligible: false, seppEligible: false},
     longTermCare: {enabled: true, annualCost: 100000, averageDurationYears: 3, averageDurationMonths: 0},
     numberOfSimulations: FREE_SIMULATION_PATHS, simulationPathsCustomized: false, seed: DEFAULT_SEED
   };
@@ -147,6 +156,9 @@ export function normalizeScenario(raw) {
       result[key] = {...base[key], ...raw[key]};
     } else result[key] = raw[key];
   }
+  // The new default applies to new plans. An older saved/imported plan with
+  // no penalty field previously modeled none; retain that behavior too.
+  if(raw.withdrawalStrategy?.applyEarlyWithdrawalPenalty===undefined)result.withdrawalStrategy.applyEarlyWithdrawalPenalty=false;
   // Preserve old balances and assumptions, but make the missing history visible.
   // Never replace an explicitly entered basis or conversion history.
   if(raw.rothHistory===undefined){

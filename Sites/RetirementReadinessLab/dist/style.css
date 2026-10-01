@@ -260,6 +260,7 @@ main{container-type:inline-size}
 .fields.compact{grid-template-columns:repeat(3,minmax(0,1fr))}.fields.compact .field{align-content:end}
 .form-group .inset-details{margin:22px 0 0}.inset-details .inset-details{margin:0 0 16px;background:#fff}.inset-details h4{margin:0 0 14px;font-size:.83rem;color:#405b68}.inset-details .inset-details>.text-link{display:inline-block;margin-top:14px;font-size:.75rem}.advanced-settings .fields+.form-note{margin-top:18px}
 @media(max-width:680px){.fields.compact{grid-template-columns:1fr}}
+.fields.early-access-fields{grid-template-columns:1fr;gap:10px}.early-access-fields .field.checkbox{align-self:start;min-height:36px}.early-access-fields .field.checkbox label{font-size:.875rem}.early-access-guidance{margin-top:14px}.early-access-guidance:empty,.early-access-review:empty{display:none}.early-access-guidance .form-note,.early-access-review .form-note{font-size:.875rem;line-height:1.6;margin:10px 0 0}.early-access-review{padding-top:8px}
 /* Running calculation: progress, what is being checked, and a cancel action. */
 .busy-panel{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin-bottom:20px;padding:12px 16px;border:1px solid var(--line);border-radius:8px;background:#fff;font-size:.8rem;color:var(--muted)}.busy-panel progress{flex:1 1 200px;height:8px;accent-color:var(--accent)}.busy-panel span{flex:1 1 220px;font-variant-numeric:tabular-nums}
 @media print{.busy-panel{display:none}}

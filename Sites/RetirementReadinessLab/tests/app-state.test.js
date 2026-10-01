@@ -41,6 +41,79 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
 function seedExploration(a){a.state.labResults=[{label:'Old plan',result:null}];a.state.decision={targetReadiness:.8,simulationCount:180};}
 function assertCleared(a){assert.equal(a.state.labResults,null);assert.equal(a.state.decision,null);}
 
+test('new plans model early penalties while saved and imported choices retain their previous behavior',async()=>{
+  const fresh=app();fresh.state.setupSection=4;
+  assert.equal(fresh.current().withdrawalStrategy.applyEarlyWithdrawalPenalty,true);
+  assert.equal(fresh.current().withdrawalStrategy.ruleOf55Eligible,false);
+  assert.equal(fresh.current().withdrawalStrategy.seppEligible,false);
+  assert.match(fresh.setup(),/id="f-withdrawalStrategy-applyEarlyWithdrawalPenalty"[^>]* checked/);
+  assert.match(fresh.setup(),/Accessing retirement savings before 59½/);
+  assert.match(fresh.setup(),/Use a 72\(t\)\/SEPP withdrawal plan/);
+  for(const setting of [true,false,undefined]){
+    const s=model.baseScenario();Object.assign(s.withdrawalStrategy,{applyEarlyWithdrawalPenalty:setting,ruleOf55Eligible:true,seppEligible:true});
+    if(setting===undefined)delete s.withdrawalStrategy.applyEarlyWithdrawalPenalty;
+    const restored=app({scenarios:[s],selectedId:s.id}),expected=setting===true;
+    assert.equal(restored.current().withdrawalStrategy.applyEarlyWithdrawalPenalty,expected);
+    assert.equal(restored.current().withdrawalStrategy.ruleOf55Eligible,true);
+    assert.equal(restored.current().withdrawalStrategy.seppEligible,true);
+    await restored.persist();assert.equal(app(restored.saved()).current().withdrawalStrategy.applyEarlyWithdrawalPenalty,expected);
+    await fresh.change('#import-file',{files:[{text:async()=>JSON.stringify({scenarios:[s]})}],value:'plan.json'});
+    assert.equal(fresh.current().withdrawalStrategy.applyEarlyWithdrawalPenalty,expected);
+  }
+  const legacy=model.baseScenario();delete legacy.withdrawalStrategy;
+  assert.equal(model.normalizeScenario(legacy).withdrawalStrategy.applyEarlyWithdrawalPenalty,false);
+  assert.equal(model.normalizeScenario({currentAge:50,retirementAge:55}).withdrawalStrategy.applyEarlyWithdrawalPenalty,false);
+});
+
+test('Rule of 55 prompts use the separation calendar year without declaring employer-plan eligibility',()=>{
+  const year=Number(model.localCalendarDate().slice(0,4))+2;
+  const s=model.baseScenario();Object.assign(s.household,{birthday:`${year-55}-12-31`,retirementDate:`${year}-01-01`});
+  const a=app({scenarios:[s],selectedId:s.id});a.state.setupSection=4;
+  assert.equal(model.retirementAge(a.current())<55,true,'Separation can precede the 55th birthday in that year');
+  assert.match(a.setup(),/retirement date meets the Rule of 55 age requirement/);
+  assert.match(a.setup(),/IRAs do not qualify/);assert.match(a.setup(),/SEPP withdrawal plan is optional/);
+  assert.equal(a.current().withdrawalStrategy.ruleOf55Eligible,false);
+  assert.equal(a.current().withdrawalStrategy.seppEligible,false);
+  a.current().household.retirementDate=`${year-1}-12-31`;
+  assert.doesNotMatch(a.setup(),/retirement date meets the Rule of 55 age requirement/);
+  a.current().withdrawalStrategy.ruleOf55Eligible=true;
+  assert.match(a.setup(),/Rule of 55 does not apply with this retirement date/);
+  assert.equal(a.current().withdrawalStrategy.ruleOf55Eligible,true,'Changing dates must not overwrite a declaration');
+});
+
+test('date and withdrawal-choice edits refresh guidance without replacing inputs or overwriting saved choices',async()=>{
+  const s=model.baseScenario();s.withdrawalStrategy.applyEarlyWithdrawalPenalty=false;
+  const a=app({scenarios:[s],selectedId:s.id});a.state.view='setup';a.state.setupSection=0;
+  const today=model.localCalendarDate(),before=a.renders();
+  await a.change('#main',{dataset:{field:'household.birthday',type:'date'},value:model.addCalendarMonths(today,-56*12)});
+  await a.change('#main',{dataset:{field:'household.retirementDate',type:'date'},value:today});
+  assert.equal(a.current().withdrawalStrategy.applyEarlyWithdrawalPenalty,false);
+  assert.match(a.element('#early-withdrawal-review').innerHTML,/Review withdrawal choices/);
+  a.state.setupSection=4;
+  assert.match(a.setup(),/Penalty modeling is off in this plan/);
+  assert.equal(a.renders(),before,'Guidance updates must preserve unfinished editors');
+  a.state.results.set(a.current().id,{completed:true});seedExploration(a);
+  await a.change('#main',{dataset:{field:'withdrawalStrategy.applyEarlyWithdrawalPenalty',type:'checkbox'},checked:true});
+  assert.doesNotMatch(a.element('#early-withdrawal-guidance').innerHTML,/Penalty modeling is off/);
+  assert.equal(a.state.results.size,0);assertCleared(a);
+  for(const field of ['ruleOf55Eligible','seppEligible'])await a.change('#main',{dataset:{field:'withdrawalStrategy.'+field,type:'checkbox'},checked:true});
+  await a.change('#main',{dataset:{field:'household.retirementDate',type:'date'},value:model.addCalendarMonths(today,60)});
+  assert.match(a.element('#early-withdrawal-guidance').innerHTML,/will not start SEPP payments/);
+  assert.deepEqual(JSON.parse(JSON.stringify(a.current().withdrawalStrategy)),a.saved().scenarios[0].withdrawalStrategy);
+  assert.equal(a.current().withdrawalStrategy.ruleOf55Eligible,true);assert.equal(a.current().withdrawalStrategy.seppEligible,true);
+});
+
+test('younger spouse prompts and copied plans preserve explicit settings; restoring samples uses the new default',async()=>{
+  const s=model.baseScenario();Object.assign(s.household,{filingStatus:'Married',spouseCurrentAge:50});
+  s.withdrawalStrategy.applyEarlyWithdrawalPenalty=false;
+  const a=app({scenarios:[s],selectedId:s.id});a.state.setupSection=4;
+  assert.match(a.setup(),/Your spouse will be younger than 59½/);
+  assert.doesNotMatch(a.setup(),/retirement date meets the Rule of 55 age requirement/);
+  await a.click('new-scenario');assert.equal(a.current().withdrawalStrategy.applyEarlyWithdrawalPenalty,false);
+  await a.click('reset-assumptions');assert.equal(a.current().withdrawalStrategy.applyEarlyWithdrawalPenalty,true);
+  assert.equal(a.current().withdrawalStrategy.ruleOf55Eligible,false);assert.equal(a.current().withdrawalStrategy.seppEligible,false);
+});
+
 test('the first Budget month is visible without saving or treating an untouched entry as zero spending',async()=>{
   const a=app(),s=a.current();a.state.view='budget';const html=a.budget();
   const lastMonth=new Date();lastMonth.setDate(1);lastMonth.setMonth(lastMonth.getMonth()-1);
