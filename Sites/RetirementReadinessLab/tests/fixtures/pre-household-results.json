@@ -1,0 +1,474 @@
+[
+  {
+    "name": "individual",
+    "scenario": {
+      "id": "base-plan",
+      "name": "Base plan",
+      "household": {
+        "currentAge": 60,
+        "retirementAge": 67,
+        "retirementAgeMonths": 0,
+        "birthday": "1966-10-01",
+        "retirementDate": "2033-10-01",
+        "spouseBirthday": "1966-10-01",
+        "datesNeedReview": false,
+        "asOfDate": "2026-10-01",
+        "targetEndAge": 119,
+        "filingStatus": "Single",
+        "gender": "Male",
+        "spouseGender": "Female",
+        "spouseCurrentAge": 60
+      },
+      "accounts": {
+        "pretax": 500000,
+        "roth": 50000,
+        "taxable": 0,
+        "cash": 50000
+      },
+      "rothHistory": {
+        "contributionBasis": 50000,
+        "firstContributionYear": 2021,
+        "conversions": [],
+        "needsReview": false
+      },
+      "spending": {
+        "annualBaseSpending": 75000,
+        "generalInflationMean": 0.023,
+        "generalInflationStdDev": 0.016,
+        "spendingPathModel": "EmpiricalAgeDecline",
+        "lowPortfolioSpendingReduction": 0.1
+      },
+      "budget": {
+        "annualPropertyTaxes": 0,
+        "annualHomeInsurance": 0,
+        "annualAutoInsurance": 0,
+        "monthlyBudgets": [],
+        "retirementAnnualAdjustment": 0,
+        "estimateNeedsReview": false,
+        "isAppliedToAnnualBaseSpending": false
+      },
+      "mortgage": {
+        "monthlyPayment": 0,
+        "yearsLeft": 0,
+        "monthsLeft": 0,
+        "currentBalance": 0
+      },
+      "rent": {
+        "monthlyRent": 0
+      },
+      "home": {
+        "currentValue": 0,
+        "annualTaxesAndInsurance": 0
+      },
+      "healthcare": {
+        "preMedicareMonthlyPremium": 1250,
+        "healthcareInflationMean": 0.04,
+        "healthcareInflationStdDev": 0.018,
+        "includeMedicarePremiums": true
+      },
+      "socialSecurity": {
+        "annualBenefitAt67": 30000,
+        "claimAge": 67,
+        "spouseClaimAge": 67
+      },
+      "guaranteedIncome": {
+        "annualIncome": 0,
+        "startAge": 65,
+        "startAgeMonths": 0,
+        "annualIncrease": 0,
+        "survivorPercent": 1
+      },
+      "market": {
+        "preRetirementMeanReturn": 0.133,
+        "preRetirementStdDev": 0.162,
+        "stockMeanReturn": 0.133,
+        "stockStdDev": 0.162,
+        "bondMeanReturn": 0.03,
+        "bondStdDev": 0.06
+      },
+      "postRetirementAllocation": {
+        "stockUnder30x": 1,
+        "stock30xTo35x": 0.9,
+        "stock35xTo40x": 0.8,
+        "stock40xTo45x": 0.7,
+        "stock45xTo50x": 0.6,
+        "stock50xOrMore": 0.5
+      },
+      "rothConversion": {
+        "enabled": false,
+        "marginalRateCap": 0.22
+      },
+      "withdrawalStrategy": {
+        "useCashReserveDuringDrawdowns": false,
+        "drawdownTrigger": -0.01,
+        "applyEarlyWithdrawalPenalty": true,
+        "ruleOf55Eligible": false,
+        "seppEligible": false
+      },
+      "longTermCare": {
+        "enabled": true,
+        "annualCost": 100000,
+        "averageDurationYears": 3,
+        "averageDurationMonths": 0
+      },
+      "numberOfSimulations": 10,
+      "simulationPathsCustomized": false,
+      "seed": 20260766
+    },
+    "sha256": "15753b52f36b99399a2700396b57b2ef5e6bb8189139c30825f60a1770a9075c"
+  },
+  {
+    "name": "couple-pension",
+    "scenario": {
+      "id": "base-plan",
+      "name": "Base plan",
+      "household": {
+        "currentAge": 60,
+        "retirementAge": 67,
+        "retirementAgeMonths": 0,
+        "birthday": "1966-10-01",
+        "retirementDate": "2033-10-01",
+        "spouseBirthday": "1966-10-01",
+        "datesNeedReview": false,
+        "asOfDate": "2026-10-01",
+        "targetEndAge": 119,
+        "filingStatus": "Married",
+        "gender": "Male",
+        "spouseGender": "Female",
+        "spouseCurrentAge": 60
+      },
+      "accounts": {
+        "pretax": 800000,
+        "roth": 50000,
+        "taxable": 0,
+        "cash": 50000
+      },
+      "rothHistory": {
+        "contributionBasis": 50000,
+        "firstContributionYear": 2021,
+        "conversions": [],
+        "needsReview": false
+      },
+      "spending": {
+        "annualBaseSpending": 75000,
+        "generalInflationMean": 0.023,
+        "generalInflationStdDev": 0.016,
+        "spendingPathModel": "EmpiricalAgeDecline",
+        "lowPortfolioSpendingReduction": 0.1
+      },
+      "budget": {
+        "annualPropertyTaxes": 0,
+        "annualHomeInsurance": 0,
+        "annualAutoInsurance": 0,
+        "monthlyBudgets": [],
+        "retirementAnnualAdjustment": 0,
+        "estimateNeedsReview": false,
+        "isAppliedToAnnualBaseSpending": false
+      },
+      "mortgage": {
+        "monthlyPayment": 0,
+        "yearsLeft": 0,
+        "monthsLeft": 0,
+        "currentBalance": 0
+      },
+      "rent": {
+        "monthlyRent": 0
+      },
+      "home": {
+        "currentValue": 0,
+        "annualTaxesAndInsurance": 0
+      },
+      "healthcare": {
+        "preMedicareMonthlyPremium": 1250,
+        "healthcareInflationMean": 0.04,
+        "healthcareInflationStdDev": 0.018,
+        "includeMedicarePremiums": true
+      },
+      "socialSecurity": {
+        "annualBenefitAt67": 30000,
+        "claimAge": 67,
+        "spouseClaimAge": 67
+      },
+      "guaranteedIncome": {
+        "annualIncome": 24000,
+        "startAge": 65,
+        "startAgeMonths": 0,
+        "annualIncrease": 0,
+        "survivorPercent": 0.5
+      },
+      "market": {
+        "preRetirementMeanReturn": 0.133,
+        "preRetirementStdDev": 0.162,
+        "stockMeanReturn": 0.133,
+        "stockStdDev": 0.162,
+        "bondMeanReturn": 0.03,
+        "bondStdDev": 0.06
+      },
+      "postRetirementAllocation": {
+        "stockUnder30x": 1,
+        "stock30xTo35x": 0.9,
+        "stock35xTo40x": 0.8,
+        "stock40xTo45x": 0.7,
+        "stock45xTo50x": 0.6,
+        "stock50xOrMore": 0.5
+      },
+      "rothConversion": {
+        "enabled": false,
+        "marginalRateCap": 0.22
+      },
+      "withdrawalStrategy": {
+        "useCashReserveDuringDrawdowns": false,
+        "drawdownTrigger": -0.01,
+        "applyEarlyWithdrawalPenalty": true,
+        "ruleOf55Eligible": false,
+        "seppEligible": false
+      },
+      "longTermCare": {
+        "enabled": true,
+        "annualCost": 100000,
+        "averageDurationYears": 3,
+        "averageDurationMonths": 0
+      },
+      "numberOfSimulations": 10,
+      "simulationPathsCustomized": false,
+      "seed": 20260766
+    },
+    "sha256": "33844e6ba2a93c3512842ea47b933312a7a145de2ddda85507b522884f95a220"
+  },
+  {
+    "name": "depleted",
+    "scenario": {
+      "id": "base-plan",
+      "name": "Base plan",
+      "household": {
+        "currentAge": 60,
+        "retirementAge": 67,
+        "retirementAgeMonths": 0,
+        "birthday": "1966-10-01",
+        "retirementDate": "2033-10-01",
+        "spouseBirthday": "1966-10-01",
+        "datesNeedReview": false,
+        "asOfDate": "2026-10-01",
+        "targetEndAge": 119,
+        "filingStatus": "Single",
+        "gender": "Male",
+        "spouseGender": "Female",
+        "spouseCurrentAge": 60
+      },
+      "accounts": {
+        "pretax": 0,
+        "roth": 0,
+        "taxable": 0,
+        "cash": 100
+      },
+      "rothHistory": {
+        "contributionBasis": 50000,
+        "firstContributionYear": 2021,
+        "conversions": [],
+        "needsReview": false
+      },
+      "spending": {
+        "annualBaseSpending": 75000,
+        "generalInflationMean": 0.023,
+        "generalInflationStdDev": 0.016,
+        "spendingPathModel": "EmpiricalAgeDecline",
+        "lowPortfolioSpendingReduction": 0.1
+      },
+      "budget": {
+        "annualPropertyTaxes": 0,
+        "annualHomeInsurance": 0,
+        "annualAutoInsurance": 0,
+        "monthlyBudgets": [],
+        "retirementAnnualAdjustment": 0,
+        "estimateNeedsReview": false,
+        "isAppliedToAnnualBaseSpending": false
+      },
+      "mortgage": {
+        "monthlyPayment": 0,
+        "yearsLeft": 0,
+        "monthsLeft": 0,
+        "currentBalance": 0
+      },
+      "rent": {
+        "monthlyRent": 0
+      },
+      "home": {
+        "currentValue": 0,
+        "annualTaxesAndInsurance": 0
+      },
+      "healthcare": {
+        "preMedicareMonthlyPremium": 1250,
+        "healthcareInflationMean": 0.04,
+        "healthcareInflationStdDev": 0.018,
+        "includeMedicarePremiums": true
+      },
+      "socialSecurity": {
+        "annualBenefitAt67": 0,
+        "claimAge": 67,
+        "spouseClaimAge": 67
+      },
+      "guaranteedIncome": {
+        "annualIncome": 0,
+        "startAge": 65,
+        "startAgeMonths": 0,
+        "annualIncrease": 0,
+        "survivorPercent": 1
+      },
+      "market": {
+        "preRetirementMeanReturn": 0.133,
+        "preRetirementStdDev": 0.162,
+        "stockMeanReturn": 0.133,
+        "stockStdDev": 0.162,
+        "bondMeanReturn": 0.03,
+        "bondStdDev": 0.06
+      },
+      "postRetirementAllocation": {
+        "stockUnder30x": 1,
+        "stock30xTo35x": 0.9,
+        "stock35xTo40x": 0.8,
+        "stock40xTo45x": 0.7,
+        "stock45xTo50x": 0.6,
+        "stock50xOrMore": 0.5
+      },
+      "rothConversion": {
+        "enabled": false,
+        "marginalRateCap": 0.22
+      },
+      "withdrawalStrategy": {
+        "useCashReserveDuringDrawdowns": false,
+        "drawdownTrigger": -0.01,
+        "applyEarlyWithdrawalPenalty": true,
+        "ruleOf55Eligible": false,
+        "seppEligible": false
+      },
+      "longTermCare": {
+        "enabled": true,
+        "annualCost": 100000,
+        "averageDurationYears": 3,
+        "averageDurationMonths": 0
+      },
+      "numberOfSimulations": 10,
+      "simulationPathsCustomized": false,
+      "seed": 20260766
+    },
+    "sha256": "8f7052b9262ab06f0eb84957e4a0beeb867da48ea91dc6026206425d8f3dcfea"
+  },
+  {
+    "name": "zero-income",
+    "scenario": {
+      "id": "base-plan",
+      "name": "Base plan",
+      "household": {
+        "currentAge": 60,
+        "retirementAge": 67,
+        "retirementAgeMonths": 0,
+        "birthday": "1966-10-01",
+        "retirementDate": "2033-10-01",
+        "spouseBirthday": "1966-10-01",
+        "datesNeedReview": false,
+        "asOfDate": "2026-10-01",
+        "targetEndAge": 119,
+        "filingStatus": "Single",
+        "gender": "Male",
+        "spouseGender": "Female",
+        "spouseCurrentAge": 60
+      },
+      "accounts": {
+        "pretax": 500000,
+        "roth": 50000,
+        "taxable": 0,
+        "cash": 50000
+      },
+      "rothHistory": {
+        "contributionBasis": 50000,
+        "firstContributionYear": 2021,
+        "conversions": [],
+        "needsReview": false
+      },
+      "spending": {
+        "annualBaseSpending": 75000,
+        "generalInflationMean": 0.023,
+        "generalInflationStdDev": 0.016,
+        "spendingPathModel": "EmpiricalAgeDecline",
+        "lowPortfolioSpendingReduction": 0.1
+      },
+      "budget": {
+        "annualPropertyTaxes": 0,
+        "annualHomeInsurance": 0,
+        "annualAutoInsurance": 0,
+        "monthlyBudgets": [],
+        "retirementAnnualAdjustment": 0,
+        "estimateNeedsReview": false,
+        "isAppliedToAnnualBaseSpending": false
+      },
+      "mortgage": {
+        "monthlyPayment": 0,
+        "yearsLeft": 0,
+        "monthsLeft": 0,
+        "currentBalance": 0
+      },
+      "rent": {
+        "monthlyRent": 0
+      },
+      "home": {
+        "currentValue": 0,
+        "annualTaxesAndInsurance": 0
+      },
+      "healthcare": {
+        "preMedicareMonthlyPremium": 1250,
+        "healthcareInflationMean": 0.04,
+        "healthcareInflationStdDev": 0.018,
+        "includeMedicarePremiums": true
+      },
+      "socialSecurity": {
+        "annualBenefitAt67": 0,
+        "claimAge": 67,
+        "spouseClaimAge": 67
+      },
+      "guaranteedIncome": {
+        "annualIncome": 0,
+        "startAge": 65,
+        "startAgeMonths": 0,
+        "annualIncrease": 0,
+        "survivorPercent": 1
+      },
+      "market": {
+        "preRetirementMeanReturn": 0.133,
+        "preRetirementStdDev": 0.162,
+        "stockMeanReturn": 0.133,
+        "stockStdDev": 0.162,
+        "bondMeanReturn": 0.03,
+        "bondStdDev": 0.06
+      },
+      "postRetirementAllocation": {
+        "stockUnder30x": 1,
+        "stock30xTo35x": 0.9,
+        "stock35xTo40x": 0.8,
+        "stock40xTo45x": 0.7,
+        "stock45xTo50x": 0.6,
+        "stock50xOrMore": 0.5
+      },
+      "rothConversion": {
+        "enabled": false,
+        "marginalRateCap": 0.22
+      },
+      "withdrawalStrategy": {
+        "useCashReserveDuringDrawdowns": false,
+        "drawdownTrigger": -0.01,
+        "applyEarlyWithdrawalPenalty": true,
+        "ruleOf55Eligible": false,
+        "seppEligible": false
+      },
+      "longTermCare": {
+        "enabled": true,
+        "annualCost": 100000,
+        "averageDurationYears": 3,
+        "averageDurationMonths": 0
+      },
+      "numberOfSimulations": 10,
+      "simulationPathsCustomized": false,
+      "seed": 20260766
+    },
+    "sha256": "9094ed9d30de9d56b9044ca93d8908ba5efe7477f8c67647b2630778a0e205cf"
+  }
+]

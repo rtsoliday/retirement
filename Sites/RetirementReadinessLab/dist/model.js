@@ -1,4 +1,6 @@
+import {savingsDefaults,hasFutureSavings} from './savings.js';
 export const ENGINE_VERSION = '2026.09-calendar-dates';
+export const scenarioEngineVersion=s=>s.household.separatePeople?'2026.10-separate-people':hasFutureSavings(s)?'2026.10-savings-contributions':ENGINE_VERSION;
 export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
 // Retained across engine revisions for repeatable scenario comparisons.
 // Android still uses 20260429.
@@ -43,9 +45,11 @@ export function scenarioTimeline(s,today=s.household.asOfDate||localCalendarDate
     const retirementAge=h.retirementAge+(h.retirementAgeMonths??0)/12,preMonths=Math.round((retirementAge-h.currentAge)*12);
     return {currentAge:h.currentAge,retirementAge,preMonths,spouseAtRet:h.spouseCurrentAge+preMonths/12,birthYear:2026-h.currentAge,spouseBirthYear:2026-h.spouseCurrentAge,retirementYear:2026+Math.floor(preMonths/12)};
   }
-  return {currentAge:calendarMonthsBetween(h.birthday,today)/12,retirementAge:calendarMonthsBetween(h.birthday,h.retirementDate)/12,preMonths:calendarMonthsBetween(today,h.retirementDate),spouseAtRet:calendarMonthsBetween(h.spouseBirthday,h.retirementDate)/12,birthYear:calendarDate(h.birthday)?.getUTCFullYear(),spouseBirthYear:calendarDate(h.spouseBirthday)?.getUTCFullYear(),retirementYear:calendarDate(h.retirementDate)?.getUTCFullYear()};
+  const startDate=h.separatePeople&&h.filingStatus==='Married'&&calendarDate(h.spouseRetirementDate)&&h.spouseRetirementDate<h.retirementDate?h.spouseRetirementDate:h.retirementDate;
+  return {...(h.separatePeople?{startDate}:{}),currentAge:calendarMonthsBetween(h.birthday,today)/12,retirementAge:calendarMonthsBetween(h.birthday,startDate)/12,preMonths:calendarMonthsBetween(today,startDate),spouseAtRet:calendarMonthsBetween(h.spouseBirthday,startDate)/12,birthYear:calendarDate(h.birthday)?.getUTCFullYear(),spouseBirthYear:calendarDate(h.spouseBirthday)?.getUTCFullYear(),retirementYear:calendarDate(startDate)?.getUTCFullYear()};
 }
 export const retirementAge = s => scenarioTimeline(s).retirementAge;
+export const primaryRetirementAge = s => usesCalendarDates(s)?calendarMonthsBetween(s.household.birthday,s.household.retirementDate)/12:retirementAge(s);
 export function dateLabel(value) {
   const date=calendarDate(value);
   return date?new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}).format(date):'Choose a date';
@@ -70,7 +74,7 @@ export function syncCalendarAges(s) {
   const h=s.household;h.asOfDate='';
   const t=scenarioTimeline(s),spouseMonths=calendarMonthsBetween(h.spouseBirthday,localCalendarDate());
   if(Number.isFinite(t.currentAge))h.currentAge=Math.floor(t.currentAge);
-  if(Number.isFinite(t.retirementAge)){h.retirementAge=Math.floor(t.retirementAge);h.retirementAgeMonths=Math.round(t.retirementAge*12)%12;}
+  const ownAge=primaryRetirementAge(s);if(Number.isFinite(ownAge)){h.retirementAge=Math.floor(ownAge);h.retirementAgeMonths=Math.round(ownAge*12)%12;}
   if(Number.isFinite(spouseMonths))h.spouseCurrentAge=Math.floor(spouseMonths/12);
 }
 export function delayRetirement(s,years) {
@@ -80,7 +84,7 @@ export function delayRetirement(s,years) {
 // Separation must fall in or after the calendar year the person turns 55. With
 // no birthday entered, a separation at 54 can still be in that year; earlier cannot.
 const RULE_OF_55_EARLIEST_AGE = 54;
-export const ruleOf55TimingMatches = s => usesCalendarDates(s)?scenarioTimeline(s).retirementYear>=scenarioTimeline(s).birthYear+55:retirementAge(s)>=RULE_OF_55_EARLIEST_AGE;
+export const ruleOf55TimingMatches = s => usesCalendarDates(s)?calendarDate(s.household.retirementDate)?.getUTCFullYear()>=scenarioTimeline(s).birthYear+55:retirementAge(s)>=RULE_OF_55_EARLIEST_AGE;
 export const ruleOf55Applies = s => s.withdrawalStrategy.ruleOf55Eligible === true && ruleOf55TimingMatches(s);
 export function earlyWithdrawalContext(s) {
   const t=scenarioTimeline(s);
@@ -98,8 +102,14 @@ export function ageLabel(value) {
 export function baseScenario() {
   return {
     id: 'base-plan', name: 'Base plan',
-    household: {currentAge: 60, retirementAge: 67, retirementAgeMonths: 0, birthday: '', retirementDate: '', spouseBirthday: '', datesNeedReview: false, asOfDate: '', targetEndAge: 119, filingStatus: 'Single', gender: 'Male', spouseGender: 'Female', spouseCurrentAge: 60},
+    household: {currentAge: 60, retirementAge: 67, retirementAgeMonths: 0, birthday: '', retirementDate: '', spouseBirthday: '', spouseRetirementDate: '', separatePeople: false, datesNeedReview: false, asOfDate: '', targetEndAge: 119, filingStatus: 'Single', gender: 'Male', spouseGender: 'Female', spouseCurrentAge: 60},
     accounts: {pretax: 500000, roth: 50000, taxable: 0, cash: 50000},
+    contributions:savingsDefaults(), spouseContributions:savingsDefaults(),
+    spouseAccounts:{pretax:0,roth:0},
+    spouseRothHistory:{contributionBasis:0,firstContributionYear:0,conversions:[],needsReview:false},
+    spouseIncome:{annualBenefitAt67:0,annualPension:0,pensionStartAge:65,pensionStartAgeMonths:0,annualIncrease:0,survivorPercent:0},
+    workingIncome:{primaryAnnualNet:0,spouseAnnualNet:0,annualIncrease:0},
+    spouseWithdrawal:{ruleOf55Eligible:false,seppEligible:false},
     rothHistory: {contributionBasis: 50000, firstContributionYear: 2021, conversions: [], needsReview: false},
     spending: {annualBaseSpending: 75000, generalInflationMean: .023, generalInflationStdDev: .016, spendingPathModel: 'EmpiricalAgeDecline', lowPortfolioSpendingReduction: .10},
     budget: {annualPropertyTaxes: 0, annualHomeInsurance: 0, annualAutoInsurance: 0, monthlyBudgets: [], retirementAnnualAdjustment: 0, estimateNeedsReview: false, isAppliedToAnnualBaseSpending: false},
@@ -216,7 +226,7 @@ export function validateScenarioStructure(s) {
   const wrongTypes=[];
   (function compare(expected,actual,path){for(const [key,value] of Object.entries(expected)){if(value===null)continue;const next=path?`${path}.${key}`:key;if(Array.isArray(value)){if(!Array.isArray(actual?.[key]))wrongTypes.push(next);}else if(typeof value==='object'){if(actual?.[key]&&typeof actual[key]==='object'&&!Array.isArray(actual[key]))compare(value,actual[key],next);else wrongTypes.push(next);}else if(typeof actual?.[key]!==typeof value)wrongTypes.push(next);}})(TYPE_TEMPLATE,s,'');
   if (wrongTypes.length) return [`These assumptions have the wrong type: ${wrongTypes.join(', ')}.`];
-  return [...validateBudgetStructure(s.budget),...validateRothHistoryStructure(s.rothHistory)];
+  return [...validateBudgetStructure(s.budget),...validateRothHistoryStructure(s.rothHistory),...validateRothHistoryStructure(s.spouseRothHistory)];
 }
 
 export function validateRothHistoryStructure(history) {
@@ -283,6 +293,27 @@ export function validateScenario(s) {
   if (s.rothConversion.enabled && !ROTH_CONVERSION_RATES.some(x=>Math.abs(x-s.rothConversion.marginalRateCap)<.0001)) errors.push('Roth conversion cap must be 10%, 12%, 22%, 24%, 32%, 35%, or 37%.');
   if (s.longTermCare.annualCost < 0 || s.longTermCare.averageDurationYears < 1 || s.longTermCare.averageDurationYears + s.longTermCare.averageDurationMonths/12 > 10) errors.push('Long-term care cost or duration is invalid.');
   if (s.withdrawalStrategy.drawdownTrigger < -.50 || s.withdrawalStrategy.drawdownTrigger > .25) errors.push('Cash drawdown trigger is outside the supported range.');
+  for(const [name,c] of [['You',s.contributions],['Spouse',s.spouseContributions]]){
+    if(['pretax','roth','taxable','cash','employerPretax'].some(k=>c[k]<0||c[k]>MAX_DOLLAR_AMOUNT)||c.annualIncrease<-.02||c.annualIncrease>.15)errors.push(name+' savings contributions are outside the supported range.');
+  }
+  if(h.separatePeople){
+    if(primaryRetirementAge(s)>=h.targetEndAge)errors.push('Your own retirement date must be before the maximum modeling age.');
+    if(!usesCalendarDates(s))errors.push('Separate-person modeling requires calendar birthdays and retirement dates.');
+    if(h.filingStatus==='Married'){
+      const today=h.asOfDate||localCalendarDate();
+      if(!calendarDate(h.spouseRetirementDate)||h.spouseRetirementDate<today)errors.push('Choose a spouse retirement date today or later.');
+      if(calendarMonthsBetween(h.spouseBirthday,h.spouseRetirementDate)/12>=h.targetEndAge)errors.push('Spouse own retirement date must be before the maximum modeling age.');
+      if(Object.values(s.spouseAccounts).some(v=>v<0||v>MAX_DOLLAR_AMOUNT))errors.push('Spouse balances must be supported nonnegative amounts.');
+      const si=s.spouseIncome;
+      if(si.annualBenefitAt67<0||si.annualBenefitAt67>MAX_DOLLAR_AMOUNT||s.socialSecurity.spouseClaimAge<62||s.socialSecurity.spouseClaimAge>70)errors.push('Spouse own Social Security needs a nonnegative annual amount and claim age 62–70.');
+      if(si.annualPension<0||si.annualPension>MAX_DOLLAR_AMOUNT||!Number.isInteger(si.pensionStartAge)||si.pensionStartAge<0||!Number.isInteger(si.pensionStartAgeMonths)||si.pensionStartAgeMonths<0||si.pensionStartAgeMonths>11||si.annualIncrease<-.02||si.annualIncrease>.15||si.survivorPercent<0||si.survivorPercent>1)errors.push('Spouse pension assumptions are outside the supported range.');
+      const rh=s.spouseRothHistory;
+      if(rh.contributionBasis<0||rh.contributionBasis>MAX_DOLLAR_AMOUNT||!Number.isInteger(rh.firstContributionYear)||(rh.firstContributionYear!==0&&(rh.firstContributionYear<1998||rh.firstContributionYear>2026))||(rh.firstContributionYear===0&&(s.spouseAccounts.roth>0||rh.contributionBasis>0||rh.conversions.some(l=>l.amount>0))))errors.push('Review spouse Roth contribution basis and first funding year.');
+      if(rh.conversions.reduce((n,l)=>n+l.amount,rh.contributionBasis)>MAX_DOLLAR_AMOUNT)errors.push('Spouse Roth principal exceeds the supported dollar range.');
+      for(const lot of rh.conversions)if(!Number.isInteger(lot.taxYear)||lot.taxYear<1998||lot.taxYear>2026||lot.taxYear<rh.firstContributionYear||lot.amount<0||lot.amount>MAX_DOLLAR_AMOUNT||lot.taxableAmount<0||lot.taxableAmount>lot.amount)errors.push('Review spouse Roth conversion history.');
+    }
+    if(['primaryAnnualNet','spouseAnnualNet'].some(k=>s.workingIncome[k]<0||s.workingIncome[k]>MAX_DOLLAR_AMOUNT)||s.workingIncome.annualIncrease<-.02||s.workingIncome.annualIncrease>.15)errors.push('Take-home household support must be a supported nonnegative amount.');
+  }
   errors.push(...budgetDollarRangeErrors(s.budget));
   // Draft budget errors are shown in the budget editor; only applied spending feeds the simulation.
   return errors;

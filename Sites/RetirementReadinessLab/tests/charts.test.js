@@ -95,8 +95,8 @@ test('funding chart inspection reaches monthly failures and final death endpoint
     ]};
     mountCharts(root,result,65);assert.equal(slider.step,'any');assert.equal(slider.max,66);
     slider.value=791/12;slider.oninput();
-    assert.match(output.textContent,/65 years 11 months.*Still funded 0 of 4.*Still alive 4 of 4/);
-    slider.value=66;slider.oninput();assert.match(output.textContent,/Still funded 0 of 4.*Still alive 0 of 4/);
+    assert.match(output.textContent,/65 years 11 months.*No shortfall observed 0 of 4.*Household still alive 4 of 4/);
+    slider.value=66;slider.oninput();assert.match(output.textContent,/No shortfall observed 0 of 4.*Household still alive 0 of 4/);
   }finally{disposeCharts();globalThis.ResizeObserver=original;}
 });
 
@@ -148,7 +148,7 @@ test('chart drawing and pointer inspection agree for partial-year spans, includi
       const el={dataset:{plot:type},querySelector:q=>q==='canvas'?canvas:q==='input[type=range]'?slider:q==='output'?output:caption};
       const controls=new Map(),dialog={querySelector:q=>{if(!controls.has(q))controls.set(q,{});return controls.get(q);}};
       const root={querySelectorAll:q=>q==='[data-plot]'?[el]:[]};
-      const result={provenance:{simulationCount:4},balanceBands:[69.5,69.75,70].map((age,i)=>({age,median:100-i*50,pessimistic:100-i*50,optimistic:100-i*50,pathCount:4})),notFailedByAge:[69.5,69.75,70].map((age,i)=>({age,notFailedShare:1-i/2,aliveShare:1-i/2}))};
+      const result={provenance:{simulationCount:4},balanceBands:[69.5,69.75,70].map((age,i)=>({age,median:100-i*50,pessimistic:100-i*50,optimistic:100-i*50,pathCount:4})),notFailedByAge:[69.5,69.75,70].map((age,i)=>({age,notFailedShare:1-i/2,aliveShare:type==='bands'?1:1-i/2}))};
       mountCharts(root,result,69.5);
       assert.ok(points.some(p=>p.x===326),'The middle observation is drawn at the axis midpoint');
       for(const [age,x] of [[69.5,68],[69.75,326],[70,584]]){

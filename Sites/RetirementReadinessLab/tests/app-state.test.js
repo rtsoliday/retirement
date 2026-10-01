@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 import * as model from '../dist/model.js';
 import * as format from '../dist/result-format.js';
+import * as guidance from '../dist/ux-guidance.js';
 import * as withdrawalsView from '../dist/withdrawals-view.js';
 import {runSimulation} from '../dist/engine.js';
 
@@ -24,7 +25,7 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
     return elements.get(selector);
   }
   const document={activeElement:null,querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement(){return {click(){downloads.push({name:this.download,blob:downloadBlobs.get(this.href)});}};}};
-  const context=vm.createContext({...model,...format,...withdrawalsView,structuredClone,Intl,URLSearchParams:params,Blob,URL:class extends URL{static createObjectURL(blob){const url='blob:test-'+downloadBlobs.size;downloadBlobs.set(url,blob);return url;}static revokeObjectURL(url){downloadBlobs.delete(url);}},console,Date:class extends Date{static now(){return clock.now;}},
+  const context=vm.createContext({...model,...format,...guidance,...withdrawalsView,structuredClone,Intl,URLSearchParams:params,Blob,URL:class extends URL{static createObjectURL(blob){const url='blob:test-'+downloadBlobs.size;downloadBlobs.set(url,blob);return url;}static revokeObjectURL(url){downloadBlobs.delete(url);}},console,Date:class extends Date{static now(){return clock.now;}},
     location,history:{replaceState(_state,_title,url){const next=new URL(url,'https://example.test');location.search=next.search;location.hash=next.hash;}},confirm,
     setTimeout(fn,delay){const id=++nextTimer;timers.set(id,{fn,at:clock.now+delay});return id;},clearTimeout(id){timers.delete(id);},
     sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value)},socialState:()=>({...identity}),
@@ -311,7 +312,7 @@ test('numeric editors reject unsupported dollar amounts and accept repaired entr
     assert.notEqual(a.stored(),saved);assert.doesNotMatch(a.stored(),/:null/);
   }
   const a=app();
-  await a.change('#main',{dataset:{field:'spending.annualBaseSpending',type:'money'},value:'',validity:{badInput:false}});
+  await a.change('#main',{dataset:{field:'spending.annualBaseSpending',type:'money'},value:'0',validity:{badInput:false}});
   assert.equal(a.current().spending.annualBaseSpending,0);
   await a.change('#main',{tagName:'SELECT',dataset:{field:'rothConversion.marginalRateCap',type:'percent'},value:'24'});
   assert.equal(a.current().rothConversion.marginalRateCap,.24);
@@ -337,9 +338,9 @@ test('Results tables group monthly observations by whole-year age and keep the l
   a.state.results.set(s.id,r);
   const html=a.results(),tables=[...html.matchAll(/<tbody>(.*?)<\/tbody>/gs)].map(table=>
     [...table[1].matchAll(/<tr>(.*?)<\/tr>/gs)].map(row=>[...row[1].matchAll(/<td>(.*?)<\/td>/gs)].map(cell=>cell[1])));
-  assert.deepEqual(tables.slice(0,2),[
-    [['65','3 of 4','4 of 4'],['66','1 of 4','2 of 4'],['67','1 of 4','0 of 4']],
-    [['65','4','$800','$900','$1,000'],['66','3','$400','$500','$600'],['67','2','$200','$300','$400']]
+  assert.deepEqual([tables[0],tables[1].filter(row=>Number(row[0])<68)],[
+    [['65','3 of 4','4 of 4'],['66','1 of 4','2 of 4'],['67','1 of 4','0 of 4 observed']],
+    [['65','4','$800','$900','$1,000'],['66','3','$400','$500','$600'],['67','0','Not enough simulated outcomes','—','—']]
   ]);
   assert.match(html,/Each whole-year age shows its last modeled observation/);
   assert.equal(JSON.stringify([r.notFailedByAge,r.balanceBands]),monthlyData,'Table grouping preserves monthly chart data');
@@ -348,7 +349,7 @@ test('Results tables group monthly observations by whole-year age and keep the l
 test('Results show every monthly account and debt row from the completed steady-growth run',()=>{
   const a=app(),s=a.current(),r=runSimulation(s);a.state.results.set(s.id,r);
   const details=JSON.stringify(r.steadySimulation),html=a.results();
-  assert.match(html,/Steady-growth simulation · monthly balances/);
+  assert.match(html,/Steady-growth illustration · monthly balances/);
   assert.match(html,/all volatility set to 0%/);
   assert.match(html,/long-term care risk turned off/);
   assert.match(html,/not a statistical median/);
@@ -1067,7 +1068,7 @@ test('pension and care editors retain 0-11 month selectors and save months in ba
     await a.change('#main',{dataset:{field:months,type:'month'},value:'6'});
   }
   const s=a.saved().scenarios[0];assert.equal(s.household.retirementAgeMonths,0);assert.equal(s.guaranteedIncome.startAgeMonths,6);assert.equal(s.longTermCare.averageDurationMonths,6);
-  assert.match(a.reportText(a.current()),/Income start age extra months: 6/);assert.match(a.reportText(a.current()),/Long-term care duration \/ years extra months: 6/);
+  assert.match(a.reportText(a.current()),/Your pension start age extra months: 6/);assert.match(a.reportText(a.current()),/Long-term care duration \/ years extra months: 6/);
 });
 
 test('changing retirement date discards pending calculations and exploration results',async()=>{
@@ -1259,4 +1260,133 @@ test('ten paths remain a counted preview and eleven paths use percentage formatt
     assert.equal(format.isPreviewResult(result),count<=10);
     assert.equal(format.readinessLabel(result),count<=10?`${Math.round(.8*count)} of ${count}`:'80.0%');
   }
+});
+
+test('guided setup offers household choices, progress, a skippable editor and editable review without changing assumptions',async()=>{
+  const a=app(),original=JSON.stringify(a.current());
+  await a.click('start-plan');assert.equal(a.state.guided,true);
+  assert.match(a.setup(),/Step 1 of 6/);assert.match(a.setup(),/Individual · Just me/);assert.match(a.setup(),/Couple · Me and my spouse/);
+  await a.click('setup-section',{index:'1'});assert.match(a.setup(),/guided-extra/);assert.match(a.setup(),/annual future savings deposits/);
+  await a.click('setup-section',{index:'5'});assert.match(a.setup(),/Review before running/);assert.match(a.setup(),/Sample\/default/);assert.match(a.setup(),/Edit Household/);
+  await a.click('toggle-guided');assert.equal(a.state.guided,false);assert.equal(a.state.setupSection,0);
+  assert.equal(JSON.stringify(a.current()),original);
+  await a.click('household-choice',{kind:'couple'});
+  assert.equal(a.current().household.filingStatus,'Married');assert.match(a.setup(),/<h3>Spouse<\/h3>/);
+  a.state.setupSection=2;assert.match(a.setup(),/Your pension or annuity \/ year/);assert.match(a.setup(),/One stream with your start age/);assert.match(a.setup(),/Enter their own age-67 benefit/);
+  await a.click('household-choice',{kind:'individual'});a.state.setupSection=0;
+  assert.equal(a.current().household.filingStatus,'Single');assert.doesNotMatch(a.setup(),/<h3>Spouse<\/h3>/);
+});
+
+test('blank assumption amounts remain Unknown across saves and backups; explicit zero is a real input',async()=>{
+  const a=app(),s=a.current(),before=s.guaranteedIncome.annualIncome;s.guaranteedIncome.annualIncome=24000;
+  await a.change('#main',{id:'f-guaranteedIncome-annualIncome',dataset:{field:'guaranteedIncome.annualIncome',type:'money'},value:''});
+  await a.persist();assert.equal(s.guaranteedIncome.annualIncome,24000);assert.equal(a.saved().inputSources[s.id]['guaranteedIncome.annualIncome'],'Unknown');
+  await a.run();await a.runLab();a.state.access.tier='pro';await a.runDecision();assert.equal(a.workers.length,0);
+  const restored=app(a.saved());restored.state.setupSection=2;
+  assert.match(restored.setup(),/id="f-guaranteedIncome-annualIncome"[^>]*value=""/);
+  restored.state.setupSection=5;assert.match(restored.setup(),/Unknown · number needed/);assert.match(restored.setup(),/data-action="run-plan" disabled/);
+  await a.click('export-backup');const backup=JSON.parse(await a.downloads[0].blob.text());
+  await restored.change('#import-file',{files:[{text:async()=>JSON.stringify(backup)}],value:'backup.json'});
+  assert.equal(restored.state.inputSources[s.id]['guaranteedIncome.annualIncome'],'Unknown');
+  await restored.change('#main',{dataset:{field:'guaranteedIncome.annualIncome',type:'money'},value:'0'});
+  assert.equal(restored.current().guaranteedIncome.annualIncome,before);assert.equal(restored.state.inputSources[s.id]['guaranteedIncome.annualIncome'],'Entered');
+});
+
+test('estimated inputs keep their numeric meaning, source and engine result through reload and copy',async()=>{
+  const a=app(),s=a.current();s.household.asOfDate=model.localCalendarDate();
+  await a.change('#main',{dataset:{field:'guaranteedIncome.annualIncome',type:'money'},value:'18000'});
+  await a.change('#main',{dataset:{inputSource:'guaranteedIncome.annualIncome'},value:'Estimated'});
+  const clean=r=>{const copy=structuredClone(r);delete copy.generatedAtEpochMillis;return copy;},before=clean(runSimulation(s));
+  const restored=app(a.saved());assert.equal(restored.state.inputSources[s.id]['guaranteedIncome.annualIncome'],'Estimated');
+  assert.deepEqual(clean(runSimulation(restored.current())),before);
+  await restored.click('new-scenario');assert.equal(restored.state.inputSources[restored.current().id]['guaranteedIncome.annualIncome'],'Estimated');
+  await restored.click('reset-assumptions');assert.equal(restored.state.inputSources[restored.current().id]._origin,'Sample/default');
+});
+
+test('cleared detailed assumptions also retain Unknown across reload',async()=>{
+  const a=app(),s=a.current(),before=s.market.stockStdDev;
+  await a.change('#main',{dataset:{field:'market.stockStdDev',type:'percent'},value:''});await a.persist();
+  const restored=app(a.saved());assert.equal(restored.current().market.stockStdDev,before);
+  assert.equal(restored.state.inputSources[s.id]['market.stockStdDev'],'Unknown');
+  await restored.run();assert.equal(restored.workers.length,0);
+  await restored.change('#main',{dataset:{field:'market.stockStdDev',type:'percent'},value:'0'});
+  assert.equal(restored.current().market.stockStdDev,0);assert.equal(restored.state.inputSources[s.id]['market.stockStdDev'],'Entered');
+});
+
+test('legacy input provenance is not guessed from matching a sample balance',()=>{
+  const s=model.baseScenario(),a=app({scenarios:[s],selectedId:s.id});a.state.setupSection=1;
+  assert.match(a.setup(),/Saved value; source not recorded/);assert.equal(a.current().accounts.pretax,500000);
+  assert.equal(a.state.inputSources[s.id]['household.birthday'],'Estimated','Legacy birthday is explicitly inferred');
+  const sources=guidance.normalizeInputSources({[s.id]:{_origin:'Unknown',fake:'Unknown','accounts.pretax':'Unknown'}},[s]);
+  assert.equal(sources[s.id]._origin,'Saved value; source not recorded');assert.equal(sources[s.id].fake,undefined);assert.equal(sources[s.id]['accounts.pretax'],'Unknown');
+});
+
+test('input examples distinguish monthly pension income, annual spending and account balances',()=>{
+  const a=app();a.state.setupSection=1;assert.match(a.setup(),/traditional 401\(k\), 403\(b\), IRA/);assert.match(a.setup(),/\$4,000 per month, enter \$48,000/);
+  a.state.setupSection=2;assert.match(a.setup(),/\$1,500 monthly means \$18,000 yearly/);assert.match(a.setup(),/not the pension’s account or lump-sum value/);
+  a.state.setupSection=3;assert.match(a.setup(),/\$1,200 each month stays \$1,200/);
+});
+
+test('results distinguish zero survivors from funding, missing financial outcomes and the steady illustration',()=>{
+  const a=app(),s=a.current(),r=runSimulation(s);r.notFailedByAge=[{age:67,notFailedShare:1,aliveShare:1},{age:68,notFailedShare:1,aliveShare:0}];
+  r.balanceBands=[{age:67,median:100,pessimistic:100,optimistic:100,pathCount:10}];a.state.results.set(s.id,r);
+  const html=a.results();assert.match(html,/A simulated death is not running out of money/);assert.match(html,/Not enough simulated outcomes/);assert.match(html,/0 of 10 observed/);
+  assert.match(html,/typical Monte Carlo outcome or guaranteed balance/);assert.match(html,/healthcare inflation 4.0%/);assert.match(html,/future dollars/);
+  assert.equal(r.successProbability>0,true);assert.match(html,/Zero observed survivors does not mean living longer is impossible/);
+  assert.equal(format.shareLabel(0,10000),'0 of 10000 observed');
+});
+
+test('steady explanation retains completed return assumptions after a current-plan edit',async()=>{
+  const a=app(),running=a.run(),worker=a.workers[0],r=runSimulation(worker.data.scenario);
+  worker.onmessage({data:{type:'result',result:r}});await running;
+  assert.equal(a.state.results.get(a.current().id).uxAssumptions.market.stockMeanReturn,worker.data.scenario.market.stockMeanReturn);
+  const html=a.results();a.current().market.stockMeanReturn=.9;assert.equal(a.results(),html);
+});
+
+test('financial zero is retained for a depleted living path; absence is not filled with zero',()=>{
+  const r={balanceBands:[{age:65,pathCount:1,pessimistic:0,median:0,optimistic:0}],notFailedByAge:[{age:65,notFailedShare:0,aliveShare:1},{age:66,notFailedShare:0,aliveShare:0}]};
+  const rows=format.balanceDisplayRows(r);assert.equal(rows[0].noOutcomes,false);assert.equal(rows[0].median,0);assert.equal(rows[1].noOutcomes,true);assert.equal(rows[1].median,undefined);
+  assert.equal(format.shareLabel(1/10000,10000),'<0.1%');assert.equal(format.shareLabel(9999/10000,10000),'>99.9%');
+});
+
+test('a final death later in the same year does not leave a survivor balance beside zero survivors',()=>{
+  const r={balanceBands:[{age:95,pathCount:1,pessimistic:8000000,median:8000000,optimistic:8000000}],notFailedByAge:[{age:95,notFailedShare:1,aliveShare:.1},{age:95+1/12,notFailedShare:1,aliveShare:0}]};
+  const original=JSON.stringify(r),rows=format.balanceDisplayRows(r);
+  assert.deepEqual(rows,[{ageYear:95,pathCount:0,noOutcomes:true}]);assert.equal(JSON.stringify(r),original);
+});
+
+test('the guided header Run button opens the editable summary before a calculation',async()=>{
+  const a=app();await a.click('start-plan');a.element('#run-button').listeners.click();
+  assert.equal(a.state.setupSection,5);assert.equal(a.state.view,'setup');assert.equal(a.workers.length,0);assert.match(a.setup(),/Review before running/);
+});
+
+
+test('old saved plans never silently switch models, including a saved first-visit state',async()=>{
+  for(const hasStartedPlan of [true,false]){
+    const s=model.baseScenario();s.household.filingStatus='Married';const a=app({scenarios:[s],selectedId:s.id,hasStartedPlan});
+    assert.equal(a.current().household.separatePeople,false);await a.click('start-plan');assert.equal(a.current().household.separatePeople,false);
+    seedExploration(a);await a.click('enable-people');assert.equal(a.current().household.separatePeople,true);assertCleared(a);
+    assert.equal(a.current().accounts.pretax,500000);assert.equal(a.current().spouseAccounts.pretax,0);assert.equal(guidance.unknownInputPaths(a.current(),a.state.inputSources).length,4);
+    await a.run();assert.equal(a.workers.length,0);assert.match(a.state.message,/Unknown/);
+    const restored=app(a.saved());assert.equal(restored.current().household.separatePeople,true);assert.equal(guidance.unknownInputPaths(restored.current(),restored.state.inputSources).length,4);
+  }
+});
+test('new household inputs have ownership, annual examples and editable sources; single plans omit inactive fields',async()=>{
+  const a=app();assert.equal(a.current().household.separatePeople,true);assert.deepEqual(structuredClone(a.current().contributions),model.baseScenario().contributions);
+  a.state.setupSection=1;assert.match(a.setup(),/Your future savings/);assert.match(a.setup(),/\$500 monthly means \$6,000 yearly/);assert.doesNotMatch(a.setup(),/Spouse retirement accounts/);
+  a.state.setupSection=2;assert.doesNotMatch(a.setup(),/Working household support/);
+  await a.click('household-choice',{kind:'couple'});a.state.setupSection=0;assert.match(a.setup(),/Spouse retirement date/);
+  a.state.setupSection=1;assert.match(a.setup(),/Spouse retirement accounts/);assert.match(a.setup(),/Source for Spouse pre-tax \/ non-Roth balance/);
+  a.state.setupSection=2;assert.match(a.setup(),/Spouse · Pension/);assert.match(a.setup(),/Source for Spouse own Social Security/);assert.match(a.setup(),/after taxes and these savings deposits/);
+  seedExploration(a);await a.click('add-spouse-conversion');assertCleared(a);assert.equal(a.current().spouseRothHistory.conversions.length,1);
+  seedExploration(a);await a.click('remove-spouse-conversion',{index:'0'});assertCleared(a);
+});
+test('future savings unknown versus zero, separate ownership, copy and JSON backup survive reload',async()=>{
+  const a=app();await a.click('household-choice',{kind:'couple'});const s=a.current();s.spouseAccounts.pretax=90000;s.spouseIncome.annualBenefitAt67=18000;
+  await a.change('#main',{dataset:{field:'contributions.pretax',type:'money'},value:''});await a.run();assert.equal(a.workers.length,0);
+  await a.change('#main',{dataset:{field:'contributions.pretax',type:'money'},value:'0'});await a.change('#main',{dataset:{field:'spouseContributions.roth',type:'money'},value:'6000'});
+  await a.click('new-scenario');const copy=a.current();assert.equal(copy.household.separatePeople,true);assert.equal(copy.spouseAccounts.pretax,90000);assert.equal(copy.spouseContributions.roth,6000);
+  await a.click('export-backup');const backup=JSON.parse(await a.downloads.at(-1).blob.text());const restored=app(backup);
+  assert.equal(restored.current().spouseIncome.annualBenefitAt67,18000);assert.equal(restored.current().spouseContributions.roth,6000);assert.equal(restored.state.inputSources[copy.id]['contributions.pretax'],'Entered');
+  restored.state.setupSection=5;assert.match(restored.setup(),/Spouse retirement accounts/);assert.match(restored.setup(),/Planned|annual future savings deposits/);
 });
