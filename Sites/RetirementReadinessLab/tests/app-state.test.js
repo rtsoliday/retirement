@@ -1335,6 +1335,22 @@ test('review leads with a short summary and names each Unknown input',async()=>{
   assert.doesNotMatch(html,/id="f-accounts-roth"/,'Review summarizes rather than embedding stray editors');
 });
 
+test('individual review ignores unused spouse sources and does not label household choice as a sample amount',()=>{
+  for(const filingStatus of ['Single','HeadOfHousehold']){
+    const a=app(),s=a.current();s.household.filingStatus=filingStatus;a.state.setupSection=5;
+    a.state.inputSources[s.id]={_origin:'Entered','household.filingStatus':'Sample/default','household.spouseBirthday':'Sample/default','household.spouseGender':'Unknown','household.spouseRetirementDate':'Sample/default'};
+    const html=a.setup();
+    assert.match(html,/<dt>Household<\/dt><dd>Individual<small>Selected/);
+    assert.doesNotMatch(html,/Sample values are still in this plan|Includes sample values|Spouse birthday|Spouse longevity table|Review Unknown inputs before running/);
+    s.household.filingStatus='Married';
+    const couple=a.setup();
+    assert.match(couple,/Sample values are still in this plan/);
+    assert.match(couple,/Spouse birthday/);
+    assert.match(couple,/Review Unknown inputs before running/);
+    assert.equal(a.state.inputSources[s.id]['household.spouseBirthday'],'Sample/default');
+  }
+});
+
 test('blank assumption amounts remain Unknown across saves and backups; explicit zero is a real input',async()=>{
   const a=app(),s=a.current(),before=s.guaranteedIncome.annualIncome;s.guaranteedIncome.annualIncome=24000;
   await a.change('#main',{id:'f-guaranteedIncome-annualIncome',dataset:{field:'guaranteedIncome.annualIncome',type:'money'},value:''});
