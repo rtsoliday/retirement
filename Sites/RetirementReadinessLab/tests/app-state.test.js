@@ -8,7 +8,72 @@ import * as guidance from '../dist/ux-guidance.js';
 import * as withdrawalsView from '../dist/withdrawals-view.js';
 import * as growthHelper from '../dist/growth-helper.js';
 import * as moneyInput from '../dist/money-input.js';
+import * as planReview from '../dist/plan-review.js';
 import {runSimulation} from '../dist/engine.js';
+
+test('building a personal forecast blanks example balances and income, preserves saved plans and accepts explicit None',async()=>{
+  const a=app(),before=structuredClone(a.current());await a.click('start-plan');a.state.setupSection=1;
+  assert.match(a.setup(),/id="f-accounts-pretax"[^>]*value=""/);
+  assert.equal(a.state.inputSources[a.current().id]['accounts.pretax'],'Unknown');
+  await a.run();assert.equal(a.workers.length,0);
+  await a.click('input-none',{path:'accounts.roth'});
+  assert.equal(a.current().accounts.roth,0);assert.equal(a.saved().inputSources[a.current().id]['accounts.roth'],'Entered');
+  assert.equal(a.current().market.stockMeanReturn,before.market.stockMeanReturn);
+  const saved=app({scenarios:[before],selectedId:before.id});await saved.click('start-plan');
+  assert.deepEqual(structuredClone(saved.current()),before);
+  assert.notEqual(saved.state.inputSources[before.id]['accounts.pretax'],'Unknown');
+  const restored=app(a.saved());assert.equal(restored.state.inputSources[a.current().id]['accounts.pretax'],'Unknown');
+});
+
+test('review names remaining examples, hides retained Unknown numbers and provides exact edit routes',async()=>{
+  const a=app();await a.click('start-plan');a.state.setupSection=5;
+  const html=a.setup();
+  assert.match(html,/Stock return average %: 13\.3%[^]*data-action="edit-input" data-index="4" data-path="market.stockMeanReturn"/);
+  assert.match(html,/<dt>Savings today<\/dt><dd>Unknown · enter your amounts/);
+  assert.match(html,/Check your monthly spending/);
+  await a.click('edit-input',{index:'3',path:'mortgage.monthlyPayment'});
+  assert.equal(a.state.view,'setup');assert.equal(a.state.setupSection,3);
+});
+
+test('applied budget deductions remain visible at the housing handoff until the amount is reviewed',async()=>{
+  const s=model.baseScenario();s.budget.monthlyBudgets=[{month:'2026-09',creditCardBills:[{monthlyAmount:4600}],adjustments:{mortgage:1200}}];model.applyBudgetEstimate(s);
+  const a=app({scenarios:[s],selectedId:s.id,inputSources:{[s.id]:{_origin:'Sample/default'}}});a.state.guided=true;a.state.setupSection=3;
+  assert.match(a.setup(),/You excluded mortgage payments from your budget/);
+  assert.match(a.budgetSummary(),/Deducting a payment from the budget does not enter it in the plan/);
+  a.state.setupSection=5;assert.match(a.setup(),/Review mortgage payments/);
+  await a.click('input-none',{path:'mortgage.monthlyPayment'});
+  assert.doesNotMatch(a.setup(),/You excluded mortgage payments from your budget/);
+  assert.equal(a.saved().inputSources[s.id]['mortgage.monthlyPayment'],'Entered');
+});
+
+test('custom comparisons run independent date and spending changes without changing the base plan',async()=>{
+  const a=app(),s=a.current(),before=structuredClone(s),date=model.addCalendarMonths(s.household.retirementDate,12);
+  assert.match(a.lab(),/id="lab-monthly-spending"[^>]*value="6,250"/);assert.doesNotMatch(a.lab(),/value="NaN"/);
+  const input=(key,value)=>a.element('#main').listeners.input({target:{dataset:{labInput:key},value}});
+  input('retirementDate',date);input('monthlySpending','4000');
+  const pending=a.runLab(true);
+  for(let i=0;i<3;i++){
+    const w=a.workers[i];assert.ok(w);
+    if(i===1){assert.equal(w.data.scenario.household.retirementDate,date);assert.equal(w.data.scenario.spending.annualBaseSpending,before.spending.annualBaseSpending);}
+    if(i===2){assert.equal(w.data.scenario.spending.annualBaseSpending,48000);assert.equal(w.data.scenario.household.retirementDate,before.household.retirementDate);}
+    w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});await Promise.resolve();
+  }
+  await pending;assert.equal(a.state.labResults.length,3);assert.deepEqual(structuredClone(a.current()),before);
+  await a.click('copy-comparison',{index:'2'});assert.equal(a.current().spending.annualBaseSpending,48000);
+  assert.equal(a.saved().scenarios.find(x=>x.id===before.id).spending.annualBaseSpending,before.spending.annualBaseSpending);
+});
+
+test('custom comparisons reject incomplete or excessive amounts and edited drafts discard pending results',async()=>{
+  for(const value of ['', '-1', '1e400', String(model.MAX_DOLLAR_AMOUNT)]){
+    const a=app();a.element('#main').listeners.input({target:{dataset:{labInput:'monthlySpending'},value}});
+    await a.runLab(true);assert.equal(a.workers.length,0,value);assert.match(a.state.message,/Error:/);
+  }
+  const a=app();a.element('#main').listeners.input({target:{dataset:{labInput:'monthlySpending'},value:'4000'}});
+  const pending=a.runLab(true),w=a.workers[0];
+  a.element('#main').listeners.input({target:{dataset:{labInput:'monthlySpending'},value:'5000'}});
+  w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});await pending;
+  assert.equal(a.state.labResults,null);assert.equal(a.state.busy,false);
+});
 
 // Execute the actual app and event handlers. Only browser IO is replaced;
 // workers stay pending so changes during calculations can be reproduced.
@@ -27,7 +92,7 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
     return elements.get(selector);
   }
   const document={activeElement:null,querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement(){return {click(){downloads.push({name:this.download,blob:downloadBlobs.get(this.href)});}};}};
-  const context=vm.createContext({...model,...format,...guidance,...withdrawalsView,...growthHelper,...moneyInput,structuredClone,Intl,URLSearchParams:params,Blob,URL:class extends URL{static createObjectURL(blob){const url='blob:test-'+downloadBlobs.size;downloadBlobs.set(url,blob);return url;}static revokeObjectURL(url){downloadBlobs.delete(url);}},console,Date:class extends Date{static now(){return clock.now;}},
+  const context=vm.createContext({...model,...format,...guidance,...withdrawalsView,...growthHelper,...moneyInput,...planReview,structuredClone,Intl,URLSearchParams:params,Blob,URL:class extends URL{static createObjectURL(blob){const url='blob:test-'+downloadBlobs.size;downloadBlobs.set(url,blob);return url;}static revokeObjectURL(url){downloadBlobs.delete(url);}},console,Date:class extends Date{static now(){return clock.now;}},
     location,history:{replaceState(_state,_title,url){const next=new URL(url,'https://example.test');location.search=next.search;location.hash=next.hash;}},confirm,
     setTimeout(fn,delay){const id=++nextTimer;timers.set(id,{fn,at:clock.now+delay});return id;},clearTimeout(id){timers.delete(id);},
     sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value)},socialState:()=>({...identity}),
@@ -1563,13 +1628,13 @@ test('the basic guide discloses current assumptions without changing their value
   const a=app({scenarios:[s],selectedId:s.id});a.state.guided=true;
   const before=structuredClone(a.current());a.state.setupSection=4;
   assert.match(a.setup(),/Stocks after retirement[\s\S]*8\.4%/);
-  assert.match(a.setup(),/<details class="guided-extra" id="basic-market-settings"><summary>Advanced/);
+  assert.match(a.setup(),/<details class="guided-extra" id="basic-market-settings"><summary>Returns, investment mix/);
   await a.click('setup-detail',{mode:'advanced'});
   assert.doesNotMatch(a.setup(),/id="basic-market-settings"/);
   await a.click('setup-detail',{mode:'basic'});a.state.setupSection=1;
   assert.match(a.setup(),/Base spending stays level before inflation/);
   assert.match(a.setup(),/<summary>Advanced · Spending pattern and inflation/);
-  assert.doesNotMatch(a.setup(),/class="field-source"/,'No per-field sample labels are added');
+  assert.match(a.setup(),/class="field-source"/,'Sources identify example and saved inputs beside their fields');
   assert.deepEqual(structuredClone(a.current()),before);
   assert.equal(app(a.saved()).state.basicSetup,true);
   await a.change('#main',{dataset:{field:'spending.generalInflationMean',type:'percent'},value:'3'});

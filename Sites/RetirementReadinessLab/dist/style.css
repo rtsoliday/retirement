@@ -339,3 +339,35 @@ main{container-type:inline-size}
 .comparison-copy{display:block;margin-top:10px;font-size:.76rem;white-space:normal;text-align:left}
 @media(max-width:680px){.review-actions{display:none}.review-mobile-footer{display:flex}.setup-steps{display:none}.setup-step-picker{display:block}.section-footer{position:sticky;bottom:0;z-index:15;background:#fff;box-shadow:0 -5px 14px #173f3410;border-top:1px solid #dce7e1;justify-content:space-between}.section-footer button{flex:1;min-height:44px}.setup-bottom{padding-bottom:12px}.setup-mode button{flex:1}.amount-controls>select{flex-basis:95px}.result-detail>.detail-body{padding:0 12px 16px}.result-detail>summary{padding:18px 16px}}
 @media print{.result-detail>.detail-body{display:block!important}.result-detail>summary{font-size:1.2rem}.setup-mode,.setup-step-picker,.amount-equivalent{display:none}}
+
+/* Secondary setup controls stay together, leaving the questions in view. */
+.setup-tools{margin:0 0 16px;color:#426259;font-size:.85rem}
+.setup-tools>summary,.sample-inputs>summary{cursor:pointer;font-weight:650}
+.setup-tools-body{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding-top:12px}
+.setup-tools .setup-mode{margin:0}
+.field-source{font-size:.72rem;color:#6a7c75;margin:6px 0 0}
+.field-source[hidden],.amount-equivalent[hidden]{display:none}
+.field-none{font-size:.8rem;min-height:32px;margin-top:4px}
+.sample-input-list{padding-left:22px;line-height:1.7}
+.sample-input-list>li+li{margin-top:12px}
+.sample-input-list ul{padding-left:20px}
+.spending-total{font-weight:750;background:#f2f7f4}
+.budget-handoff ul{padding-left:22px;line-height:1.65}
+.budget-handoff li+li{margin-top:10px}
+@media(max-width:680px){
+  .setup-heading .page-head{margin-bottom:12px}
+  .setup-heading .page-head h1{font-size:1.3rem}
+  .setup-heading .page-head p{display:none}
+  .setup-progress{margin:8px 0;gap:6px}
+  .setup-progress>label,.setup-step-picker>label{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+  .setup-tools{margin-bottom:12px}
+  .setup-tools>summary{min-height:36px;display:list-item;align-content:center}
+  .setup-tools-body{display:block}
+  .setup-tools-body>.text-link{display:block;margin-top:12px;min-height:36px}
+  .sample-inputs{padding:12px 14px;margin-bottom:16px;font-size:.85rem}
+  .form-panel-head{padding:16px 20px}
+  .form-panel-head .kicker{display:none}
+  .form-panel-head h2{font-size:1.1rem}
+  .form-panel-head p{margin:6px 0 0}
+}
+@media print{.setup-tools,.field-none{display:none}}
