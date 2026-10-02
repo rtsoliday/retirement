@@ -944,8 +944,10 @@ test('retained reports and comparisons keep their actual counts across upgrades 
 
 test('a failed access check on window focus keeps results when the tier is unchanged',async()=>{
   const a=app(),pending=a.run();a.workers[0].onmessage({data:{type:'result',result:runSimulation(a.workers[0].data.scenario)}});await pending;
-  await a.loadAccess();assert.equal(a.state.results.size,1);assert.match(a.state.message,/Subscription status is unavailable/);
+  await a.loadAccess();assert.equal(a.state.results.size,1);assert.doesNotMatch(a.state.message,/Subscription status is unavailable/,'an anonymous visitor already uses the free preview');
   const renders=a.renders();await a.loadAccess();assert.equal(a.state.results.size,1);assert.equal(a.renders(),renders,'an unchanged check does not redraw open charts');
+  const known=app(null,{session:new Map([['retirement-billing-reference',JSON.stringify({customerId:'cus_123'})]])});
+  await known.loadAccess();assert.match(known.state.message,/Subscription status is unavailable/,'a known billing customer is told why runs use the preview');
 });
 test('an access check that changes the tier preserves completed results and updates future runs',async()=>{
   const a=app(null,{fetch:async()=>({ok:true,json:async()=>({tier:'pro',maxPaths:10000,signedIn:true,checkoutAvailable:true,accountProvider:'chatgpt'})})});
@@ -1013,7 +1015,8 @@ test('account-link query cleanup works without URLSearchParams.size',async()=>{
   class OlderParams extends URLSearchParams{get size(){return undefined;}}
   const location={search:'?link=google&keep=1',pathname:'/',hash:'#billing'};
   const a=app(null,{location,params:OlderParams,fetch:async()=>Response.json({linked:true,billingCustomerId:'cus_linked'})});await a.linkAccounts();
-  assert.equal(location.search,'?keep=1');assert.equal(location.hash,'#billing');
+  // The legacy #billing link opens billing and is kept as its route.
+  assert.equal(location.search,'?keep=1');assert.equal(location.hash,'#/billing');assert.equal(a.state.view,'billing');
 });
 
 test('initial Stripe outages retain authenticated identity and the stored customer reference',async()=>{
@@ -1357,7 +1360,7 @@ test('guided setup puts each person’s inputs together and keeps optional detai
   const firstExtra=html.indexOf('guided-extra');
   for(const id of ['f-accounts-pretax','f-accounts-roth','f-spouseAccounts-pretax','f-spouseAccounts-roth','f-accounts-taxable'])assert.ok(html.indexOf(id)>0&&html.indexOf(id)<firstExtra,id+' stays visible');
   assert.ok(html.indexOf('f-spouseRothHistory-contributionBasis')>firstExtra,'Roth records are optional detail');
-  assert.ok(html.indexOf('How earnings, savings and growth fit together')<html.indexOf('Your future savings'));
+  assert.ok(html.indexOf('How earnings, savings and growth fit together')<html.indexOf('Are you still adding to your savings?'));
   await a.click('setup-section',{index:'2'});html=a.setup();
   assert.ok(html.indexOf('f-spouseIncome-annualBenefitAt67')<html.indexOf('f-socialSecurity-spouseClaimAge'));
   assert.match(html,/Working household support · only if one of you works after the other retires/);
@@ -1467,10 +1470,11 @@ test('legacy input provenance is not guessed from matching a sample balance',()=
   assert.equal(sources[s.id]._origin,'Saved value; source not recorded');assert.equal(sources[s.id].fake,undefined);assert.equal(sources[s.id]['accounts.pretax'],'Unknown');
 });
 
-test('input examples distinguish monthly pension income, annual spending and account balances',()=>{
-  const a=app();a.state.setupSection=1;assert.match(a.setup(),/traditional 401\(k\), 403\(b\), IRA/);assert.match(a.setup(),/\$4,000 per month, enter \$48,000/);
-  a.state.setupSection=2;assert.match(a.setup(),/\$1,500 monthly means \$18,000 yearly/);assert.match(a.setup(),/not the pension’s account or lump-sum value/);
-  a.state.setupSection=3;assert.match(a.setup(),/\$1,200 each month stays \$1,200/);
+test('amounts with a Monthly/Yearly control omit worked conversion examples; balances keep their guidance',()=>{
+  const a=app();a.state.setupSection=1;assert.match(a.setup(),/traditional 401\(k\), 403\(b\), IRA/);
+  assert.match(a.setup(),/Yearly living costs in today’s dollars\.<\/p>/);assert.match(a.setup(),/id="unit-f-spending-annualBaseSpending"/);assert.doesNotMatch(a.setup(),/\$4,000 per month, enter \$48,000/);
+  a.state.setupSection=2;assert.doesNotMatch(a.setup(),/\$1,500 monthly means \$18,000 yearly|\$2,000 monthly estimate/);assert.match(a.setup(),/not the pension’s account or lump-sum value/);
+  a.state.setupSection=3;assert.match(a.setup(),/Principal and interest, excluding escrow\./);assert.doesNotMatch(a.setup(),/\$1,200 each month stays \$1,200/);
 });
 
 test('results distinguish zero survivors from funding, missing financial outcomes and the steady illustration',()=>{
@@ -1519,7 +1523,7 @@ test('old saved plans never silently switch models, including a saved first-visi
 });
 test('new household inputs have ownership, annual examples and editable sources; single plans omit inactive fields',async()=>{
   const a=app();assert.equal(a.current().household.separatePeople,true);assert.deepEqual(structuredClone(a.current().contributions),model.baseScenario().contributions);
-  a.state.setupSection=1;assert.match(a.setup(),/Your future savings/);assert.match(a.setup(),/\$500 monthly means \$6,000 yearly/);assert.doesNotMatch(a.setup(),/Spouse retirement accounts/);
+  a.state.setupSection=1;assert.match(a.setup(),/Your future savings/);assert.match(a.setup(),/Annual employee pre-tax deposits\./);assert.match(a.setup(),/id="unit-f-contributions-pretax"/);assert.doesNotMatch(a.setup(),/Spouse retirement accounts/);
   a.state.setupSection=2;assert.doesNotMatch(a.setup(),/Working household support/);
   await a.click('household-choice',{kind:'couple'});a.state.setupSection=0;assert.match(a.setup(),/Spouse retirement date/);
   a.state.setupSection=1;assert.match(a.setup(),/Spouse retirement accounts/);assert.match(a.setup(),/id="f-spouseAccounts-pretax"/);
@@ -1842,7 +1846,11 @@ test('results explain zero shortfalls and route next steps to review, investment
   const a=app(),s=a.current(),r=runSimulation(s);r.successProbability=1;r.riskBreakdown.primaryRisk='none';
   a.state.results.set(s.id,r);a.state.view='results';
   let html=a.results();assert.match(html,/All 10 preview lifetimes stayed funded/);
-  assert.match(html,/Try higher healthcare costs or a different retirement date/);assert.doesNotMatch(html,/No sensitivity check reduced shortfalls/);
+  assert.match(html,/assumes stocks grow 13\.3% a year[^<]*Try a lower return/);assert.doesNotMatch(html,/No sensitivity check reduced shortfalls/);
+  const modest=structuredClone(s);Object.assign(modest.market,{preRetirementMeanReturn:.07,stockMeanReturn:.07});
+  r.uxAssumptions=modest;r.todayDollars.medianEndingBalance=modest.spending.annualBaseSpending*25;assert.match(a.results(),/about 25 years of base spending left/);
+  r.todayDollars.medianEndingBalance=modest.spending.annualBaseSpending*5;assert.match(a.results(),/Try higher healthcare costs or a different retirement date/);
+  delete r.uxAssumptions;
   assert.match(html,/Review sample inputs/);
   a.state.inputSources[s.id]={_origin:'Entered'};assert.match(a.results(),/Review my inputs/);
   await a.click('setup-section',{index:'5',resultsLink:''});assert.equal(a.state.view,'setup');assert.equal(a.state.setupSection,5);
@@ -1850,4 +1858,77 @@ test('results explain zero shortfalls and route next steps to review, investment
   r.successProbability=.5;a.state.view='results';html=a.results();assert.match(html,/Start by checking spending and income/);
   r.riskBreakdown.primaryRisk='spending';r.riskBreakdown.recommendedNextTest='Test a 5% lower spending scenario.';
   assert.match(a.results(),/Test a 5% lower spending scenario/,'Helpful sensitivity results remain visible when shortfalls occurred');
+});
+
+test('money entry accepts k and M shorthand but still rejects malformed amounts',()=>{
+  for(const [text,value] of [['40k',40000],['$40K',40000],['$1.2M',1200000],['-$2.5k',-2500],['40 k',40000],['1,500k',1500000]])assert.equal(moneyInput.parseMoneyInput(text),value,text);
+  for(const text of ['k','40kk','1e3k','4,0k','$k'])assert.ok(Number.isNaN(moneyInput.parseMoneyInput(text)),text);
+});
+
+test('typing a date year digit by digit neither reports an error nor redraws the editor',async()=>{
+  const a=app(),before=a.current().household.retirementDate,renders=a.renders(),year=Number(before.slice(0,4))+5;
+  for(const partial of ['0002','0020','0204'])await a.change('#main',{dataset:{field:'household.retirementDate',type:'date'},value:`${partial}-06-01`});
+  assert.equal(a.current().household.retirementDate,before);assert.doesNotMatch(a.state.message,/Error/);assert.equal(a.renders(),renders);
+  await a.change('#main',{dataset:{field:'household.retirementDate',type:'date'},value:`${year}-06-01`});
+  assert.equal(a.current().household.retirementDate,`${year}-06-01`);
+  await a.change('#main',{dataset:{field:'household.retirementDate',type:'date'},value:'2000-01-01'});
+  assert.match(a.state.message,/Error: Choose a valid retirement date/);assert.equal(a.renders(),renders,'an invalid date keeps the live editor in place');
+  a.state.message='';a.element('#main').listeners.focusout({target:{dataset:{type:'date',field:'household.birthday'},value:'0197-04-15'}});
+  assert.match(a.state.message,/Error: Choose a valid birthday/,'an unfinished year is reported when leaving the field');
+});
+
+test('a new personal plan asks about future savings and clears example premiums and Roth history',async()=>{
+  const a=app();await a.click('start-plan');const s=a.current(),sources=()=>a.state.inputSources[s.id];
+  for(const path of ['healthcare.preMedicareMonthlyPremium','rothHistory.contributionBasis','rothHistory.firstContributionYear','contributions.pretax','contributions.cash'])assert.equal(sources()[path],'Unknown',path);
+  a.state.setupSection=1;let html=a.setup();
+  assert.match(html,/Are you still adding to your savings\?[^]*data-action="savings-answer"[^>]*data-answer="yes"/);assert.doesNotMatch(html,/id="f-contributions-pretax"/);
+  await a.click('savings-answer',{prefix:'contributions',answer:'yes'});html=a.setup();
+  assert.match(html,/id="f-contributions-pretax"/);assert.match(html,/Set the 5 remaining amounts to none/);
+  await a.change('#main',{dataset:{field:'contributions.pretax',type:'money'},value:'20000'});
+  await a.click('savings-rest-none',{prefix:'contributions'});
+  assert.equal(s.contributions.pretax,20000);assert.equal(s.contributions.cash,0);assert.equal(sources()['contributions.cash'],'Entered');
+  const b=app();await b.click('start-plan');await b.click('savings-answer',{prefix:'contributions',answer:'no'});
+  assert.ok(['pretax','employerPretax','roth','taxable','cash'].every(key=>b.current().contributions[key]===0&&b.state.inputSources[b.current().id]['contributions.'+key]==='Entered'));
+  // No Roth balance means no Roth history to find.
+  await b.click('input-none',{path:'accounts.roth'});
+  assert.equal(b.state.inputSources[b.current().id]['rothHistory.contributionBasis'],'Entered');assert.equal(b.current().rothHistory.firstContributionYear,0);
+});
+
+test('an Unknown pre-Medicare premium blocks a run only when someone retires before 65',async()=>{
+  const a=app();await a.click('start-plan');const s=a.current(),today=model.localCalendarDate();
+  s.household.birthday=model.addCalendarMonths(today,-60*12);s.household.retirementDate=model.addCalendarMonths(today,7*12);model.syncCalendarAges(s);
+  a.state.inputSources[s.id]={_origin:'Entered','healthcare.preMedicareMonthlyPremium':'Unknown'};
+  const pending=a.run();assert.equal(a.workers.length,1,'retiring at 67 never uses the premium');
+  a.workers[0].onmessage({data:{type:'result',result:runSimulation(a.workers[0].data.scenario)}});await pending;
+  s.household.retirementDate=model.addCalendarMonths(today,2*12);model.syncCalendarAges(s);
+  await a.run();assert.equal(a.workers.length,1,'retiring at 62 needs the premium');assert.match(a.state.message,/Unknown/);
+});
+
+test('the sample notice separates personal examples from example model assumptions',async()=>{
+  const a=app(),s=a.current();a.state.guided=true;
+  a.state.inputSources[s.id]={_origin:'Sample/default'};for(const path of ['household.birthday','household.retirementDate','household.gender','accounts.pretax','accounts.roth','accounts.cash','spending.annualBaseSpending','socialSecurity.annualBenefitAt67','socialSecurity.claimAge','healthcare.preMedicareMonthlyPremium','rothHistory.contributionBasis','rothHistory.firstContributionYear'])a.state.inputSources[s.id][path]='Entered';
+  const html=a.setup();
+  assert.match(html,/<summary>Example model assumptions in use \(\d+\)<\/summary>/);assert.match(html,/Stock return average %: 13\.3%/);
+  assert.doesNotMatch(html,/Your pension or annuity \/ year: \$0|Mortgage payment \/ month: \$0/,'zero amounts are not examples to replace');
+  s.socialSecurity.claimAge=67;a.state.inputSources[s.id]['socialSecurity.claimAge']='Sample/default';
+  assert.match(a.setup(),/Sample values are still in this plan \(1\)[^]*Claim age: 67[^]*<summary>Example model assumptions/);
+  a.state.setupSection=5;assert.match(a.setup(),/<dt>Pension or annuity<\/dt><dd>You None<small>None by default/);
+});
+
+test('individuals choose only individual filing statuses; couples are married filing jointly',async()=>{
+  const a=app();a.state.guided=true;let html=a.setup();
+  assert.match(html,/<label for="f-household-filingStatus">Tax filing status<\/label>/);assert.match(html,/<option value="HeadOfHousehold"/);assert.doesNotMatch(html,/<option value="Married"/);
+  await a.click('household-choice',{kind:'couple'});html=a.setup();
+  assert.doesNotMatch(html,/id="f-household-filingStatus"/);assert.match(html,/married filing jointly/);
+});
+
+test('the URL hash restores the view and setup step, and Continue my plan returns to the last step',async()=>{
+  const location={search:'',pathname:'/',hash:'#/forecast/3'},a=app(null,{location});
+  assert.equal(a.state.view,'setup');assert.equal(a.state.guided,true);assert.equal(a.state.setupSection,2);
+  const results=app(null,{location:{search:'',pathname:'/',hash:'#/results'}});assert.equal(results.state.view,'results');
+  const skip=app(null,{location:{search:'',pathname:'/',hash:'#main'}});assert.equal(skip.state.view,'dashboard');
+  const s=model.baseScenario(),preferences=new Map([['retirement-setup-step',JSON.stringify({id:s.id,section:3})]]);
+  const saved=app({scenarios:[s],selectedId:s.id},{preferences});await saved.click('start-plan');
+  assert.equal(saved.state.setupSection,3);assert.equal(saved.state.view,'setup');
+  saved.state.setupSection=4;saved.render();assert.deepEqual(JSON.parse(preferences.get('retirement-setup-step')),{id:s.id,section:4});
 });

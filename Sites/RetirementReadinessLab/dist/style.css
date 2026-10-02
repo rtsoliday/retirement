@@ -288,6 +288,8 @@ main{container-type:inline-size}
 .household-choice{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px}.household-choice button{flex:1;min-width:180px;padding:16px}
 .field-guidance{font-size:.85rem;line-height:1.5;color:#425e66;margin:8px 0}
 .field-unknown{font-size:.82rem;font-weight:650;color:#90332d;margin:0}
+.field-error{font-size:.85rem;font-weight:650;color:#90332d;margin:6px 0 0}
+.field input[aria-invalid=true]{border-color:#b4433b;box-shadow:0 0 0 2px rgba(180,67,59,.18)}
 .field.checkbox .field-guidance{grid-column:1/-1;width:100%}
 .guidance-scope{font-weight:650;color:#2f4a52}
 /* Larger ? target on touch screens; the invisible margin stays inside the 6px field gap. */
@@ -299,7 +301,7 @@ main{container-type:inline-size}
 /* Guided setup uses the step list instead of the section sidebar. */
 .setup-layout.guided{display:block}
 .setup-steps{display:flex;flex-wrap:wrap;gap:2px 14px;list-style:none;margin:0;padding:0;font-size:.85rem}.setup-steps button{min-height:32px;color:#52676e;text-decoration:none}.setup-steps button[aria-current]{color:#176b5b;font-weight:700;text-decoration:underline}
-.earnings-note,.steady-explanation{margin:18px 0}.earnings-note ul,.steady-explanation ul{margin:8px 0;padding-left:20px}.earnings-note li,.steady-explanation li{margin:4px 0}.earnings-note p,.steady-explanation p{margin:6px 0}
+.earnings-note,.steady-explanation{margin:18px 0}.earnings-note>summary{font-weight:700;cursor:pointer}.earnings-note ul,.steady-explanation ul{margin:8px 0;padding-left:20px}.earnings-note li,.steady-explanation li{margin:4px 0}.earnings-note p,.steady-explanation p{margin:6px 0}
 .form-group+.setup-notice{margin:0 0 20px}
 @media(max-width:600px){.setup-steps{flex-wrap:nowrap;overflow-x:auto;white-space:nowrap;padding-bottom:4px}}
 .notice.error ul{margin:8px 0 0;padding-left:20px}.review-all>summary{font-weight:700;cursor:pointer}.review-all[open]>summary{margin-bottom:16px}.form-group h4{margin:18px 0 8px}

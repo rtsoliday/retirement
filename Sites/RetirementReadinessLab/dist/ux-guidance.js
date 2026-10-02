@@ -27,7 +27,7 @@ export const EARNINGS_EXPLANATION=EARNINGS_POINTS.map(([lead,text])=>lead+' '+te
 // Short line shown under the input: who it covers, what to enter and where to find it.
 // How the model uses the value belongs in the ? explanation (assumptionHelp in app.js).
 export const FIELD_GUIDANCE={
-  'household.filingStatus':'Household · Couples choose Married. Single and Head of household model one person.',
+  'household.filingStatus':'You · Choose Head of household only if you are unmarried and pay most household costs for a qualifying dependent.',
   'household.birthday':'You · Your date of birth, not a retirement age.',
   'household.retirementDate':'Household · One retirement date for both of you in this shared-date plan.',
   'household.spouseBirthday':'Spouse · Their date of birth.',
