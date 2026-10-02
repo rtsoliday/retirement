@@ -238,7 +238,7 @@ test('Roth history edits save, invalidate results, survive reload, and appear in
   await a.change('#main',{dataset:{field:'rothHistory.conversions.0.amount',type:'money'},value:'11000'});
   assert.equal(s.rothHistory.conversions[0].taxableAmount,8000,'An explicit partially taxable conversion is preserved');
   const restored=app(a.saved());assert.deepEqual(JSON.parse(JSON.stringify(restored.current().rothHistory)),JSON.parse(JSON.stringify(s.rothHistory)));
-  const report=a.reportText(s,null);assert.match(report,/Remaining regular contributions: \$75,000/);
+  const report=a.reportText(s,null);assert.match(report,/Remaining regular contributions: \$75,000/);assert.doesNotMatch(report,/Value source/);
   assert.match(report,/First Roth funding tax year: 2024/);assert.match(report,/Tax year 2025: remaining principal \$11,000.00; remaining taxable principal \$8,000.00/);
   await a.click('export-backup');const backup=JSON.parse(await a.downloads[0].blob.text());
   assert.deepEqual(backup.scenarios[0].rothHistory,JSON.parse(JSON.stringify(s.rothHistory)));
@@ -1358,6 +1358,7 @@ test('blank assumption amounts remain Unknown across saves and backups; explicit
   await a.run();await a.runLab();a.state.access.tier='pro';await a.runDecision();assert.equal(a.workers.length,0);
   const restored=app(a.saved());restored.state.setupSection=2;
   assert.match(restored.setup(),/id="f-guaranteedIncome-annualIncome"[^>]*value=""/);
+  assert.match(restored.setup(),/aria-describedby="[^"]*f-guaranteedIncome-annualIncome-unknown"[\s\S]*<p class="field-unknown" id="f-guaranteedIncome-annualIncome-unknown">Unknown · enter a number; 0 means none\.<\/p>/);
   restored.state.setupSection=5;assert.match(restored.setup(),/Unknown · number needed/);assert.match(restored.setup(),/data-action="run-plan" disabled/);
   await a.click('export-backup');const backup=JSON.parse(await a.downloads[0].blob.text());
   await restored.change('#import-file',{files:[{text:async()=>JSON.stringify(backup)}],value:'backup.json'});
@@ -1369,7 +1370,7 @@ test('blank assumption amounts remain Unknown across saves and backups; explicit
 test('estimated inputs keep their numeric meaning, source and engine result through reload and copy',async()=>{
   const a=app(),s=a.current();s.household.asOfDate=model.localCalendarDate();
   await a.change('#main',{dataset:{field:'guaranteedIncome.annualIncome',type:'money'},value:'18000'});
-  await a.change('#main',{dataset:{inputSource:'guaranteedIncome.annualIncome'},value:'Estimated'});
+  a.state.inputSources[s.id]['guaranteedIncome.annualIncome']='Estimated';await a.persist();
   const clean=r=>{const copy=structuredClone(r);delete copy.generatedAtEpochMillis;return copy;},before=clean(runSimulation(s));
   const restored=app(a.saved());assert.equal(restored.state.inputSources[s.id]['guaranteedIncome.annualIncome'],'Estimated');
   assert.deepEqual(clean(runSimulation(restored.current())),before);
@@ -1389,7 +1390,8 @@ test('cleared detailed assumptions also retain Unknown across reload',async()=>{
 
 test('legacy input provenance is not guessed from matching a sample balance',()=>{
   const s=model.baseScenario(),a=app({scenarios:[s],selectedId:s.id});a.state.setupSection=1;
-  assert.match(a.setup(),/Saved value; source not recorded/);assert.equal(a.current().accounts.pretax,500000);
+  assert.match(a.setup(),/Check older saved values/);assert.doesNotMatch(a.setup(),/Value source|data-input-source/,'Sources are recorded, not picked');
+  a.state.setupSection=5;assert.match(a.setup(),/Saved value; source not recorded/);assert.equal(a.current().accounts.pretax,500000);
   assert.equal(a.state.inputSources[s.id]['household.birthday'],'Estimated','Legacy birthday is explicitly inferred');
   const sources=guidance.normalizeInputSources({[s.id]:{_origin:'Unknown',fake:'Unknown','accounts.pretax':'Unknown'}},[s]);
   assert.equal(sources[s.id]._origin,'Saved value; source not recorded');assert.equal(sources[s.id].fake,undefined);assert.equal(sources[s.id]['accounts.pretax'],'Unknown');
@@ -1450,8 +1452,8 @@ test('new household inputs have ownership, annual examples and editable sources;
   a.state.setupSection=1;assert.match(a.setup(),/Your future savings/);assert.match(a.setup(),/\$500 monthly means \$6,000 yearly/);assert.doesNotMatch(a.setup(),/Spouse retirement accounts/);
   a.state.setupSection=2;assert.doesNotMatch(a.setup(),/Working household support/);
   await a.click('household-choice',{kind:'couple'});a.state.setupSection=0;assert.match(a.setup(),/Spouse retirement date/);
-  a.state.setupSection=1;assert.match(a.setup(),/Spouse retirement accounts/);assert.match(a.setup(),/Source for Spouse pre-tax \/ non-Roth balance/);
-  a.state.setupSection=2;assert.match(a.setup(),/Spouse · Pension/);assert.match(a.setup(),/Source for Spouse own Social Security/);assert.match(a.setup(),/after taxes and these savings deposits/);
+  a.state.setupSection=1;assert.match(a.setup(),/Spouse retirement accounts/);assert.match(a.setup(),/id="f-spouseAccounts-pretax"/);
+  a.state.setupSection=2;assert.match(a.setup(),/Spouse · Pension/);assert.match(a.setup(),/id="f-spouseIncome-annualBenefitAt67"/);assert.match(a.setup(),/after taxes and these savings deposits/);
   seedExploration(a);await a.click('add-spouse-conversion');assertCleared(a);assert.equal(a.current().spouseRothHistory.conversions.length,1);
   seedExploration(a);await a.click('remove-spouse-conversion',{index:'0'});assertCleared(a);
 });

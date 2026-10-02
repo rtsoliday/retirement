@@ -26,7 +26,6 @@ export const EARNINGS_POINTS=[
 export const EARNINGS_EXPLANATION=EARNINGS_POINTS.map(([lead,text])=>lead+' '+text).join(' ');
 // Short line shown under the input: who it covers, what to enter and where to find it.
 // How the model uses the value belongs in the ? explanation (assumptionHelp in app.js).
-// Every path here also gets an editable value source.
 export const FIELD_GUIDANCE={
   'household.filingStatus':'Household · Couples choose Married. Single and Head of household model one person.',
   'household.birthday':'You · Your date of birth, not a retirement age.',
