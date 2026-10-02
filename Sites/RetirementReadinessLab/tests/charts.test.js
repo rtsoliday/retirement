@@ -36,7 +36,8 @@ test('scatter output does not change simulation results and mean uses observed p
   const a=runSimulation(s),b=runSimulation(s,()=>{},{includePathPoints:false});
   assert.ok(a.pathPoints.some(p=>!p.successfulPath));assert.ok(a.pathPoints.every(p=>p.balance>0));
   for(const m of a.meanPath){const points=a.pathPoints.filter(p=>p.yearsInRetirement===m.yearsInRetirement);assert.ok(Math.abs(m.balance-points.reduce((sum,p)=>sum+p.balance,0)/points.length)<.001);}
-  delete a.generatedAtEpochMillis;delete b.generatedAtEpochMillis;delete a.pathPoints;delete b.pathPoints;assert.deepEqual(a,b);
+  delete a.generatedAtEpochMillis;delete b.generatedAtEpochMillis;delete a.pathPoints;delete b.pathPoints;
+  assert.ok(a.todayDollars.pathPoints.length);assert.deepEqual(b.todayDollars.pathPoints,[]);delete a.todayDollars.pathPoints;delete b.todayDollars.pathPoints;assert.deepEqual(a,b);
 });
 
 test('scatter dots at the final age stay visible while points outside a zoomed viewport stay clipped',()=>{
@@ -118,9 +119,10 @@ test('funding and survival strokes and shading change only at event ages, includ
       assert.equal(funded()[1][0],funded()[2][0]);assert.equal(alive()[3][0],alive()[4][0]);
     };
     mountCharts({querySelectorAll:q=>q==='[data-plot]'?[el]:[]},result,65);
-    assert.deepEqual(funded(),[[68,22],[326,22],[326,256],[584,256],[584,256]]);
-    assert.deepEqual(alive(),[[68,22],[326,22],[326,22],[584,22],[584,256]]);
-    assert.deepEqual(shaded(),[[68,256],[68,22],[326,22],[326,256],[584,256],[584,256],[584,256]]);assertSteps();
+    // 100% and 0% sit 10px inside the 22–256px frame, off its top and bottom borders.
+    assert.deepEqual(funded(),[[68,32],[326,32],[326,246],[584,246],[584,246]]);
+    assert.deepEqual(alive(),[[68,32],[326,32],[326,32],[584,32],[584,246]]);
+    assert.deepEqual(shaded(),[[68,246],[68,32],[326,32],[326,246],[584,246],[584,246],[584,246]]);assertSteps();
     disposeCharts();
     let expand;const controls=new Map(),button={dataset:{expandPlot:'survival'},addEventListener(_event,fn){expand=fn;},focus(){}};
     const dialog={showModal(){},close(){},remove(){},addEventListener(){},querySelector:q=>q==='[data-plot]'?el:q==='[data-expand-plot]'||q==='.plot-card .section-heading'?{remove(){}}:(controls.has(q)?controls.get(q):(controls.set(q,{}),controls.get(q)))};
@@ -169,6 +171,24 @@ test('chart drawing and pointer inspection agree for partial-year spans, includi
         click(366);assert.equal(slider.value,69.75);
         controls.get('[data-reset]').onclick();click(584);assert.equal(slider.value,70);
       }finally{disposeCharts();globalThis.document=originalDocument;}
+    }
+  }finally{disposeCharts();globalThis.ResizeObserver=originalObserver;globalThis.window=originalWindow;}
+});
+
+test('balance charts label the selected dollar basis on the axis and in age inspection',()=>{
+  const originalObserver=globalThis.ResizeObserver,originalWindow=globalThis.window;
+  globalThis.window={devicePixelRatio:1};
+  globalThis.ResizeObserver=class{constructor(callback){this.callback=callback;}observe(){this.callback();}disconnect(){}};
+  try{
+    for(const [basis,label] of [['today','Today’s dollars'],[undefined,'Future dollars']]){
+      const texts=[],ctx=new Proxy({fillText:text=>texts.push(text)},{get:(target,key)=>target[key]??(()=>{})});
+      const canvas={getContext:()=>ctx,setAttribute(){},getAttribute:()=>'',classList:{add(){}},getBoundingClientRect:()=>({width:600,height:300,left:0,top:0})};
+      const slider={},output={},caption={textContent:''},el={dataset:{plot:'bands'},querySelector:q=>q==='canvas'?canvas:q==='input[type=range]'?slider:q==='output'?output:caption};
+      const result={provenance:{simulationCount:4},dollarBasis:basis,notFailedByAge:[{age:65,notFailedShare:1,aliveShare:1},{age:70,notFailedShare:1,aliveShare:1}],balanceBands:[{age:65,pessimistic:1,median:2,optimistic:3,pathCount:4},{age:70,pessimistic:1,median:2,optimistic:3,pathCount:4}]};
+      mountCharts({querySelectorAll:q=>q==='[data-plot]'?[el]:[]},result,65);
+      assert.ok(texts.includes(`${label} · linear scale`));assert.match(output.textContent,new RegExp(label+'$'));
+      assert.doesNotMatch(caption.textContent,/Sample preview only/);
+      disposeCharts();
     }
   }finally{disposeCharts();globalThis.ResizeObserver=originalObserver;globalThis.window=originalWindow;}
 });

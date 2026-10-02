@@ -100,7 +100,7 @@ test('a shortfall in the first month ends at retirement age with zero downside a
 });
 test('successful lifetime balances stop at last living age rather than model cap',()=>{
   const s=baseScenario();s.seed=REFERENCE_SEED;s.numberOfSimulations=1;
-  const path=runOne(s,new JavaRandom(s.seed)),r=runSimulation(s);
+  const path=runOne(s,new JavaRandom(s.seed)),r=runSimulation(s,undefined,{stratifyPreviewLifespans:false});
   assert.equal(path.success,true);assert.ok(path.survivedThroughAge<s.household.targetEndAge);
   assert.equal(r.balanceBands.at(-1).age,path.survivedThroughAge);
   assert.ok(path.yearEnd.length<s.household.targetEndAge-s.household.retirementAge+1);

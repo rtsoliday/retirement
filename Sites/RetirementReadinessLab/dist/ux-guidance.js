@@ -48,7 +48,7 @@ export const FIELD_GUIDANCE={
   'mortgage.currentBalance':'Household · Unpaid principal today, from your mortgage statement.',
   'rent.monthlyRent':'Household · Monthly rent today from your lease; enter 0 if none.',
   'home.currentValue':'Household · Estimated sale value today, before subtracting the mortgage.',
-  'home.annualTaxesAndInsurance':'Household · Yearly property tax and home insurance, from bills. Also include these in base spending.',
+  'home.annualTaxesAndInsurance':'Household · Yearly property tax and home insurance, from bills. Keep them in base spending too; this amount only tells the model what stops if the home is sold.',
   'healthcare.preMedicareMonthlyPremium':'Each adult · Monthly premium today, from an insurance quote or bill.',
   'longTermCare.annualCost':'Each person · Yearly care cost today, from a care-provider estimate.',
   'market.preRetirementMeanReturn':'Annual % · Investment growth only, before inflation. New savings go under Future savings.',

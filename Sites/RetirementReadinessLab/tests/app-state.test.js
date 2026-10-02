@@ -347,21 +347,25 @@ test('Results tables group monthly observations by whole-year age and keep the l
   assert.equal(JSON.stringify([r.notFailedByAge,r.balanceBands]),monthlyData,'Table grouping preserves monthly chart data');
 });
 
-test('Results show every monthly account and debt row from the completed steady-growth run',()=>{
+test('Results show yearly account and debt rows from the completed steady-growth run, collapsed by default',()=>{
   const a=app(),s=a.current(),r=runSimulation(s);a.state.results.set(s.id,r);
   const details=JSON.stringify(r.steadySimulation),html=a.results();
-  assert.match(html,/Steady-growth illustration · monthly balances/);
+  assert.match(html,/<details class="card steady-details"><summary><h2>Steady-growth illustration · yearly balances<\/h2>/);
   assert.match(html,/all volatility set to 0%/);
   assert.match(html,/long-term care risk turned off/);
   assert.match(html,/not a statistical median/);
   assert.match(html,/Assumed lifespan: you to age 95/);
   assert.doesNotMatch(html,/lower of the two middle paths/);
   for(const label of ['Pre-tax','Roth','Taxable','Cash','Home value','Mortgage debt','Portfolio total','Net assets'])assert.ok(html.includes(label),label);
-  const monthly=html.match(/<div class="table-wrap monthly-balances".*?<tbody>(.*?)<\/tbody>/s)[1];
-  assert.equal([...monthly.matchAll(/<tr>/g)].length,r.steadySimulation.monthlyDetails.length);
+  const monthly=html.match(/<div class="table-wrap monthly-balances".*?<tbody>(.*?)<\/tbody>/s)[1],rows=r.steadySimulation.monthlyDetails,last=rows.at(-1);
+  const yearly=rows.filter((p,i)=>p.month%12===0||i===rows.length-1);
+  assert.equal([...monthly.matchAll(/<tr>/g)].length,yearly.length);
+  assert.ok(yearly.length<rows.length/10);
   assert.match(monthly,/Retirement start/);
-  assert.ok(monthly.includes('Month '+r.steadySimulation.monthlyDetails.at(-1).month));
-  assert.ok(monthly.includes(new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(r.steadySimulation.monthlyDetails[0].pretax)));
+  assert.ok(monthly.includes(last.month%12?'Final month':'Year '+last.month/12));
+  const whole=new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0});
+  assert.ok(monthly.includes(whole.format(rows[0].pretax)));
+  assert.doesNotMatch(monthly,/\$[\d,]+\.\d\d/);
   s.accounts.pretax=123;s.numberOfSimulations=10000;
   assert.equal(a.results(),html,'Retained results use the completed balances and path count');
   assert.equal(JSON.stringify(r.steadySimulation),details);
@@ -1465,4 +1469,70 @@ test('future savings unknown versus zero, separate ownership, copy and JSON back
   await a.click('export-backup');const backup=JSON.parse(await a.downloads.at(-1).blob.text());const restored=app(backup);
   assert.equal(restored.current().spouseIncome.annualBenefitAt67,18000);assert.equal(restored.current().spouseContributions.roth,6000);assert.equal(restored.state.inputSources[copy.id]['contributions.pretax'],'Entered');
   restored.state.setupSection=5;assert.match(restored.setup(),/Spouse retirement accounts/);assert.match(restored.setup(),/Planned|annual future savings deposits/);
+});
+
+test('Results switch between future and today’s dollars without changing counts',async()=>{
+  const a=app(),s=a.current(),r=runSimulation(s);a.state.results.set(s.id,r);
+  const whole=v=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(v);
+  const future=a.results();
+  assert.match(future,/name="dollar-basis" value="future" checked/);
+  assert.match(future,/Median ending balance · future dollars/);
+  assert.ok(future.includes(whole(r.medianEndingBalance)));
+  await a.change('#main',{name:'dollar-basis',value:'today',dataset:{}});
+  assert.equal(a.state.dollarBasis,'today');
+  const today=a.results(),steady=r.steadySimulation.monthlyDetails[0],index=r.todayDollars.steadyPriceIndexes[0];
+  assert.match(today,/name="dollar-basis" value="today" checked/);
+  assert.match(today,/Median ending balance · today’s dollars/);
+  assert.ok(today.includes(whole(r.todayDollars.medianEndingBalance)));
+  assert.ok(today.includes(whole(steady.pretax/index)),'steady rows use the run’s price level');
+  assert.equal(today.match(/ of 10/g).length,future.match(/ of 10/g).length);
+  assert.match(a.reportText(s,r),/Median ending balance \(today’s dollars, each path adjusted by its own inflation\)/);
+  await a.change('#main',{name:'dollar-basis',value:'future',dataset:{}});
+  assert.equal(a.results(),future);
+});
+
+test('Results open with a short verdict, state the preview caveat once and flag sample values',()=>{
+  const a=app(),s=a.current(),r=runSimulation(s);a.state.results.set(s.id,r);
+  const html=a.results();
+  assert.ok(html.indexOf('In short')<html.indexOf('result-hero'));
+  assert.match(html,/Am I on track\?/);assert.match(html,/too few to/);
+  assert.ok(html.includes(r.riskBreakdown.recommendedNextTest));
+  assert.equal(html.split('too small a sample to estimate').length-1,1);
+  assert.match(html,/lifespans run from short to long/);
+  assert.match(html,/Based partly on sample values/);
+  a.state.inputSources[s.id]={_origin:'Entered'};
+  assert.doesNotMatch(a.results(),/Based partly on sample values/);
+});
+
+test('Household setup confirms ages as dates change and uses plain longevity wording',async()=>{
+  const today=model.localCalendarDate(),s=model.baseScenario();
+  Object.assign(s.household,{birthday:model.addCalendarMonths(today,-51*12),retirementDate:model.addCalendarMonths(today,14*12+3)});
+  const a=app({scenarios:[s],selectedId:s.id});a.state.view='setup';a.state.setupSection=0;
+  const html=a.setup();
+  assert.match(html,/id="age-feedback"[^>]*>You are 51 today\. You would retire at 65 years 3 months on [^<]*, 14 years 3 months from now\.</);
+  assert.match(html,/Your sex \(for life expectancy\)/);
+  assert.match(html,/<option value="Male" selected>Male<\/option><option value="Female" >Female<\/option>/);
+  assert.doesNotMatch(html,/mortality rates<\/option>/);
+  await a.change('#main',{dataset:{field:'household.retirementDate',type:'date'},value:model.addCalendarMonths(today,16*12)});
+  assert.match(a.element('#age-feedback').textContent,/^You are 51 today\. You would retire at 67 on .*, 16 years from now\.$/);
+  a.current().household.filingStatus='Married';a.current().household.spouseBirthday=model.addCalendarMonths(today,-49*12);
+  assert.match(a.setup(),/id="spouse-age-feedback"[^>]*>Your spouse is 49 today and would be 65 on the shared retirement date, 16 years from now\.</);
+});
+
+test('the save confirmation stays on the step where the edit happened',async()=>{
+  const a=app();a.state.view='setup';a.state.guided=true;a.state.setupSection=1;
+  await a.change('#main',{dataset:{field:'accounts.cash',type:'money'},value:'1000'});
+  assert.equal(a.state.message,'Saved. Run the simulation to refresh results.');
+  await a.click('setup-section',{index:'2'});
+  assert.equal(a.state.setupSection,2);assert.equal(a.state.message,'');
+  assert.doesNotMatch(a.setup(),/Saved\. Run the simulation/);
+});
+
+test('pension guidance mentions a spouse only for couples, and the home-cost hint matches the model',()=>{
+  const a=app(),s=a.current();a.state.setupSection=2;
+  const note=()=>a.setup().match(/You · Pension or annuity income<\/h3><p>(.*?)<\/p>/)[1];
+  s.household.filingStatus='Single';assert.doesNotMatch(note(),/spouse/i);
+  s.household.filingStatus='Married';assert.match(note(),/spouse/);
+  const hint=guidance.FIELD_GUIDANCE['home.annualTaxesAndInsurance'];
+  assert.doesNotMatch(hint,/Also include/);assert.match(hint,/Keep them in base spending too/);assert.match(hint,/stops if the home is sold/);
 });

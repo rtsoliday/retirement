@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {baseScenario,addCalendarMonths,retirementAge} from '../dist/model.js';
-import {runSimulation,runOne,JavaRandom,runSteadySimulation} from '../dist/engine.js';
+import {runSimulation,runOne,JavaRandom,runSteadySimulation,previewLifespanQuantiles} from '../dist/engine.js';
 import {mortgageAtRetirement,payMortgage} from '../dist/mortgage.js';
 
 const stride=-7046029254386353131n;
@@ -86,10 +86,10 @@ test('retirement after the assumed household lifetime has no invented balances',
 test('extra steady simulation preserves the plan and all sampled outcome counts and medians',()=>{
   for(const count of [1,3,4,20]){
     const s=baseScenario();s.numberOfSimulations=count;
-    const original=structuredClone(s),paths=Array.from({length:count},(_,index)=>{
-      const seed=BigInt(s.seed)+BigInt(index)*stride;
-      const plain=runOne(s,new JavaRandom(seed),{captureMonthlyBalances:true,captureTaxDetails:true});
-      const {monthlyDetails,...detailed}=runOne(s,new JavaRandom(seed),{captureMonthlyBalances:true,captureMonthlyDetails:true,captureTaxDetails:true});
+    const original=structuredClone(s),bands=previewLifespanQuantiles(count,s.seed),paths=Array.from({length:count},(_,index)=>{
+      const seed=BigInt(s.seed)+BigInt(index)*stride,lifespanQuantiles=bands?.[index]??null;
+      const plain=runOne(s,new JavaRandom(seed),{captureMonthlyBalances:true,captureTaxDetails:true,lifespanQuantiles});
+      const {monthlyDetails,...detailed}=runOne(s,new JavaRandom(seed),{captureMonthlyBalances:true,captureMonthlyDetails:true,captureTaxDetails:true,lifespanQuantiles});
       assert.deepEqual(detailed,plain);
       return plain;
     });

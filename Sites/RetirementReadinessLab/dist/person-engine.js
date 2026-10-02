@@ -4,9 +4,9 @@ import {taxableSocialSecurity,ordinaryIncomeTax,rothConversionPlan} from './tax.
 import {mortgageAtRetirement,payMortgage} from './mortgage.js';
 import {PersonAccounts} from './person-accounts.js';
 import {personSocialSecurity,personPensions} from './person-income.js';
-import {monthly,requireFinite,sum,sampleDeathAge,ltcStart,allocation,spendingPath,medicarePremium,seppPayment} from './engine.js';
+import {monthly,requireFinite,sum,drawLifetimes,ltcStart,allocation,spendingPath,medicarePremium,seppPayment} from './engine.js';
 
-export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails=false,captureTaxDetails=false,taxesEnabled=true,horizonReductionYears=0,fixedDeathAges=null}={}){
+export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails=false,captureTaxDetails=false,captureTodayDollars=false,taxesEnabled=true,horizonReductionYears=0,fixedDeathAges=null,lifespanQuantiles=null}={}){
   const timeline=scenarioTimeline(s),h={...s.household,currentAge:timeline.currentAge,retirementAge:timeline.retirementAge},b={...s.accounts},preMonths=timeline.preMonths;
   const preReturns=monthlyRateDistribution(s.market.preRetirementMeanReturn,s.market.preRetirementStdDev),cashGrowth=monthly(.02),incomeTax=taxesEnabled?ordinaryIncomeTax:()=>0;
   const pools=new PersonAccounts(s,b);
@@ -14,7 +14,7 @@ export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMon
   const married=h.filingStatus==='Married',spouseAtRet=timeline.spouseAtRet;
   // The reporting cutoff must not determine death or move terminal care sooner.
   // Draw the full lifetime from the table, then truncate cash flows separately.
-  const death=fixedDeathAges?.primary??sampleDeathAge(h.gender,h.retirementAge,120,rng),spouseDeath=married?(fixedDeathAges?.spouse??sampleDeathAge(h.spouseGender,spouseAtRet,120,rng)):death;
+  const [death,spouseDeath]=drawLifetimes(h,spouseAtRet,married,rng,fixedDeathAges,lifespanQuantiles);
   const spouseDeathPrimary=h.retirementAge+spouseDeath-spouseAtRet,houseDeath=married?Math.max(death,spouseDeathPrimary):death;
   const primaryDeathYear=Math.floor((Math.round(death*12)-Math.round(h.retirementAge*12))/12),spouseDeathYear=Math.floor((Math.round(spouseDeath*12)-Math.round(spouseAtRet*12))/12);
   const firstDeathYear=Math.min(primaryDeathYear,spouseDeathYear);
@@ -30,12 +30,15 @@ export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMon
   const stockReturns=monthlyRateDistribution(s.market.stockMeanReturn,s.market.stockStdDev),bondReturns=monthlyRateDistribution(s.market.bondMeanReturn,s.market.bondStdDev);
   const primaryHorizon=h.targetEndAge-h.retirementAge,spouseHorizon=h.targetEndAge-spouseAtRet,horizon=fixedDeathAges?Math.max(0,houseDeath-h.retirementAge):Math.max(primaryHorizon,married?spouseHorizon:primaryHorizon);
   const yearEnd=[sum(b)],chart=[sum(b)],incomeHistory=[],monthlyBalances=captureMonthlyBalances?[]:null,taxYears=captureTaxDetails?[]:null;let annualOrdinaryIncome=0,annualSocialSecurity=0,annualTaxPaid=0,annualPretaxDistributions=0,annualRmd=0,annualConversions=0,yearTaxIndex=taxIndex,failureAge=null,homeSold=false;
+  // Today's dollars divide each balance by this path's own general price level.
+  const today=captureTodayDollars?{yearEnd:[sum(b)/taxIndex],chart:[sum(b)/taxIndex],...(monthlyBalances?{monthlyBalances:[]}:{}),...(captureMonthlyDetails?{monthlyPriceIndex:[]}:{})}:null;
   const stopAge=Math.max(h.retirementAge,Math.min(h.retirementAge+horizon,houseDeath-Math.max(0,horizonReductionYears)));
   function checkCosts(){requireFinite(spending,rent,home,seniorRent,homeCosts,preMedicare,healthIndex,taxIndex,priorYearTaxIndex,ssIndex,mortgageBalance);}
   checkCosts();
   const monthlyDetails=captureMonthlyDetails?[]:null;let monthlyCashFlow=null;
   function recordMonth(month){
     if(!monthlyDetails)return;
+    today?.monthlyPriceIndex.push(taxIndex);
     const accounts={...b,cash:Math.max(0,b.cash)},portfolio=accounts.pretax+accounts.roth+accounts.taxable+accounts.cash;
     const netAssets=portfolio+home-mortgageBalance;
     requireFinite(portfolio,netAssets);
@@ -53,7 +56,7 @@ export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMon
   for(let m=0;m<Math.round(horizon*12);m++){
     const ageMonths=Math.round(h.retirementAge*12)+m,spouseMonths=Math.round(spouseAtRet*12)+m,monthInYear=m%12;
     if(ageMonths>=Math.round(stopAge*12))break;
-    if(monthlyBalances)monthlyBalances[m]=sum(b);
+    if(monthlyBalances){monthlyBalances[m]=sum(b);if(today)today.monthlyBalances[m]=monthlyBalances[m]/taxIndex;}
     const primaryAlive=ageMonths<Math.round(death*12),spouseAlive=married&&ageMonths<Math.round(spouseDeathPrimary*12),both=married&&primaryAlive&&spouseAlive,alive=Number(primaryAlive)+Number(spouseAlive),modelYear=Math.floor(m/12),taxYear=timeline.retirementYear+modelYear;
     // Joint tax treatment lasts through the modeled year of the first death;
     // monthly household costs and benefits still follow who is currently alive.
@@ -136,9 +139,9 @@ export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMon
     if(!homeSold&&mortgageMonths>0){mortgageBalance=payMortgage(mortgageBalance,mortgageCost,mortgage.rate);mortgageMonths--;}
     sum(b);requireFinite(annualOrdinaryIncome,annualSocialSecurity,annualTaxPaid,annualPretaxDistributions,annualConversions,mortgageBalance);
     if(b.cash<0&&b.cash>-.01)b.cash=0;
-    if(b.cash<0&&failureAge===null){sellHome();if(b.cash<0){failureAge=ageMonths/12;if(monthlyBalances)monthlyBalances[m]=0;yearEnd.push(0);recordTaxYear(taxYear,status);recordMonth(m+1);break;}}
+    if(b.cash<0&&failureAge===null){sellHome();if(b.cash<0){failureAge=ageMonths/12;if(monthlyBalances){monthlyBalances[m]=0;if(today)today.monthlyBalances[m]=0;}yearEnd.push(0);today?.yearEnd.push(0);recordTaxYear(taxYear,status);recordMonth(m+1);break;}}
     completedMonths=m+1;
-    if(monthInYear===11){yearEnd.push(sum(b));chart.push(sum(b));}
+    if(monthInYear===11){yearEnd.push(sum(b));chart.push(sum(b));if(today){today.yearEnd.push(sum(b)/taxIndex);today.chart.push(sum(b)/taxIndex);}}
     const inf=sampleMonthlyRate(inflation,rng),healthInf=sampleMonthlyRate(healthInflation,rng),nextFactor=spendingPath(s,m+1,timeline),change=nextFactor/Math.max(.0001,pathFactor);
     spending*=(1+inf)*change;rent*=1+inf;if(!homeSold)home*=1+inf;seniorRent*=1+inf;homeCosts*=(1+inf)*change;preMedicare*=1+healthInf;healthIndex*=1+healthInf;taxIndex*=1+inf;pathFactor=nextFactor;
     checkCosts();
@@ -153,8 +156,8 @@ export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMon
     }
   }
   // A retirement with extra months can end between annual observations.
-  if(failureAge===null&&completedMonths%12!==0){yearEnd.push(sum(b));const modelYear=Math.floor((completedMonths-1)/12);recordTaxYear(timeline.retirementYear+modelYear,married?(modelYear<=firstDeathYear?'Married':'Single'):h.filingStatus);}
+  if(failureAge===null&&completedMonths%12!==0){yearEnd.push(sum(b));today?.yearEnd.push(sum(b)/taxIndex);const modelYear=Math.floor((completedMonths-1)/12);recordTaxYear(timeline.retirementYear+modelYear,married?(modelYear<=firstDeathYear?'Married':'Single'):h.filingStatus);}
   const censored=stopAge<houseDeath,survivedThroughAge=censored?stopAge:h.retirementAge+Math.max(0,Math.ceil(houseDeath-h.retirementAge)-1);
-  return {success:failureAge===null,failureAge,yearEnd,chart,survivedThroughAge,deathAge:houseDeath,observationEndAge:stopAge,censored,...(monthlyBalances?{monthlyBalances}:{}),...(monthlyDetails?{monthlyDetails}:{}),...(taxYears?{taxYears}:{})};
+  return {success:failureAge===null,failureAge,yearEnd,chart,survivedThroughAge,deathAge:houseDeath,observationEndAge:stopAge,censored,...(monthlyBalances?{monthlyBalances}:{}),...(monthlyDetails?{monthlyDetails}:{}),...(taxYears?{taxYears}:{}),...(today?{today}:{})};
 }
 

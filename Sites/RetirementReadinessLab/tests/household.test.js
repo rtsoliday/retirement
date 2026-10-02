@@ -128,9 +128,11 @@ test('unknown active amounts block, zero is distinct, and inactive spouse inputs
   assert.equal(unknownInputPaths(s,sources).length,3);sources[s.id]['contributions.pretax']='Entered';s.contributions.pretax=0;assert.equal(unknownInputPaths(s,sources).length,2);
   s.household.filingStatus='Single';assert.deepEqual(unknownInputPaths(s,sources),[]);s.household.filingStatus='Married';s.household.separatePeople=false;assert.deepEqual(unknownInputPaths(s,sources),[]);
 });
+// The fixtures predate today's-dollar summaries and evenly spread preview
+// lifespans; excluding both keeps the original future-dollar results identical.
 test('pre-change complete seeded results remain identical after normalization of old backups',()=>{
   const fixtures=JSON.parse(readFileSync(new URL('./fixtures/pre-household-results.json',import.meta.url)));
-  for(const f of fixtures){const s=normalizeScenario(f.scenario);assert.equal(s.household.separatePeople,false);const r=runSimulation(s);delete r.generatedAtEpochMillis;
+  for(const f of fixtures){const s=normalizeScenario(f.scenario);assert.equal(s.household.separatePeople,false);const r=runSimulation(s,undefined,{stratifyPreviewLifespans:false});delete r.generatedAtEpochMillis;delete r.todayDollars;
     assert.equal(createHash('sha256').update(JSON.stringify(r)).digest('hex'),f.sha256,f.name);
   }
 });
