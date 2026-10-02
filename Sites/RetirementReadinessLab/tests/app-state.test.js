@@ -1498,7 +1498,8 @@ test('Results open with a short verdict, state the preview caveat once and flag 
   const html=a.results();
   assert.ok(html.indexOf('In short')<html.indexOf('result-hero'));
   assert.match(html,/Am I on track\?/);assert.match(html,/too few to/);
-  assert.ok(html.includes(r.riskBreakdown.recommendedNextTest));
+  assert.match(html,/What should I try next\?/);
+  assert.match(html,/What to do next/);
   assert.equal(html.split('too small a sample to estimate').length-1,1);
   assert.match(html,/lifespans run from short to long/);
   assert.match(html,/Based partly on sample values/);
@@ -1717,4 +1718,71 @@ test('malformed entry preferences cannot prevent opening or editing a valid plan
     await a.change('#main',{dataset:{entryPeriod:'spending.annualBaseSpending'},value:'month'});
     assert.equal(a.state.entryPeriods[s.id]['spending.annualBaseSpending'],'month');
   }
+});
+
+test('basic pension questions reveal details on income entry and preserve unused timing and survivor values',async()=>{
+  const a=app(),s=a.current();a.state.view='setup';a.state.guided=true;a.state.setupSection=2;
+  Object.assign(s.guaranteedIncome,{annualIncome:0,startAge:66,startAgeMonths:7,annualIncrease:.02,survivorPercent:50});
+  const before=structuredClone(s.guaranteedIncome);
+  assert.match(a.setup(),/id="your-pension"[^>]*><summary>Do you have a pension/);
+  assert.match(a.setup(),/id="your-pension-details" hidden/);
+  assert.deepEqual(structuredClone(s.guaranteedIncome),before);
+  const renders=a.renders();
+  await a.change('#main',{dataset:{field:'guaranteedIncome.annualIncome',type:'money'},value:'18000'});
+  assert.equal(a.element('#your-pension-details').hidden,false);
+  assert.match(a.element('#your-pension-status').textContent,/Amounts entered/);
+  assert.equal(a.renders(),renders,'Revealing pension details must not replace an active input');
+  await a.change('#main',{dataset:{field:'guaranteedIncome.annualIncome',type:'money'},value:'0'});
+  assert.equal(a.element('#your-pension-details').hidden,true);
+  assert.deepEqual(structuredClone(s.guaranteedIncome),before);
+  assert.equal(a.saved().scenarios[0].guaranteedIncome.startAgeMonths,7);
+  await a.change('#main',{dataset:{field:'guaranteedIncome.startAge',type:'number'},value:''});
+  assert.equal(a.element('#your-pension-details').hidden,false,'An Unknown detail must remain reachable even with zero pension income');
+  assert.match(a.setup(),/id="your-pension"[^>]* open/);
+  assert.match(a.element('#your-pension-status').textContent,/Unknown/);
+  assert.equal(s.guaranteedIncome.startAge,66);
+  await a.run();assert.equal(a.workers.length,0,'Unknown timing still blocks calculations');
+});
+
+test('basic questions expose saved mortgage, rent, spouse pension and savings without changing assumptions',async()=>{
+  const s=model.baseScenario();s.household.separatePeople=true;s.household.filingStatus='Married';
+  s.mortgage.currentBalance=120000;s.rent.monthlyRent=500;s.spouseIncome.annualPension=9000;s.spouseContributions.cash=1200;
+  const a=app({scenarios:[s],selectedId:s.id});a.state.guided=true;const before=structuredClone(a.current());
+  a.state.setupSection=3;
+  for(const id of ['home-inputs','mortgage-inputs','rent-inputs'])assert.match(a.setup(),new RegExp('id="'+id+'"[^>]* open'));
+  a.state.setupSection=2;assert.match(a.setup(),/id="spouse-pension"[^>]* open/);assert.doesNotMatch(a.setup(),/id="spouse-pension-details" hidden/);
+  a.state.setupSection=1;assert.match(a.setup(),/id="your-savings"[^>]*><summary>/);assert.match(a.setup(),/id="spouse-savings"[^>]* open/);
+  assert.match(a.setup(),/Include in base spending/);assert.match(a.setup(),/Leave these out of base spending so they are counted once/);
+  await a.click('setup-detail',{mode:'advanced'});a.state.setupSection=2;
+  assert.doesNotMatch(a.setup(),/id="your-pension-details"/);
+  assert.match(a.setup(),/id="f-guaranteedIncome-startAgeMonths"/);
+  assert.deepEqual(structuredClone(a.current()),before);
+});
+
+test('investment review opens actual controls and labels edited rates without applying suggested defaults',async()=>{
+  const a=app(),s=a.current();a.state.view='setup';a.state.guided=true;a.state.setupSection=4;
+  const before=structuredClone(s),renders=a.renders();
+  assert.match(a.setup(),/13\.3% \/ year · Example assumption/);
+  assert.match(a.setup(),/Help me review these assumptions/);
+  await a.click('review-investments');assert.equal(a.element('#basic-market-settings').open,true);
+  assert.deepEqual(structuredClone(s),before);assert.equal(a.renders(),renders);
+  await a.change('#main',{dataset:{field:'market.stockMeanReturn',type:'percent'},value:'8'});
+  assert.match(a.element('#basic-market-summary').innerHTML,/8\.0% \/ year · Entered assumption/);
+  assert.equal(s.market.preRetirementMeanReturn,before.market.preRetirementMeanReturn);
+  assert.equal(s.market.stockStdDev,before.market.stockStdDev);
+  assert.equal(a.saved().scenarios[0].market.stockMeanReturn,.08);
+});
+
+test('results explain zero shortfalls and route next steps to review, investments and comparisons',async()=>{
+  const a=app(),s=a.current(),r=runSimulation(s);r.successProbability=1;r.riskBreakdown.primaryRisk='none';
+  a.state.results.set(s.id,r);a.state.view='results';
+  let html=a.results();assert.match(html,/All 10 preview lifetimes stayed funded/);
+  assert.match(html,/Try higher healthcare costs or a different retirement date/);assert.doesNotMatch(html,/No sensitivity check reduced shortfalls/);
+  assert.match(html,/Review sample inputs/);
+  a.state.inputSources[s.id]={_origin:'Entered'};assert.match(a.results(),/Review my inputs/);
+  await a.click('setup-section',{index:'5',resultsLink:''});assert.equal(a.state.view,'setup');assert.equal(a.state.setupSection,5);
+  a.state.view='results';await a.click('setup-section',{index:'4',resultsLink:''});assert.equal(a.state.view,'setup');assert.equal(a.state.setupSection,4);
+  r.successProbability=.5;a.state.view='results';html=a.results();assert.match(html,/Start by checking spending and income/);
+  r.riskBreakdown.primaryRisk='spending';r.riskBreakdown.recommendedNextTest='Test a 5% lower spending scenario.';
+  assert.match(a.results(),/Test a 5% lower spending scenario/,'Helpful sensitivity results remain visible when shortfalls occurred');
 });
