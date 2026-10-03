@@ -9,7 +9,258 @@ import * as withdrawalsView from '../dist/withdrawals-view.js';
 import * as growthHelper from '../dist/growth-helper.js';
 import * as moneyInput from '../dist/money-input.js';
 import * as planReview from '../dist/plan-review.js';
+import * as resultCaching from '../dist/result-cache.js';
 import {runSimulation} from '../dist/engine.js';
+
+test('previously applied budgets explain unfinished payment review without changing saved spending',async()=>{
+  const s=model.baseScenario();s.budget.monthlyBudgets=[{month:'2026-09',creditCardBills:[{monthlyAmount:4000}]}];model.applyBudgetEstimate(s);
+  const a=app({scenarios:[s],selectedId:s.id});a.state.view='budget';
+  const before=structuredClone(a.current()),stored=a.stored(),html=a.budget();
+  assert.match(html,/>Review needed</);assert.doesNotMatch(html,/>Applied</);
+  assert.match(html,/Previously applied\. Your plan still uses \$48,000\.00 \/ year/);
+  assert.match(html,/Review each month’s housing and health payment choices below before applying again/);
+  assert.match(html,/data-action="apply-budget" disabled/);
+  await a.click('review-budget-deductions');assert.deepEqual(structuredClone(a.current()),before);assert.equal(a.stored(),stored);
+  await confirmBudgetPaymentChoices(a);await a.click('apply-budget');
+  assert.equal(a.current().spending.annualBaseSpending,48000);assert.match(a.budgetSummary(),/>Applied</);
+  const restored=app(a.saved());restored.state.view='budget';const saved=restored.stored();
+  assert.match(restored.budgetSummary(),/>Review needed</);
+  assert.match(restored.budgetSummary(),/Confirm the housing and health deductions below before applying again/);
+  await restored.change('#main',{dataset:{costConfirm:''},checked:true});
+  assert.match(restored.budgetSummary(),/>Applied</);assert.equal(restored.stored(),saved);
+});
+
+test('an applied budget with a selected payment missing its amount cannot appear fully reviewed',async()=>{
+  const s=model.baseScenario();s.budget.monthlyBudgets=[{month:'2026-09',creditCardBills:[{monthlyAmount:4000}],includedPayments:{mortgage:true,rent:false,healthcare:false}}];model.applyBudgetEstimate(s);
+  const a=app({scenarios:[s],selectedId:s.id});a.state.view='budget';
+  await a.change('#main',{dataset:{costConfirm:''},checked:true});
+  assert.match(a.budgetSummary(),/>Review needed</);assert.equal(a.budgetCostsReviewed(),false);
+  assert.match(a.budget(),/data-action="apply-budget" disabled/);
+  assert.equal(a.current().spending.annualBaseSpending,48000);
+});
+
+test('saved assumptions stay intact and restoring examples uses the new preview inputs',async()=>{
+  const s=model.prepareCalendarScenario(model.baseScenario());s.name='My saved plan';
+  const a=app({scenarios:[s],selectedId:s.id}),before=structuredClone(s);
+  assert.equal(a.current().market.stockMeanReturn,.133);assert.equal(a.current().spending.annualBaseSpending,75000);
+  assert.deepEqual(structuredClone(a.current()),before);
+  await a.click('reset-assumptions');
+  assert.equal(a.current().market.stockMeanReturn,.133);assert.equal(a.current().market.preRetirementMeanReturn,.133);
+  assert.equal(a.current().spending.annualBaseSpending,75000);assert.equal(a.current().seed,model.DEFAULT_SEED);
+  assert.deepEqual(a.current().accounts,{pretax:175000,roth:17500,taxable:0,cash:17500});
+  assert.equal(a.current().rothHistory.contributionBasis,17500);
+  assert.equal(a.current().name,'My saved plan');
+});
+
+test('already-retired setup runs without a separation date or future savings and preserves both date modes',async()=>{
+  const s=model.prepareCalendarScenario(model.baseScenario()),date=s.household.retirementDate;
+  const a=app({scenarios:[s],selectedId:s.id,inputSources:{[s.id]:{_origin:'Entered','contributions.pretax':'Unknown'}}});
+  await a.click('retirement-status',{owner:'you',mode:'retired'});
+  assert.equal(a.current().household.retirementDate,'');assert.equal(a.current().household.alreadyRetired,true);
+  assert.match(a.setup(),/Forecast starts today/);assert.match(a.reportSummaryText(a.current()),/Already retired/);
+  a.state.setupSection=1;assert.match(a.setup(),/stops future deposits/);
+  const r=await completeCachedRun(a);assert.ok(r);assert.match(a.results(),/Your monthly picture/);
+  assert.equal(a.workers.at(-1).data.scenario.household.alreadyRetired,true);
+  const restored=app(a.saved());assert.equal(restored.current().household.alreadyRetired,true);
+  await a.change('#main',{dataset:{field:'household.retirementDate',type:'date'},value:'2020-01-01'});
+  assert.equal(a.current().household.retirementDate,'2020-01-01');
+  await a.click('retirement-status',{owner:'you',mode:'future'});assert.equal(a.current().household.retirementDate,date);
+  await a.click('retirement-status',{owner:'you',mode:'retired'});assert.equal(a.current().household.retirementDate,'2020-01-01');
+  await a.click('new-scenario');assert.equal(a.current().household.alreadyRetired,true);
+  await a.click('export-backup');const backup=JSON.parse(await a.downloads.at(-1).blob.text());
+  const imported=app();await imported.change('#import-file',{files:[{text:async()=>JSON.stringify(backup)}],value:'backup.json'});
+  assert.equal(imported.state.scenarios.find(p=>p.id===s.id).household.alreadyRetired,true);
+});
+
+test('spending calculator applies a preview only and keeps housing, healthcare and budget entries',async()=>{
+  const a=app(),s=a.current();a.state.view='setup';a.state.setupSection=1;s.mortgage.monthlyPayment=1800;s.healthcare.preMedicareMonthlyPremium=700;
+  s.home.annualTaxesAndInsurance=4000;s.budget.monthlyBudgets=[{month:'2026-09',creditCardBills:[{monthlyAmount:5000}]}];
+  const before=structuredClone(s),result={id:'finished'};a.state.results.set(s.id,result);
+  for(const [key,value] of [['total','6000'],['mortgage','1500'],['healthcare','500']])await a.change('#main',{dataset:{spendingHelper:key},value});
+  for(const key of ['mortgage','healthcare'])await a.change('#main',{dataset:{spendingIncluded:key},checked:true});
+  assert.deepEqual(structuredClone(s),before);assert.equal(a.state.results.get(s.id),result);
+  await a.click('apply-spending-calculator');assert.equal(s.spending.annualBaseSpending,48000);
+  assert.equal(s.mortgage.monthlyPayment,1800);assert.equal(s.healthcare.preMedicareMonthlyPremium,700);
+  assert.equal(s.home.annualTaxesAndInsurance,4000);assert.deepEqual(structuredClone(s.budget.monthlyBudgets),before.budget.monthlyBudgets);
+  assert.equal(a.state.results.size,0);assert.equal(a.saved().inputSources[s.id]['spending.annualBaseSpending'],'Estimated');
+  assert.equal(app(a.saved()).current().spending.annualBaseSpending,48000);
+  await a.change('#main',{dataset:{spendingHelper:'mortgage'},value:'7000'});await a.click('apply-spending-calculator');
+  assert.equal(s.spending.annualBaseSpending,48000);assert.match(a.state.message,/cannot exceed/);
+});
+
+test('inline plan naming preserves completed results and survives reload, copies and backups',async()=>{
+  const resultRecords=new Map(),a=app(null,{resultRecords});await a.click('start-plan');
+  assert.equal(a.current().name,'My retirement plan');
+  const s=a.current();a.state.inputSources[s.id]._origin='Entered';for(const path of Object.keys(a.state.inputSources[s.id]))if(a.state.inputSources[s.id][path]==='Unknown')a.state.inputSources[s.id][path]='Entered';
+  const r=await completeCachedRun(a);
+  await a.change('#main',{dataset:{planName:''},value:'  My <retired> plan  '});
+  assert.equal(a.current().name,'My <retired> plan');assert.equal(a.state.results.get(s.id),r);
+  assert.match(a.scenarios(),/My &lt;retired&gt; plan/);assert.doesNotMatch(a.scenarios(),/My <retired> plan/);
+  const restored=app(a.saved(),{resultRecords});await restored.resultRestoreReady;
+  assert.equal(restored.current().name,'My <retired> plan');assert.equal(restored.state.results.size,1);
+  await a.click('new-scenario');assert.match(a.current().name,/My <retired> plan/);
+  await a.click('export-backup');const backup=JSON.parse(await a.downloads.at(-1).blob.text());assert.equal(backup.scenarios[0].name,'My <retired> plan');
+});
+
+test('budget application previews both inputs and preserves home costs unless explicitly replaced',async()=>{
+  const s=model.baseScenario();s.home.annualTaxesAndInsurance=4000;
+  s.budget.monthlyBudgets=[{month:'2026-09',creditCardBills:[{monthlyAmount:4000}]}];
+  const a=app({scenarios:[s],selectedId:s.id,inputSources:{[s.id]:{'home.annualTaxesAndInsurance':'Entered'}}});
+  a.state.view='budget';await confirmBudgetPaymentChoices(a);
+  assert.match(a.budgetSummary(),/What will change in your plan/);
+  assert.match(a.budgetSummary(),/\$4,000\.00 → \$4,000\.00 \/ year \(kept\)/);
+  await a.click('apply-budget');assert.equal(a.current().home.annualTaxesAndInsurance,4000);
+  assert.equal(a.saved().inputSources[s.id]['home.annualTaxesAndInsurance'],'Entered');
+  const restored=app(a.saved());assert.equal(restored.current().home.annualTaxesAndInsurance,4000);
+  await a.change('#main',{dataset:{replaceHomeCosts:''},checked:true});
+  assert.match(a.budgetSummary(),/\$4,000\.00 → \$0\.00 \/ year/);
+  await a.click('apply-budget');assert.equal(a.saved().scenarios[0].home.annualTaxesAndInsurance,0);
+});
+
+test('confirming an example preserves its value and completed calculation through reload, copies and backups',async()=>{
+  const a=app(),s=a.current(),before=structuredClone(s),r=runSimulation(s);a.state.results.set(s.id,r);
+  assert.match(a.setup(),/Use this value for Your sex/);
+  await a.click('confirm-input',{path:'household.gender'});
+  await a.click('confirm-input',{path:'socialSecurity.claimAge'});
+  assert.deepEqual(structuredClone(s),before);assert.equal(a.state.results.get(s.id),r);
+  assert.equal(a.saved().inputSources[s.id]['household.gender'],'Entered');
+  assert.equal(app(a.saved()).state.inputSources[s.id]['socialSecurity.claimAge'],'Entered');
+  await a.click('new-scenario');assert.equal(a.state.inputSources[a.current().id]['household.gender'],'Entered');
+  await a.click('export-backup');const backup=JSON.parse(await a.downloads.at(-1).blob.text());
+  const imported=app();await imported.change('#import-file',{files:[{text:async()=>JSON.stringify(backup)}],value:'backup.json'});
+  assert.equal(imported.state.inputSources[s.id]['socialSecurity.claimAge'],'Entered');
+  const unknown=app();await unknown.click('start-plan');await unknown.click('confirm-input',{path:'accounts.pretax'});
+  assert.equal(unknown.state.inputSources[unknown.current().id]['accounts.pretax'],'Unknown');
+});
+
+test('unused pre-Medicare premiums are labeled Not needed and retained when retirement dates change',async()=>{
+  const a=app();await a.click('start-plan');const s=a.current(),premium=s.healthcare.preMedicareMonthlyPremium;
+  a.state.setupSection=3;
+  assert.match(a.setup(),/Not needed for this plan/);assert.doesNotMatch(a.setup(),/id="f-healthcare-preMedicareMonthlyPremium"/);
+  assert.match(a.reportText(s),/Pre-Medicare monthly premium: Not needed for this plan/);
+  assert.doesNotMatch(a.reportText(s),/Pre-Medicare monthly premium: \$1,250/);
+  const date=model.addCalendarMonths(s.household.birthday,63*12);
+  await a.change('#main',{dataset:{field:'household.retirementDate',type:'date'},value:date});
+  assert.match(a.element('#pre-medicare-input').innerHTML,/id="f-healthcare-preMedicareMonthlyPremium"/);
+  assert.match(a.setup(),/id="f-healthcare-preMedicareMonthlyPremium"/);assert.equal(s.healthcare.preMedicareMonthlyPremium,premium);
+  await a.run();assert.equal(a.workers.length,0);assert.match(a.state.message,/Unknown/);
+  const couple=model.baseScenario();couple.household.filingStatus='Married';couple.household.spouseCurrentAge=50;
+  const b=app({scenarios:[couple],selectedId:couple.id});b.state.setupSection=3;
+  assert.match(b.setup(),/id="f-healthcare-preMedicareMonthlyPremium"/,'A younger spouse still needs a premium');
+  await a.change('#main',{dataset:{field:'household.birthday',type:'date'},value:''});
+  assert.match(a.element('#pre-medicare-input').innerHTML,/id="f-healthcare-preMedicareMonthlyPremium"/,'Unknown dates must not imply premiums are unnecessary');
+});
+
+async function completeCachedRun(a){
+  const pending=a.run(),w=a.workers.at(-1);w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});
+  await pending;await a.state.resultSavingPromise;return a.state.results.get(a.current().id);
+}
+
+test('completed results survive reload with their date and actual count, but changed inputs require a new run',async()=>{
+  const resultRecords=new Map(),a=app(null,{resultRecords});a.state.view='results';
+  const r=await completeCachedRun(a),s=a.current();assert.equal(resultRecords.size,1);
+  const restored=app(a.saved(),{resultRecords,location:{search:'',pathname:'/',hash:'#/results'}});
+  await restored.resultRestoreReady;
+  assert.equal(restored.workers.length,0);assert.equal(restored.state.results.get(s.id).generatedAtEpochMillis,r.generatedAtEpochMillis);
+  assert.deepEqual(structuredClone(restored.state.results.get(s.id)),structuredClone(r));
+  assert.match(restored.results(),/Saved results · calculated/);assert.match(restored.results(),/Saved in this browser/);
+  await restored.change('#main',{dataset:{field:'accounts.pretax',type:'money'},value:'600000'});
+  const changed=app(restored.saved(),{resultRecords});await changed.resultRestoreReady;
+  assert.equal(changed.state.results.size,0);assert.match(changed.results(),/Your inputs are saved in this browser. Run again/);
+});
+
+test('result-storage failures retain live results and saved inputs, and importing clears older cached calculations',async()=>{
+  const a=app(null,{resultStorage:{fail:true}});a.state.view='results';
+  await completeCachedRun(a);assert.ok(a.saved());assert.ok(a.state.results.get(a.current().id));
+  assert.match(a.results(),/run again after reloading to regenerate results/);
+  const resultRecords=new Map(),b=app(null,{resultRecords});await completeCachedRun(b);
+  await b.change('#import-file',{files:[{text:async()=>JSON.stringify(b.saved())}],value:'backup.json'});
+  assert.equal(resultRecords.size,0);assert.equal(b.state.results.size,0);
+});
+
+test('temporary Roth history explicitly resolves Unknown fields and survives backup, copy and reload',async()=>{
+  const a=app(),before=structuredClone(a.current());
+  await a.click('roth-records-unknown',{prefix:'rothHistory'});a.state.setupSection=1;
+  assert.match(a.setup(),/Use temporary Roth assumptions/);
+  assert.match(a.setup(),/<details id="roth-record-help-rothHistory"><summary>/,'The long record lookup stays collapsed so the alternatives remain easy to reach');
+  await a.click('roth-use-estimates',{prefix:'rothHistory'});
+  assert.equal(a.current().rothHistory.contributionBasis,0);
+  assert.equal(a.current().rothHistory.firstContributionYear,2026);
+  assert.equal(a.saved().inputSources[before.id]['rothHistory.contributionBasis'],'Estimated');
+  assert.equal(a.saved().inputSources[before.id]['rothHistory.firstContributionYear'],'Estimated');
+  assert.deepEqual(structuredClone(a.current().market),before.market);
+  assert.deepEqual(structuredClone(a.current().accounts),before.accounts);
+  assert.deepEqual(model.validateScenario(a.current()),[]);
+  a.state.setupSection=5;assert.match(a.setup(),/Uses estimated Roth history/);
+  assert.match(a.reportText(a.current(),null),/ROTH HISTORY ESTIMATES/);
+  const restored=app(a.saved());restored.state.setupSection=5;assert.match(restored.setup(),/Uses estimated Roth history/);
+  await a.click('new-scenario');assert.match(a.setup(),/Uses estimated Roth history/);
+  await a.click('export-backup');const backup=JSON.parse(await a.downloads.at(-1).blob.text());
+  const imported=app();await imported.change('#import-file',{files:[{text:async()=>JSON.stringify(backup)}],value:'backup.json'});
+  assert.equal(imported.state.inputSources[before.id]['rothHistory.firstContributionYear'],'Estimated');
+});
+
+test('Roth illustration keeps entered records and conversions, and refuses an unknown balance',async()=>{
+  const s=model.baseScenario();s.rothHistory.conversions=[{taxYear:2010,amount:10000,taxableAmount:6000}];
+  const a=app({scenarios:[s],selectedId:s.id,inputSources:{[s.id]:{_origin:'Saved value; source not recorded','rothHistory.contributionBasis':'Entered','rothHistory.firstContributionYear':'Unknown'}}});
+  await a.click('roth-records-unknown',{prefix:'rothHistory'});
+  await a.click('roth-use-estimates',{prefix:'rothHistory'});
+  assert.equal(a.current().rothHistory.contributionBasis,s.rothHistory.contributionBasis);
+  assert.equal(a.current().rothHistory.firstContributionYear,2010);
+  assert.deepEqual(structuredClone(a.current().rothHistory.conversions),s.rothHistory.conversions);
+  assert.equal(a.saved().inputSources[s.id]['rothHistory.contributionBasis'],'Entered');
+  const b=app();await b.click('start-plan');const before=structuredClone(b.current());
+  await b.click('roth-use-estimates',{prefix:'rothHistory'});
+  assert.deepEqual(structuredClone(b.current()),before);assert.match(b.state.message,/Enter the Roth IRA balance first/);
+  await b.click('roth-finish-later');assert.equal(b.state.view,'dashboard');assert.equal(b.saved().inputSources[b.current().id]['accounts.roth'],'Unknown');
+});
+
+test('optional questions require an answer for new plans, preserve Not sure, and explicitly record No',async()=>{
+  const a=app();await a.click('start-plan');const s=a.current();
+  for(const path of ['guaranteedIncome.annualIncome','home.currentValue','mortgage.monthlyPayment','rent.monthlyRent'])assert.equal(a.state.inputSources[s.id][path],'Unknown',path);
+  await a.click('optional-answer',{question:'rent-inputs',answer:'unsure'});
+  assert.equal(a.saved().optionalAnswers[s.id]['rent-inputs'],'unsure');
+  const restored=app(a.saved());restored.state.guided=true;restored.state.setupSection=3;
+  assert.match(restored.setup(),/data-question="rent-inputs" data-answer="unsure" aria-pressed="true"/);
+  await a.click('optional-answer',{question:'home-inputs',answer:'no'});
+  for(const path of ['home.currentValue','home.annualTaxesAndInsurance','mortgage.monthlyPayment','mortgage.currentBalance','mortgage.yearsLeft'])assert.equal(a.saved().inputSources[s.id][path],'Entered');
+  assert.equal(a.saved().optionalAnswers[s.id]['mortgage-inputs'],'no');
+  await a.click('optional-answer',{question:'your-pension',answer:'yes'});
+  assert.equal(a.saved().inputSources[s.id]['guaranteedIncome.annualIncome'],'Unknown');
+  await a.click('optional-answer',{question:'your-pension',answer:'no'});
+  assert.equal(a.current().guaranteedIncome.annualIncome,0);
+  await a.click('export-backup');const backup=JSON.parse(await a.downloads.at(-1).blob.text());
+  const imported=app();await imported.change('#import-file',{files:[{text:async()=>JSON.stringify(backup)}],value:'backup.json'});
+  assert.equal(imported.state.optionalAnswers[s.id]['your-pension'],'no');
+  await a.click('new-scenario');assert.equal(a.saved().optionalAnswers[a.current().id]['rent-inputs'],'unsure');
+});
+
+test('one-click lower-return screening uses paired scenarios, retains results and never raises a lower rate',async()=>{
+  const a=app(),s=a.current();s.market.preRetirementMeanReturn=.04;s.market.stockMeanReturn=.133;
+  const before=structuredClone(s),completed=runSimulation(s);completed.uxAssumptions=before;a.state.results.set(s.id,completed);
+  assert.match(a.results(),/Compare with lower returns/);
+  const pending=a.click('compare-lower-returns');
+  for(let i=0;i<2;i++){
+    const w=a.workers[i];assert.ok(w);
+    assert.equal(w.data.scenario.market.preRetirementMeanReturn,.04);
+    assert.equal(w.data.scenario.market.stockMeanReturn,i?.07:before.market.stockMeanReturn);
+    assert.equal(w.data.scenario.market.stockStdDev,before.market.stockStdDev);
+    w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});await Promise.resolve();
+  }
+  await pending;assert.equal(a.state.view,'lab');assert.equal(a.state.labResults.length,2);
+  assert.deepEqual(structuredClone(a.current()),before);assert.equal(a.state.results.get(s.id),completed);
+  await a.click('copy-comparison',{index:'1'});assert.equal(a.current().market.stockMeanReturn,.07);
+  assert.equal(a.saved().scenarios.find(x=>x.id===before.id).market.stockMeanReturn,before.market.stockMeanReturn);
+});
+
+test('preview warning keeps its essential caution visible and expands the full explanation',()=>{
+  const a=app(),s=a.current(),r=runSimulation(s);a.state.results.set(s.id,r);
+  const html=a.results();
+  assert.match(html,/10 lifetimes are too few to estimate readiness/);
+  assert.match(html,/<details><summary>Why only 10 lifetimes\?<\/summary>/);
+  assert.match(html,/Zero observed outcomes does not mean an outcome is impossible/);
+  assert.match(a.reportText(s,r),/SAMPLE PREVIEW ONLY: Only a small sample/);
+});
 
 test('building a personal forecast blanks example balances and income, preserves saved plans and accepts explicit None',async()=>{
   const a=app(),before=structuredClone(a.current());await a.click('start-plan');a.state.setupSection=1;
@@ -31,8 +282,11 @@ test('review names remaining examples, hides retained Unknown numbers and provid
   assert.match(html,/Stock return average %: 13\.3%[^]*data-action="edit-input" data-index="4" data-path="market.stockMeanReturn"/);
   assert.match(html,/<dt>Savings today<\/dt><dd>Unknown · enter your amounts/);
   assert.match(html,/Check your monthly spending/);
+  const details={tagName:'DETAILS',open:false,hidden:true,classList:{contains:name=>name==='optional-inputs'}};
+  const input=a.element('#f-mortgage-monthlyPayment');input.parentElement=details;
   await a.click('edit-input',{index:'3',path:'mortgage.monthlyPayment'});
   assert.equal(a.state.view,'setup');assert.equal(a.state.setupSection,3);
+  assert.equal(details.hidden,false);assert.equal(details.open,true,'Review links expose the requested optional answer');
 });
 
 test('applied budget deductions remain visible at the housing handoff until the amount is reviewed',async()=>{
@@ -75,13 +329,81 @@ test('custom comparisons reject incomplete or excessive amounts and edited draft
   assert.equal(a.state.labResults,null);assert.equal(a.state.busy,false);
 });
 
+test('guided savings tasks and review links reveal the right fields without changing assumptions',async()=>{
+  const a=app();await a.click('start-plan');a.state.setupSection=1;
+  const before=structuredClone(a.current());
+  assert.match(a.setup(),/id="savings-task-0" tabindex="-1"  aria-label="Account balances"/);
+  assert.match(a.setup(),/id="savings-task-1" tabindex="-1" hidden/);
+  await a.click('savings-task',{task:'2'});
+  assert.match(a.setup(),/id="savings-task-2" tabindex="-1"  aria-label="Future savings"/);
+  assert.deepEqual(structuredClone(a.current()),before);
+  await a.click('edit-input',{index:'1',path:'spending.annualBaseSpending'});
+  assert.match(a.setup(),/id="savings-task-1" tabindex="-1"  aria-label="Everyday spending"/);
+  assert.match(a.setup(),/id="setup-count-1"> · \d+ left/);
+  a.state.setupSection=5;assert.match(a.setup(),/missing-tasks/);assert.match(a.setup(),/See missing answers/);
+  assert.match(a.setup(),/Annual base spending<[^]*?data-action="edit-input" data-index="1" data-path="spending.annualBaseSpending"/);
+  await a.click('setup-section',{index:'1',path:'contributions.pretax',reviewEdit:'true'});
+  assert.match(a.setup(),/id="savings-task-2" tabindex="-1"  aria-label="Future savings"/);
+});
+
+test('unknown Roth records save a draft and preserve retained values and all investment defaults',async()=>{
+  const a=app(),before=structuredClone(a.current());
+  await a.click('roth-records-unknown',{prefix:'rothHistory'});
+  assert.deepEqual(structuredClone(a.current()),before);
+  assert.equal(a.saved().inputSources[before.id]['rothHistory.contributionBasis'],'Unknown');
+  assert.equal(a.saved().inputSources[before.id]['rothHistory.firstContributionYear'],'Unknown');
+  await a.run();assert.equal(a.workers.length,0);
+  const restored=app(a.saved());restored.state.setupSection=1;
+  assert.match(restored.setup(),/a \$50,000 Roth IRA could contain \$30,000/);
+  assert.match(restored.setup(),/Those employer Roth accounts are not supported/);
+  assert.equal(restored.current().market.stockMeanReturn,before.market.stockMeanReturn);
+  await a.click('input-none',{path:'accounts.roth'});
+  assert.equal(a.saved().inputSources[before.id]['rothHistory.firstContributionYear'],'Entered');
+  await a.click('roth-records-unknown',{prefix:'rothHistory'});
+  assert.equal(a.saved().inputSources[before.id]['rothHistory.firstContributionYear'],'Entered','A zero account never needs history');
+});
+
+test('combined comparisons apply both changes, retain ownership and copies preserve source paths',async()=>{
+  const a=app(),before=structuredClone(a.current()),date=model.addCalendarMonths(before.household.retirementDate,12);
+  a.element('#main').listeners.input({target:{dataset:{labInput:'retirementDate'},value:date}});
+  a.element('#main').listeners.input({target:{dataset:{labInput:'monthlySpending'},value:'4000'}});
+  const pending=a.runLab(true,true);
+  for(let i=0;i<4;i++){
+    const w=a.workers[i];assert.ok(w);
+    if(i===3){assert.equal(w.data.scenario.household.retirementDate,date);assert.equal(w.data.scenario.spending.annualBaseSpending,48000);assert.equal(w.data.scenario.household.spouseRetirementDate,before.household.spouseRetirementDate);}
+    w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});await Promise.resolve();
+  }
+  await pending;assert.equal(a.state.labResults.length,4);assert.deepEqual(structuredClone(a.current()),before);
+  await a.click('copy-comparison',{index:'3'});
+  assert.equal(a.current().spending.annualBaseSpending,48000);assert.equal(a.current().household.retirementDate,date);
+  assert.equal(a.current().numberOfSimulations,before.numberOfSimulations);
+  assert.equal(a.saved().inputSources[a.current().id]['spending.annualBaseSpending'],'Entered');
+});
+
+test('recurring budget deductions copy only housing and health amounts and require fresh review',async()=>{
+  const s=model.baseScenario();s.budget.monthlyBudgets=[{month:'2026-08',creditCardBills:[{monthlyAmount:5000}],adjustments:{rent:1200,healthcare:300,propertyTaxes:100}},{month:'2026-09',creditCardBills:[{monthlyAmount:5000}],adjustments:{propertyTaxes:200}}];
+  model.applyBudgetEstimate(s);const applied=s.spending.annualBaseSpending;
+  const a=app({scenarios:[s],selectedId:s.id});a.state.view='budget';
+  await a.click('copy-month-costs',{index:'1'});
+  const m=a.current().budget.monthlyBudgets[1];
+  assert.equal(m.adjustments.rent,1200);assert.equal(m.adjustments.healthcare,300);assert.equal(m.adjustments.propertyTaxes,200);assert.equal(m.creditCardBills[0].monthlyAmount,5000);
+  assert.equal(a.current().spending.annualBaseSpending,applied);assert.equal(a.budgetCostsReviewed(),false);
+  await a.change('#main',{dataset:{costConfirm:''},checked:true});assert.equal(a.budgetCostsReviewed(),true);
+  await a.change('#main',{dataset:{monthCost:'mortgage',index:'1'},checked:true});
+  await a.change('#main',{dataset:{costConfirm:''},checked:true});assert.equal(a.budgetCostsReviewed(),false,'An included payment needs its amount');
+  await a.change('#main',{dataset:{monthCost:'mortgage',index:'1'},checked:false});
+  await a.change('#main',{dataset:{monthCost:'rent',index:'1'},checked:false});assert.equal(m.adjustments.rent,0);assert.equal(a.budgetCostsReviewed(),false);
+  assert.equal(a.saved().scenarios[0].budget.monthlyBudgets[1].adjustments.rent,0);
+  assert.match(a.budget(),/Which payments are already in this month’s totals/);
+});
+
 // Execute the actual app and event handlers. Only browser IO is replaced;
 // workers stay pending so changes during calculations can be reproduced.
 function webLocks(){
   let queue=Promise.resolve();
   return {request(_name,callback){const next=queue.then(callback);queue=next.catch(()=>{});return next;}};
 }
-function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={fail:false},clock={now:Date.now()},session=new Map(),location={search:'',pathname:'/',hash:''},identity={accountKey:null},preferences=new Map(),params=URLSearchParams,confirm=()=>true,rawStorage,locks=webLocks(),socialActions={}}={}){
+function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={fail:false},clock={now:Date.now()},session=new Map(),location={search:'',pathname:'/',hash:''},identity={accountKey:null},preferences=new Map(),params=URLSearchParams,confirm=()=>true,rawStorage,locks=webLocks(),socialActions={},resultRecords=new Map(),resultStorage={fail:false}}={}){
   const elements=new Map(),workers=[],timers=new Map(),downloadBlobs=new Map(),downloads=[];let nextTimer=0;
   let stored=rawStorage===undefined?(saved===null?null:JSON.stringify(saved)):rawStorage;
   const readStored=()=>Object.hasOwn(storage,'raw')?storage.raw:stored;
@@ -92,7 +414,11 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
     return elements.get(selector);
   }
   const document={activeElement:null,querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement(){return {click(){downloads.push({name:this.download,blob:downloadBlobs.get(this.href)});}};}};
-  const context=vm.createContext({...model,...format,...guidance,...withdrawalsView,...growthHelper,...moneyInput,...planReview,structuredClone,Intl,URLSearchParams:params,Blob,URL:class extends URL{static createObjectURL(blob){const url='blob:test-'+downloadBlobs.size;downloadBlobs.set(url,blob);return url;}static revokeObjectURL(url){downloadBlobs.delete(url);}},console,Date:class extends Date{static now(){return clock.now;}},
+  const context=vm.createContext({...model,...format,...guidance,...withdrawalsView,...growthHelper,...moneyInput,...planReview,...resultCaching,createResultCache:()=>({
+      async load(id){return resultStorage.fail?null:structuredClone(resultRecords.get(id)||null);},
+      async save(s,r,today){if(resultStorage.fail)return null;resultRecords.set(s.id,{id:s.id,version:1,fingerprint:resultCaching.resultFingerprint(s,today),result:structuredClone(r)});return s.id;},
+      async remove(id){resultRecords.delete(id);},async clear(){resultRecords.clear();}
+    }),structuredClone,Intl,URLSearchParams:params,Blob,URL:class extends URL{static createObjectURL(blob){const url='blob:test-'+downloadBlobs.size;downloadBlobs.set(url,blob);return url;}static revokeObjectURL(url){downloadBlobs.delete(url);}},console,Date:class extends Date{static now(){return clock.now;}},
     location,history:{replaceState(_state,_title,url){const next=new URL(url,'https://example.test');location.search=next.search;location.hash=next.hash;}},confirm,
     setTimeout(fn,delay){const id=++nextTimer;timers.set(id,{fn,at:clock.now+delay});return id;},clearTimeout(id){timers.delete(id);},
     sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value)},socialState:()=>({...identity}),
@@ -103,7 +429,7 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
   });
   const source=readFileSync(new URL('../dist/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replaceAll('import.meta.url',JSON.stringify(new URL('../dist/app.js',import.meta.url).href));
   vm.runInContext(source.replace('function render({preserveEditor=false}={}){','let renderCount=0;function render({preserveEditor=false}={}){renderCount++;'),context);
-  const api=vm.runInContext('({state,setup,run,runLab,runDecision,results,withdrawals,dashboard,lab,budget,budgetView,budgetSummary,budgetCostCheck,budgetCostsReviewed,enterBudget,scenarios,render,billingView,reportText,current,persist,loadAccess,isPro,effectivePaths,syncAuthState,linkAccounts,renders:()=>renderCount})',context);
+  const api=vm.runInContext('({state,resultRestoreReady,setup,run,runLab,runDecision,results,withdrawals,dashboard,lab,budget,budgetView,budgetSummary,budgetCostCheck,budgetCostsReviewed,enterBudget,scenarios,render,billingView,accountCheck,reports,reportText,reportSummaryText,reportDetailsText,current,persist,loadAccess,isPro,effectivePaths,syncAuthState,linkAccounts,renders:()=>renderCount})',context);
   return {...api,workers,element,timers,document,downloads,stored:readStored,storageChanged:()=>windowListeners.storage({key:'retirement-readiness-lab-sites-v1'}),beforeUnload:event=>windowListeners.beforeunload(event),advanceTime(ms){clock.now+=ms;for(const [id,timer] of [...timers])if(timer.at<=clock.now){timers.delete(id);timer.fn();}},saved:()=>JSON.parse(readStored()),change:(selector,target)=>element(selector).listeners.change({target}),
     click:(action,extra={})=>{const el={dataset:{action,...extra}};return element('#main').listeners.click({target:{closest:selector=>selector==='[data-action]'?el:null}});}};
 }
@@ -204,8 +530,8 @@ test('the first Budget month is visible without saving or treating an untouched 
 });
 
 test('adding an unentered month cannot reduce an applied estimate; committing it creates a draft',async()=>{
-  const s=model.baseScenario();s.budget.monthlyBudgets=[{month:'2026-08',creditCardBills:[{monthlyAmount:4000}]}];model.applyBudgetEstimate(s);
-  const a=app({scenarios:[s],selectedId:s.id});a.state.view='budget';a.budget();const saved=a.stored();
+  const s=model.baseScenario();s.budget.monthlyBudgets=[{month:'2026-08',creditCardBills:[{monthlyAmount:4000}],includedPayments:{mortgage:false,rent:false,healthcare:false}}];model.applyBudgetEstimate(s);
+  const a=app({scenarios:[s],selectedId:s.id});a.state.view='budget';a.budget();await confirmBudgetPaymentChoices(a);const saved=a.stored();
   assert.match(a.budgetSummary(),/>Applied</);
   await a.click('add-month');assert.equal(a.stored(),saved);
   assert.equal(a.current().budget.monthlyBudgets.length,1);assert.equal(model.budgetEstimate(a.current().budget),48000);
@@ -217,7 +543,7 @@ test('adding an unentered month cannot reduce an applied estimate; committing it
   assert.equal(a.current().budget.monthlyBudgets.length,2);assert.equal(a.budgetView().pending,null);
   assert.equal(a.current().spending.annualBaseSpending,48000);assert.equal(model.budgetEstimate(a.current().budget),54000);
   assert.match(a.budgetSummary(),/>Draft</);assert.match(a.budgetSummary(),/plan still uses \$48,000.00/);
-  a.budgetView().costReview='excluded';await a.click('apply-budget');assert.equal(a.current().spending.annualBaseSpending,54000);assert.match(a.budgetSummary(),/>Applied</);
+  await confirmBudgetPaymentChoices(a);await a.click('apply-budget');assert.equal(a.current().spending.annualBaseSpending,54000);assert.match(a.budgetSummary(),/>Applied</);
 });
 
 test('completed months collapse, optional sections summarize their values, and the final monthly amount includes all adjustments',async()=>{
@@ -293,7 +619,7 @@ test('Roth setup shows separate total and contribution inputs with useful five-y
 test('Roth history edits save, invalidate results, survive reload, and appear in reports and backups',async()=>{
   const a=app(),s=a.current();a.state.results.set(s.id,{completed:true});seedExploration(a);
   await a.change('#main',{dataset:{field:'rothHistory.contributionBasis',type:'money'},value:'75000'});
-  assert.equal(s.rothHistory.contributionBasis,75000);assert.equal(s.accounts.roth,50000);
+  assert.equal(s.rothHistory.contributionBasis,75000);assert.equal(s.accounts.roth,17500);
   assert.equal(a.state.results.has(s.id),false);assertCleared(a);
   await a.change('#main',{dataset:{field:'rothHistory.firstContributionYear',type:'number'},value:'2024'});
   await a.click('add-roth-conversion');
@@ -717,7 +1043,7 @@ test('calculation updates preserve focused drafts through success and failure un
       assert.equal(a.document.activeElement,editor);assert.equal(retained,editor);assert.equal(editor.value,'123456');
     }
     await pending;assert.equal(a.document.activeElement,editor);assert.equal(a.state.busy,false);
-    assert.equal(a.current().accounts.pretax,500000);assert.equal(a.current().budget.annualPropertyTaxes,0);
+    assert.equal(a.current().accounts.pretax,175000);assert.equal(a.current().budget.annualPropertyTaxes,0);
     await a.change('#main',editor);
     const s=a.saved().scenarios[0];
     assert.equal(dataset.field?s.accounts.pretax:dataset.budget?s.budget.annualPropertyTaxes:s.budget.monthlyBudgets[0].creditCardBills[0].monthlyAmount,123456);
@@ -819,7 +1145,7 @@ test('failed budget saves display a warning without leaving the editor',async()=
 test('copy, reset, apply and import cannot overwrite a failed-save warning',async()=>{
   for(const action of ['new-scenario','reset-assumptions','apply-budget']){
     const a=app(null,{storage:{fail:true}});a.current().budget.monthlyBudgets=[{month:'2026-01',creditCardBills:[{monthlyAmount:1000}]}];
-    a.budgetView().costReview='excluded';await a.click(action);assert.match(a.state.message,/could not be saved/);assert.equal(a.saved(),null);
+    await confirmBudgetPaymentChoices(a);await a.click(action);assert.match(a.state.message,/could not be saved/);assert.equal(a.saved(),null);
   }
   const a=app(null,{storage:{fail:true}});
   await a.change('#import-file',{files:[{text:async()=>JSON.stringify([model.baseScenario()])}],value:'backup.json'});
@@ -842,7 +1168,7 @@ test('first visit leads with starting actions and an explicitly illustrative cha
   assert.equal(a.saved(),null);
 });
 test('starting a plan opens assumptions and survives reload without replacing scenarios',async()=>{
-  const a=app(),before=JSON.stringify(a.state.scenarios);
+  const a=app(),expected=structuredClone(a.state.scenarios);expected[0].name='My retirement plan';const before=JSON.stringify(expected);
   await a.click('start-plan');assert.equal(a.state.view,'setup');assert.equal(JSON.stringify(a.state.scenarios),before);
   const restored=app(a.saved());assert.match(restored.dashboard(),/Continue my plan/);
   assert.doesNotMatch(restored.dashboard(),/Explore a sample plan/);
@@ -1337,7 +1663,7 @@ test('ten paths remain a counted preview and eleven paths use percentage formatt
 });
 
 test('guided setup offers household choices, progress, a skippable editor and editable review without changing assumptions',async()=>{
-  const a=app(),original=JSON.stringify(a.current());
+  const a=app(),expected=structuredClone(a.current());expected.name='My retirement plan';const original=JSON.stringify(expected);
   await a.click('start-plan');assert.equal(a.state.guided,true);
   assert.match(a.setup(),/Step 1 of 6/);assert.match(a.setup(),/Individual · Just me/);assert.match(a.setup(),/Couple · Me and my spouse/);
   await a.click('setup-section',{index:'1'});assert.match(a.setup(),/guided-extra/);assert.match(a.setup(),/annual future savings deposits/);
@@ -1414,12 +1740,12 @@ test('individual review ignores unused spouse sources and does not label househo
     a.state.inputSources[s.id]={_origin:'Entered','household.filingStatus':'Sample/default','household.spouseBirthday':'Sample/default','household.spouseGender':'Unknown','household.spouseRetirementDate':'Sample/default'};
     const html=a.setup();
     assert.match(html,/<dt>Household<\/dt><dd>Individual<small>Selected/);
-    assert.doesNotMatch(html,/Sample values are still in this plan|Includes sample values|Spouse birthday|Spouse longevity table|Review Unknown inputs before running/);
+    assert.doesNotMatch(html,/Sample values are still in this plan|Includes sample values|Spouse birthday|Spouse longevity table|Finish \d+ tasks? before running/);
     s.household.filingStatus='Married';
     const couple=a.setup();
     assert.match(couple,/Sample values are still in this plan/);
     assert.match(couple,/Spouse birthday/);
-    assert.match(couple,/Review Unknown inputs before running/);
+    assert.match(couple,/Finish 1 task before running/);
     assert.equal(a.state.inputSources[s.id]['household.spouseBirthday'],'Sample/default');
   }
 });
@@ -1691,37 +2017,39 @@ test('grouped money entry rejects malformed and out-of-range conversions without
   assert.equal(a.current().spending.annualBaseSpending,50406,'Clearing is not zero');
 });
 
-test('budget application requires consistent housing and health review and resets after edits',async()=>{
+test('budget uses monthly payment choices and one final confirmation, which resets after edits',async()=>{
   const a=app();a.state.view='budget';await a.click('add-month');
   await a.change('#main',{dataset:{month:'0',part:'checking'},value:'5,000'});
   const prior=a.current().spending.annualBaseSpending;
   await a.click('apply-budget');assert.equal(a.current().spending.annualBaseSpending,prior);
-  await a.change('#main',{dataset:{costReview:''},value:'included'});
   await a.change('#main',{dataset:{costConfirm:''},checked:true});
-  assert.equal(a.budgetCostsReviewed(),false,'A confirmation with no deductions is insufficient');
+  assert.equal(a.budgetCostsReviewed(),false,'An unanswered month cannot be confirmed');
+  assert.doesNotMatch(a.budgetCostCheck(),/data-cost-review|budget-cost-review/);
+  await a.change('#main',{dataset:{monthCost:'mortgage',index:'0'},checked:true});
+  await a.change('#main',{dataset:{costConfirm:''},checked:true});
+  assert.equal(a.budgetCostsReviewed(),false,'An included payment needs its amount');
   await a.change('#main',{dataset:{month:'0',part:'mortgage'},value:'1,000'});
   assert.equal(a.budgetView().costConfirmed,false);
-  await a.click('review-budget-deductions');assert.equal(a.element('#budget-month-0').open,true);assert.equal(a.element('[data-budget-disclosure="adjustments-0"]').open,true);
-  await a.change('#main',{dataset:{costReview:''},value:'excluded'});
-  assert.equal(a.budgetCostsReviewed(),false,'Excluded payments must not also be deducted');
-  assert.match(a.budgetCostCheck(),/Your months still have housing or health deductions/);
-  await a.change('#main',{dataset:{costReview:''},value:'included'});
-  await a.change('#main',{dataset:{costConfirm:''},checked:true});
-  assert.equal(a.budgetCostsReviewed(),true);
+  assert.match(a.budgetCostCheck(),/Mortgage payments deducted/);assert.match(a.budgetCostCheck(),/\$1,000\.00 \/ month/);
+  await a.click('review-budget-deductions');assert.equal(a.element('#budget-month-0').open,true);
+  await a.change('#main',{dataset:{costConfirm:''},checked:true});assert.equal(a.budgetCostsReviewed(),true);
   await a.click('apply-budget');assert.equal(a.current().spending.annualBaseSpending,48000);
   await a.change('#main',{dataset:{month:'0',part:'mortgage'},value:'1,100'});
   assert.equal(a.budgetCostsReviewed(),false,'A changed deduction needs confirmation again');
   await a.change('#main',{dataset:{costConfirm:''},checked:true});assert.equal(a.budgetCostsReviewed(),true);
   await a.change('#main',{dataset:{month:'0',part:'checking'},value:'5,100'});
-  assert.equal(a.budgetView().costReview,'');assert.equal(a.budgetCostsReviewed(),false);
+  assert.equal(a.budgetCostsReviewed(),false);assert.equal(a.current().budget.monthlyBudgets[0].includedPayments.mortgage,true);
   assert.equal(a.current().spending.annualBaseSpending,48000,'Draft edits do not change applied spending');
+  await a.change('#main',{dataset:{costConfirm:''},checked:true});assert.equal(a.budgetCostsReviewed(),true);
+  await a.click('month-costs-excluded',{index:'0'});assert.equal(a.current().budget.monthlyBudgets[0].adjustments.mortgage,0);
+  assert.equal(a.budgetCostsReviewed(),false);await a.change('#main',{dataset:{costConfirm:''},checked:true});assert.equal(a.budgetCostsReviewed(),true);
 });
 
 test('budget can be applied with excluded separate costs and returns to the active guided step',async()=>{
   const a=app();a.state.view='setup';a.state.guided=true;a.state.setupSection=1;
   a.enterBudget();assert.equal(a.state.view,'budget');assert.match(a.budget(),/Return to setup/);
   await a.click('add-month');await a.change('#main',{dataset:{month:'0',part:'credit'},value:'3,500'});
-  await a.change('#main',{dataset:{costReview:''},value:'excluded'});
+  await a.click('month-costs-excluded',{index:'0'});await a.change('#main',{dataset:{costConfirm:''},checked:true});
   assert.equal(a.budgetCostsReviewed(),true);
   await a.click('apply-budget');assert.equal(a.current().spending.annualBaseSpending,42000);
   await a.click('return-setup');assert.equal(a.state.view,'setup');assert.equal(a.state.setupSection,1);assert.equal(a.state.guided,true);
@@ -1793,7 +2121,8 @@ test('basic pension questions reveal details on income entry and preserve unused
   const a=app(),s=a.current();a.state.view='setup';a.state.guided=true;a.state.setupSection=2;
   Object.assign(s.guaranteedIncome,{annualIncome:0,startAge:66,startAgeMonths:7,annualIncrease:.02,survivorPercent:50});
   const before=structuredClone(s.guaranteedIncome);
-  assert.match(a.setup(),/id="your-pension"[^>]*><summary>Do you have a pension/);
+  assert.match(a.setup(),/id="your-pension-question">Do you have a pension/);
+  assert.match(a.setup(),/data-question="your-pension" data-answer="no"/);
   assert.match(a.setup(),/id="your-pension-details" hidden/);
   assert.deepEqual(structuredClone(s.guaranteedIncome),before);
   const renders=a.renders();
@@ -1843,7 +2172,7 @@ test('investment review opens actual controls and labels edited rates without ap
 });
 
 test('results explain zero shortfalls and route next steps to review, investments and comparisons',async()=>{
-  const a=app(),s=a.current(),r=runSimulation(s);r.successProbability=1;r.riskBreakdown.primaryRisk='none';
+  const a=app(),s=a.current();s.market.stockMeanReturn=.133;const r=runSimulation(s);r.successProbability=1;r.riskBreakdown.primaryRisk='none';
   a.state.results.set(s.id,r);a.state.view='results';
   let html=a.results();assert.match(html,/All 10 preview lifetimes stayed funded/);
   assert.match(html,/assumes stocks grow 13\.3% a year[^<]*Try a lower return/);assert.doesNotMatch(html,/No sensitivity check reduced shortfalls/);
@@ -1931,4 +2260,159 @@ test('the URL hash restores the view and setup step, and Continue my plan return
   const saved=app({scenarios:[s],selectedId:s.id},{preferences});await saved.click('start-plan');
   assert.equal(saved.state.setupSection,3);assert.equal(saved.state.view,'setup');
   saved.state.setupSection=4;saved.render();assert.deepEqual(JSON.parse(preferences.get('retirement-setup-step')),{id:s.id,section:4});
+});
+
+test('result follow-up edits retain the guided mode after reload, while an explicit detailed choice stays detailed',async()=>{
+  const preferences=new Map(),a=app(null,{preferences});await a.click('start-plan');
+  await a.click('optional-answer',{question:'your-pension',answer:'no'});
+  const saved=a.saved(),id=a.current().id;
+  const restored=app(saved,{preferences,location:{search:'',pathname:'/',hash:'#/results'}});
+  await restored.click('setup-section',{index:'5',resultsLink:''});
+  await restored.click('edit-input',{index:'2',path:'socialSecurity.claimAge'});
+  assert.equal(restored.state.guided,true);assert.match(restored.setup(),/Build your forecast/);
+  assert.match(restored.setup(),/Do you have a pension or annuity/);
+  assert.match(restored.setup(),/id="your-pension-details"[^>]* hidden/);
+  await restored.click('toggle-guided');
+  const detailed=app(saved,{preferences,location:{search:'',pathname:'/',hash:'#/results'}});
+  await detailed.click('edit-input',{index:'2',path:'socialSecurity.claimAge'});
+  assert.equal(detailed.state.guided,false);assert.match(detailed.setup(),/Set up your Monte Carlo model/);
+  assert.equal(JSON.parse(preferences.get('retirement-setup-modes'))[id],false);
+});
+
+test('editor modes belong to each plan and guided choices in older saves are restored',async()=>{
+  const preferences=new Map(),a=app(null,{preferences});await a.click('start-plan');const original=a.current().id;
+  await a.click('new-scenario');const copy=a.current().id;assert.equal(a.state.guided,true);
+  await a.click('toggle-guided');await a.click('select-scenario',{id:original});assert.equal(a.state.guided,true);
+  await a.click('select-scenario',{id:copy});assert.equal(a.state.guided,false);
+  const legacy=app(a.saved(),{preferences:new Map([['retirement-setup-step',JSON.stringify({id:copy,section:2})]])});
+  assert.equal(legacy.state.guided,true);
+});
+
+test('personal setup asks about unsupported accounts before changing any financial inputs',async()=>{
+  const a=app(),before=structuredClone(a.current());
+  assert.match(a.dashboard(),/data-action="check-accounts">Build my forecast/);
+  await a.click('check-accounts');assert.equal(a.state.view,'account-check');
+  assert.deepEqual(structuredClone(a.current()),before);
+  assert.match(a.accountCheck(),/data-action="start-plan" disabled/);
+  for(const answer of ['yes','unsure','no']){
+    await a.click('account-answer',{answer});assert.deepEqual(structuredClone(a.current()),before);
+    assert.match(a.accountCheck(),new RegExp(`data-answer="${answer}" aria-pressed="true"`));
+    if(answer!=='no')assert.match(a.accountCheck(),/incomplete/);
+    else assert.match(a.accountCheck(),/Continue to household setup/);
+  }
+  await a.click('start-plan');assert.equal(a.state.view,'setup');assert.equal(a.state.guided,true);
+  assert.equal(a.state.inputSources[a.current().id]['accounts.pretax'],'Unknown');
+});
+
+test('account checks survive reload, copies and backups, without changing the calculation',async()=>{
+  const a=app(),before=structuredClone(a.current());await a.click('account-answer',{answer:'yes'});
+  assert.deepEqual(structuredClone(a.current()),before);
+  const restored=app(a.saved(),{location:{search:'',pathname:'/',hash:'#/account-check'}});
+  assert.equal(restored.state.view,'account-check');assert.match(restored.accountCheck(),/data-answer="yes" aria-pressed="true"/);
+  await a.click('new-scenario');assert.equal(a.state.accountChecks[a.current().id],'yes');
+  await a.click('export-backup');const backup=JSON.parse(await a.downloads.at(-1).blob.text());
+  const imported=app();await imported.change('#import-file',{files:[{text:async()=>JSON.stringify(backup)}],value:'backup.json'});
+  assert.equal(imported.state.accountChecks[a.current().id],'yes');
+  assert.match(imported.reportSummaryText(imported.current()),/ACCOUNT CHECK:.*incomplete/);
+  const old=app({scenarios:[model.baseScenario()],accountChecks:{'base-plan':'bad',other:'yes'}});
+  assert.deepEqual(structuredClone(old.state.accountChecks),{});assert.doesNotMatch(old.reportSummaryText(old.current()),/ACCOUNT CHECK:/);
+});
+
+test('the result answer and its primary action precede notices, dollar controls and preview sales copy',async()=>{
+  const a=app(),r=await completeCachedRun(a);await a.click('account-answer',{answer:'unsure'});
+  const html=a.results(),answer=html.indexOf('Am I on track?'),action=html.indexOf('class="primary" data-action="compare-lower-returns"');
+  assert.ok(answer>=0&&action>answer);
+  for(const marker of ['Account check needs review','Calculated','Show amounts in','result-hero'])assert.ok(html.indexOf(marker)>action,marker);
+  assert.match(html.slice(answer,action),/too few to/);assert.equal((html.match(/class="primary" data-action="compare-lower-returns"/g)||[]).length,1);
+  assert.equal(a.state.results.get(a.current().id),r,'An account note does not invalidate saved results');
+});
+
+test('reports begin with a readable summary, keep exact assumptions in a collapsed appendix, and export either scope',async()=>{
+  const a=app(),s=a.current(),r=await completeCachedRun(a);
+  const html=a.reports();assert.ok(html.indexOf('Plan summary')<html.indexOf('Detailed assumptions and results'));
+  assert.match(html,/<details class="card report-details"><summary>/);
+  const summary=a.reportSummaryText(s,r),full=a.reportText(s,r);
+  assert.match(summary,/Simulated lifetimes without a shortfall: .*preview only/);
+  assert.match(summary,/Monthly costs before Medicare and taxes:/);assert.doesNotMatch(summary,/ALL ASSUMPTIONS|EmpiricalAgeDecline/);
+  assert.match(full,/DETAILED ASSUMPTIONS AND RESULTS[^]*ALL ASSUMPTIONS/);
+  assert.match(full,/Pre-retirement return average %: 13\.3%/);assert.doesNotMatch(full,/EmpiricalAgeDecline/);
+  await a.click('download-summary');assert.equal(a.downloads.at(-1).name,'retirement-summary.txt');assert.equal(await a.downloads.at(-1).blob.text(),summary);
+  await a.click('download-report');assert.equal(a.downloads.at(-1).name,'retirement-report.txt');assert.match(await a.downloads.at(-1).blob.text(),/ALL ASSUMPTIONS/);
+});
+
+test('temporary Roth histories require review consistently in the summary and appendix for both people',()=>{
+  const s=model.baseScenario();s.household.filingStatus='Married';s.household.separatePeople=true;s.spouseAccounts.roth=10000;
+  const sources={'rothHistory.contributionBasis':'Estimated','rothHistory.firstContributionYear':'Estimated','spouseRothHistory.contributionBasis':'Entered','spouseRothHistory.firstContributionYear':'Estimated'};
+  const a=app({scenarios:[s],inputSources:{[s.id]:sources}}),plan=a.current();
+  assert.match(a.reportSummaryText(plan),/Your Roth history needs review: Yes — temporary assumptions/);
+  assert.match(a.reportSummaryText(plan),/Spouse Roth history needs review: Yes — temporary assumptions/);
+  assert.match(a.reportDetailsText(plan),/Roth history needs review: Yes — temporary assumptions/);
+  assert.match(a.reportDetailsText(plan),/Spouse Roth history needs review: Yes — temporary assumptions/);
+  assert.match(a.reportSummaryText(plan),/Spouse retirement:/);
+  for(const prefix of ['rothHistory','spouseRothHistory'])for(const key of ['contributionBasis','firstContributionYear'])a.state.inputSources[plan.id][prefix+'.'+key]='Entered';
+  assert.match(a.reportSummaryText(plan),/Your Roth history needs review: No — contribution/);
+  plan.rothHistory.needsReview=true;assert.match(a.reportDetailsText(plan),/Roth history needs review: Yes — migrated/);
+  plan.accounts.roth=0;assert.match(a.reportSummaryText(plan),/Your Roth history needs review: No — no Roth/);
+  plan.household.filingStatus='Single';assert.doesNotMatch(a.reportSummaryText(plan),/Spouse/);
+});
+
+test('unfinished summaries label unknown personal values and escape names in the readable report',async()=>{
+  const a=app();await a.click('start-plan');const s=a.current();s.name='<img src=x onerror=alert(1)>';
+  a.state.inputSources[s.id]['household.retirementDate']='Unknown';
+  const summary=a.reportSummaryText(s);
+  assert.match(summary,/Your retirement: Unknown/);assert.match(summary,/Savings today: Unknown/);
+  assert.match(summary,/Monthly costs before Medicare and taxes: Unknown/);
+  assert.match(summary,/Your Roth history needs review: Yes — Roth balance is unknown/);
+  assert.doesNotMatch(a.reports(),/<img src=x/);assert.match(a.reports(),/&lt;img/);
+});
+
+
+async function confirmBudgetPaymentChoices(a){
+  for(const [i,m] of a.current().budget.monthlyBudgets.entries())if(!m.includedPayments&&!model.SEPARATE_COSTS.some(([,key])=>m.adjustments?.[key]>0))await a.click('month-costs-excluded',{index:String(i)});
+  await a.change('#main',{dataset:{costConfirm:''},checked:true});
+}
+
+test('individual guidance uses own dates and accounts, while couple guidance retains shared-date rules',()=>{
+  for(const filingStatus of ['Single','HeadOfHousehold','Married'])for(const separatePeople of [false,true]){
+    const s=model.prepareCalendarScenario(model.baseScenario());s.household.filingStatus=filingStatus;s.household.separatePeople=separatePeople;
+    const a=app({scenarios:[s],selectedId:s.id});a.state.guided=true;a.state.basicSetup=true;a.state.setupSection=0;
+    const household=a.setup();a.state.setupSection=1;const balances=a.setup();
+    if(filingStatus==='Married'){
+      assert.match(household,separatePeople?/earlier retirement date/:/One retirement date for both of you/);
+      assert.match(balances,separatePeople?/Spouse retirement accounts/:/Combined household balances/);
+    }else{
+      assert.match(household,/Your retirement date\. Future savings deposits stop when you retire/);
+      assert.doesNotMatch(household,/both of you|earlier retirement date/);
+      assert.doesNotMatch(balances,/Enter spouse accounts|Enter your spouse’s Roth|Combined household balances|Household · Shared balances/);
+      assert.match(balances,/Your (?:current account balances|taxable investments)/);
+    }
+  }
+});
+
+test('monthly payment answers survive reload and backup, including a selected payment with no amount',async()=>{
+  const a=app();a.state.view='budget';await a.change('#main',{dataset:{month:'0',part:'checking'},value:'5000'});
+  await a.click('month-costs-excluded',{index:'0'});await a.change('#main',{dataset:{costConfirm:''},checked:true});
+  assert.equal(a.budgetCostsReviewed(),true);
+  const restored=app(a.saved());restored.state.view='budget';assert.doesNotMatch(restored.budgetCostCheck(),/Choose the included payments or/);
+  await restored.change('#main',{dataset:{costConfirm:''},checked:true});assert.equal(restored.budgetCostsReviewed(),true);
+  await restored.change('#main',{dataset:{monthCost:'rent',index:'0'},checked:true});
+  const unfinished=app(restored.saved());unfinished.state.view='budget';
+  assert.match(unfinished.budgetCostCheck(),/amount greater than zero/);
+  await unfinished.change('#main',{dataset:{costConfirm:''},checked:true});assert.equal(unfinished.budgetCostsReviewed(),false);
+  await unfinished.change('#main',{dataset:{month:'0',part:'rent'},value:'1200'});
+  await unfinished.click('export-backup');const backup=JSON.parse(await unfinished.downloads.at(-1).blob.text());
+  const imported=app();await imported.change('#import-file',{files:[{text:async()=>JSON.stringify(backup)}],value:'backup.json'});imported.state.view='budget';
+  await imported.change('#main',{dataset:{costConfirm:''},checked:true});assert.equal(imported.budgetCostsReviewed(),true);
+  assert.equal(imported.current().budget.monthlyBudgets[0].includedPayments.rent,true);
+  await imported.click('new-scenario');assert.equal(imported.current().budget.monthlyBudgets[0].includedPayments.rent,true);
+});
+
+test('deduction reconciliation supports mixed months and uses only the latest twelve',async()=>{
+  const s=model.baseScenario();s.budget.monthlyBudgets=[{month:'2025-09',creditCardBills:[{monthlyAmount:9000}]}];
+  for(let i=0;i<12;i++)s.budget.monthlyBudgets.push({month:`2025-${String(10+i).padStart(2,'0')}`,creditCardBills:[{monthlyAmount:5000}],adjustments:{rent:i?0:1200},includedPayments:{mortgage:false,rent:i===0,healthcare:false}});
+  s.budget.monthlyBudgets.forEach((m,i)=>m.month=model.addCalendarMonths('2025-09-01',i).slice(0,7));
+  const a=app({scenarios:[s],selectedId:s.id});a.state.view='budget';
+  assert.match(a.budgetCostCheck(),/the 12 months/);assert.match(a.budgetCostCheck(),/\$100\.00 \/ month/);
+  await a.change('#main',{dataset:{costConfirm:''},checked:true});assert.equal(a.budgetCostsReviewed(),true,'An unused old month does not require another answer');
+  await a.click('apply-budget');assert.equal(a.current().spending.annualBaseSpending,58800);
 });

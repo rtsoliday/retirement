@@ -1,6 +1,6 @@
 import {savingsDefaults,hasFutureSavings} from './savings.js';
 export const ENGINE_VERSION = '2026.09-calendar-dates';
-export const scenarioEngineVersion=s=>s.household.separatePeople?'2026.10-separate-people':hasFutureSavings(s)?'2026.10-savings-contributions':ENGINE_VERSION;
+export const scenarioEngineVersion=s=>s.household.alreadyRetired||s.household.separatePeople&&s.household.filingStatus==='Married'&&s.household.spouseAlreadyRetired?'2026.10-retired-forecast':s.household.separatePeople?'2026.10-separate-people':hasFutureSavings(s)?'2026.10-savings-contributions':ENGINE_VERSION;
 export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
 // Retained across engine revisions for repeatable scenario comparisons.
 // Android still uses 20260429.
@@ -38,18 +38,25 @@ export function calendarMonthsBetween(start,end) {
   const months=(b.getUTCFullYear()-a.getUTCFullYear())*12+b.getUTCMonth()-a.getUTCMonth();
   return months-Number(addCalendarMonths(start,months)>end);
 }
-export const usesCalendarDates = s => Boolean(s?.household?.birthday||s?.household?.retirementDate);
+export const usesCalendarDates = s => Boolean(s?.household?.birthday||s?.household?.retirementDate||s?.household?.alreadyRetired||s?.household?.separatePeople&&s?.household?.filingStatus==='Married'&&s?.household?.spouseAlreadyRetired);
+// Current balances describe today, even when the recorded separation was years
+// ago. Retain the actual date for eligibility checks; never replay past growth.
+export function forecastRetirementDate(s,spouse=false,today=s.household.asOfDate||localCalendarDate()) {
+  const h=s.household;
+  return h[spouse?'spouseAlreadyRetired':'alreadyRetired']?today:h[spouse?'spouseRetirementDate':'retirementDate'];
+}
 export function scenarioTimeline(s,today=s.household.asOfDate||localCalendarDate()) {
   const h=s.household;
   if(!usesCalendarDates(s)){
     const retirementAge=h.retirementAge+(h.retirementAgeMonths??0)/12,preMonths=Math.round((retirementAge-h.currentAge)*12);
     return {currentAge:h.currentAge,retirementAge,preMonths,spouseAtRet:h.spouseCurrentAge+preMonths/12,birthYear:2026-h.currentAge,spouseBirthYear:2026-h.spouseCurrentAge,retirementYear:2026+Math.floor(preMonths/12)};
   }
-  const startDate=h.separatePeople&&h.filingStatus==='Married'&&calendarDate(h.spouseRetirementDate)&&h.spouseRetirementDate<h.retirementDate?h.spouseRetirementDate:h.retirementDate;
+  const ownDate=forecastRetirementDate(s,false,today),spouseDate=forecastRetirementDate(s,true,today);
+  const startDate=h.separatePeople&&h.filingStatus==='Married'&&calendarDate(spouseDate)&&spouseDate<ownDate?spouseDate:ownDate;
   return {...(h.separatePeople?{startDate}:{}),currentAge:calendarMonthsBetween(h.birthday,today)/12,retirementAge:calendarMonthsBetween(h.birthday,startDate)/12,preMonths:calendarMonthsBetween(today,startDate),spouseAtRet:calendarMonthsBetween(h.spouseBirthday,startDate)/12,birthYear:calendarDate(h.birthday)?.getUTCFullYear(),spouseBirthYear:calendarDate(h.spouseBirthday)?.getUTCFullYear(),retirementYear:calendarDate(startDate)?.getUTCFullYear()};
 }
 export const retirementAge = s => scenarioTimeline(s).retirementAge;
-export const primaryRetirementAge = s => usesCalendarDates(s)?calendarMonthsBetween(s.household.birthday,s.household.retirementDate)/12:retirementAge(s);
+export const primaryRetirementAge = s => usesCalendarDates(s)?calendarMonthsBetween(s.household.birthday,forecastRetirementDate(s))/12:retirementAge(s);
 export function dateLabel(value) {
   const date=calendarDate(value);
   return date?new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}).format(date):'Choose a date';
@@ -67,6 +74,7 @@ export function prepareCalendarScenario(s,{today=localCalendarDate(),needsReview
   return s;
 }
 export function setRetirementAge(s,age) {
+  s.household.alreadyRetired=false;
   if(usesCalendarDates(s))s.household.retirementDate=addCalendarMonths(s.household.birthday,Math.round(age*12));
   s.household.retirementAge=Math.floor(age);s.household.retirementAgeMonths=Math.round(age*12)%12;
 }
@@ -78,7 +86,7 @@ export function syncCalendarAges(s) {
   if(Number.isFinite(spouseMonths))h.spouseCurrentAge=Math.floor(spouseMonths/12);
 }
 export function delayRetirement(s,years) {
-  if(usesCalendarDates(s)){s.household.retirementDate=addCalendarMonths(s.household.retirementDate,years*12);syncCalendarAges(s);}
+  if(usesCalendarDates(s)){s.household.retirementDate=addCalendarMonths(forecastRetirementDate(s),years*12);s.household.alreadyRetired=false;syncCalendarAges(s);}
   else setRetirementAge(s,retirementAge(s)+years);
 }
 // Separation must fall in or after the calendar year the person turns 55. With
@@ -102,7 +110,7 @@ export function ageLabel(value) {
 export function baseScenario() {
   return {
     id: 'base-plan', name: 'Base plan',
-    household: {currentAge: 60, retirementAge: 67, retirementAgeMonths: 0, birthday: '', retirementDate: '', spouseBirthday: '', spouseRetirementDate: '', separatePeople: false, datesNeedReview: false, asOfDate: '', targetEndAge: 119, filingStatus: 'Single', gender: 'Male', spouseGender: 'Female', spouseCurrentAge: 60},
+    household: {currentAge: 60, retirementAge: 67, retirementAgeMonths: 0, birthday: '', retirementDate: '', alreadyRetired: false, spouseBirthday: '', spouseRetirementDate: '', spouseAlreadyRetired: false, separatePeople: false, datesNeedReview: false, asOfDate: '', targetEndAge: 119, filingStatus: 'Single', gender: 'Male', spouseGender: 'Female', spouseCurrentAge: 60},
     accounts: {pretax: 500000, roth: 50000, taxable: 0, cash: 50000},
     contributions:savingsDefaults(), spouseContributions:savingsDefaults(),
     spouseAccounts:{pretax:0,roth:0},
@@ -132,6 +140,10 @@ const TYPE_TEMPLATE = baseScenario();
 
 export function sampleScenarios() {
   const base = baseScenario();
+  // Illustrations include shortfalls in the fixed ten-path preview.
+  // Keep these choices separate from defaults used to read older plans.
+  base.accounts = {pretax: 175000, roth: 17500, taxable: 0, cash: 17500};
+  base.rothHistory.contributionBasis = base.accounts.roth;
   const later = structuredClone(base);
   later.id = 'later-retirement'; later.name = 'Retire at 62'; later.household.retirementAge = 62;
   later.socialSecurity.claimAge = 70; later.rothConversion.enabled = true;
@@ -256,7 +268,9 @@ export function validateScenario(s) {
     const today=h.asOfDate||localCalendarDate();
     if(!calendarDate(today))errors.push('The calculation date must be a valid calendar date.');
     if(!calendarDate(h.birthday)||h.birthday>=today||timeline.currentAge<=0||timeline.currentAge>=119)errors.push('Your birthday must be a valid date before today and within the modeling age range.');
-    if(!calendarDate(h.retirementDate)||h.retirementDate<today)errors.push('Retirement date must be a valid date today or later.');
+    if(h.alreadyRetired){
+      if(h.retirementDate&&(!calendarDate(h.retirementDate)||h.retirementDate>today||h.retirementDate<h.birthday))errors.push('Actual retirement date must be between your birthday and today, or left blank.');
+    }else if(!calendarDate(h.retirementDate)||h.retirementDate<today)errors.push('Retirement date must be a valid date today or later.');
     if(h.filingStatus==='Married'&&(!calendarDate(h.spouseBirthday)||h.spouseBirthday>=today||calendarMonthsBetween(h.spouseBirthday,today)<=0))errors.push('Spouse birthday must be a valid date before today.');
   }else if (h.currentAge <= 0) errors.push('Current age must be positive.');
   if (![h.retirementAgeMonths,s.guaranteedIncome.startAgeMonths,s.longTermCare.averageDurationMonths].every(v=>Number.isInteger(v)&&v>=0&&v<=11)) errors.push('Month fields must be whole numbers from 0 through 11.');
@@ -301,8 +315,10 @@ export function validateScenario(s) {
     if(!usesCalendarDates(s))errors.push('Separate-person modeling requires calendar birthdays and retirement dates.');
     if(h.filingStatus==='Married'){
       const today=h.asOfDate||localCalendarDate();
-      if(!calendarDate(h.spouseRetirementDate)||h.spouseRetirementDate<today)errors.push('Choose a spouse retirement date today or later.');
-      if(calendarMonthsBetween(h.spouseBirthday,h.spouseRetirementDate)/12>=h.targetEndAge)errors.push('Spouse own retirement date must be before the maximum modeling age.');
+      if(h.spouseAlreadyRetired){
+        if(h.spouseRetirementDate&&(!calendarDate(h.spouseRetirementDate)||h.spouseRetirementDate>today||h.spouseRetirementDate<h.spouseBirthday))errors.push('Spouse actual retirement date must be between their birthday and today, or left blank.');
+      }else if(!calendarDate(h.spouseRetirementDate)||h.spouseRetirementDate<today)errors.push('Choose a spouse retirement date today or later.');
+      if(calendarMonthsBetween(h.spouseBirthday,forecastRetirementDate(s,true))/12>=h.targetEndAge)errors.push('Spouse own retirement date must be before the maximum modeling age.');
       if(Object.values(s.spouseAccounts).some(v=>v<0||v>MAX_DOLLAR_AMOUNT))errors.push('Spouse balances must be supported nonnegative amounts.');
       const si=s.spouseIncome;
       if(si.annualBenefitAt67<0||si.annualBenefitAt67>MAX_DOLLAR_AMOUNT||s.socialSecurity.spouseClaimAge<62||s.socialSecurity.spouseClaimAge>70)errors.push('Spouse own Social Security needs a nonnegative annual amount and claim age 62–70.');
@@ -333,6 +349,7 @@ export function validateBudgetStructure(budget) {
     const path=`Budget month ${i+1}`;
     if(!object(m)){errors.push(`${path} must be an object.`);continue;}
     if(typeof m.month!=='string')errors.push(`${path} must have a month string.`);
+    if(m.includedPayments!==undefined&&(!object(m.includedPayments)||SEPARATE_COSTS.some(([,key])=>typeof m.includedPayments[key]!=='boolean')))errors.push(`${path} included payments must record a boolean for mortgage, rent and healthcare.`);
     number(m.cashAndAtmWithdrawals,`${path} cash withdrawals`);
     for(const key of ['checkingSavingsBills','creditCardBills']){
       if(m[key]===undefined)continue;
@@ -405,13 +422,14 @@ export function budgetEstimate(budget) { return budgetBreakdown(budget).estimate
 export function markBudgetEdited(budget) {
   budget.estimateNeedsReview=true;
 }
-export function applyBudgetEstimate(scenario) {
+export function applyBudgetEstimate(scenario,{replaceHomeCosts=scenario.budget.annualPropertyTaxes+scenario.budget.annualHomeInsurance>0}={}) {
   const errors=validateBudget(scenario.budget,{requireMonths:true});
   if(errors.length)throw new Error(errors.join(' '));
   const b=scenario.budget;
   scenario.spending.annualBaseSpending=budgetEstimate(b);
-  // The estimate includes these bills, so they are the spending that stops after a home sale.
-  scenario.home.annualTaxesAndInsurance=amount(b.annualPropertyTaxes)+amount(b.annualHomeInsurance);
+  // Empty optional bills do not erase separately entered home costs. An
+  // explicit replacement can still record zero when those costs no longer apply.
+  if(replaceHomeCosts)scenario.home.annualTaxesAndInsurance=amount(b.annualPropertyTaxes)+amount(b.annualHomeInsurance);
   delete b.appliedAnnualHomeCosts;
   b.isAppliedToAnnualBaseSpending=true;b.estimateNeedsReview=false;
   return scenario.spending.annualBaseSpending;

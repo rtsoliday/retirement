@@ -1,16 +1,16 @@
 import {RothConversionLedger} from './roth-conversions.js';
 import {requiredMinimumDistribution} from './distributions.js';
 import {ordinaryIncomeTax,taxableSocialSecurity} from './tax.js';
-import {calendarMonthsBetween,scenarioTimeline,localCalendarDate,addCalendarMonths,calendarDate} from './model.js';
+import {calendarMonthsBetween,scenarioTimeline,forecastRetirementDate,localCalendarDate,addCalendarMonths,calendarDate} from './model.js';
 import {monthlySavings} from './savings.js';
 
 // Keep separate ownership even though results summarize the household total.
 export class PersonAccounts{
   constructor(s,b){
     this.s=s;this.b=b;const t=scenarioTimeline(s),today=s.household.asOfDate||localCalendarDate(),start=t.startDate||s.household.retirementDate;
-    const make=(accounts,history,birthday,date,savings,withdrawal,age,birth)=>({pretax:accounts.pretax,roth:accounts.roth,ledger:new RothConversionLedger(history.contributionBasis,history.firstContributionYear,history.conversions),retire:calendarMonthsBetween(start,date),retireAge:calendarMonthsBetween(birthday,date)/12,rule55:withdrawal.ruleOf55Eligible&&calendarDate(date).getUTCFullYear()>=birth+55,seppSelected:withdrawal.seppEligible,savings,age,birth,rmd:0,paid:0,sepp:0,seppEnd:0});
-    this.people=[make(s.accounts,s.rothHistory,s.household.birthday,s.household.retirementDate,s.contributions,s.withdrawalStrategy,t.retirementAge,t.birthYear)];
-    if(s.household.filingStatus==='Married')this.people.push(make(s.spouseAccounts,s.spouseRothHistory,s.household.spouseBirthday,s.household.spouseRetirementDate,s.spouseContributions,s.spouseWithdrawal,t.spouseAtRet,t.spouseBirthYear));
+    const make=(accounts,history,birthday,date,actualDate,savings,withdrawal,age,birth)=>({pretax:accounts.pretax,roth:accounts.roth,ledger:new RothConversionLedger(history.contributionBasis,history.firstContributionYear,history.conversions),retire:calendarMonthsBetween(start,date),retireAge:calendarMonthsBetween(birthday,date)/12,rule55:withdrawal.ruleOf55Eligible&&calendarDate(actualDate)?.getUTCFullYear()>=birth+55,seppSelected:withdrawal.seppEligible,savings,age,birth,rmd:0,paid:0,sepp:0,seppEnd:0});
+    this.people=[make(s.accounts,s.rothHistory,s.household.birthday,forecastRetirementDate(s),s.household.retirementDate,s.contributions,s.withdrawalStrategy,t.retirementAge,t.birthYear)];
+    if(s.household.filingStatus==='Married')this.people.push(make(s.spouseAccounts,s.spouseRothHistory,s.household.spouseBirthday,forecastRetirementDate(s,true),s.household.spouseRetirementDate,s.spouseContributions,s.spouseWithdrawal,t.spouseAtRet,t.spouseBirthYear));
     this.today=today;this.start=start;this.preMonths=t.preMonths;this.refresh();
   }
   refresh(){this.b.pretax=this.people.reduce((n,p)=>n+p.pretax,0);this.b.roth=this.people.reduce((n,p)=>n+p.roth,0);}

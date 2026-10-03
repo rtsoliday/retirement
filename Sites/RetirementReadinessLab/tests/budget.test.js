@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {baseScenario,budgetEstimate,budgetBreakdown,budgetMonthTotals,validateBudget,validateScenario,applyBudgetEstimate,markBudgetEdited,normalizeScenario,setAnnualBaseSpending} from '../dist/model.js';
+
+test('empty optional bills preserve entered home costs unless replacement is explicit',()=>{
+  const s=baseScenario();s.home.annualTaxesAndInsurance=4000;
+  s.budget.monthlyBudgets=[{month:'2026-09',creditCardBills:[{monthlyAmount:4000}]}];
+  applyBudgetEstimate(s);
+  assert.equal(s.spending.annualBaseSpending,48000);assert.equal(s.home.annualTaxesAndInsurance,4000);
+  assert.equal(normalizeScenario(JSON.parse(JSON.stringify(s))).home.annualTaxesAndInsurance,4000);
+  applyBudgetEstimate(s,{replaceHomeCosts:true});assert.equal(s.home.annualTaxesAndInsurance,0);
+  s.home.annualTaxesAndInsurance=4000;s.budget.annualPropertyTaxes=5000;
+  applyBudgetEstimate(s,{replaceHomeCosts:false});assert.equal(s.home.annualTaxesAndInsurance,4000);
+  applyBudgetEstimate(s);assert.equal(s.home.annualTaxesAndInsurance,5000);
+});
 import {runSimulation} from '../dist/engine.js';
 const month=(date,spending=4500,adjustments={})=>({month:date,checkingSavingsBills:[{monthlyAmount:spending}],creditCardBills:[],cashAndAtmWithdrawals:0,adjustments});
 test('quarter containing a $6000 tax payment adds tax exactly once per year',()=>{
@@ -90,4 +102,15 @@ test('legacy budgets keep estimates and new adjustments survive JSON backup',()=
   const s=normalizeScenario({budget:{annualPropertyTaxes:4000,monthlyBudgets:[month('2026-01',1000)]}});assert.equal(budgetEstimate(s.budget),16000);
   s.budget.monthlyBudgets[0].adjustments={propertyTaxes:500,healthcare:100};s.budget.retirementAnnualAdjustment=1000;applyBudgetEstimate(s);
   const copy=normalizeScenario(JSON.parse(JSON.stringify(s)));assert.deepEqual(copy,s);assert.equal(budgetEstimate(copy.budget),9800);
+});
+
+
+test('monthly payment-choice records are optional for legacy backups and strictly boolean when present',()=>{
+  const s=baseScenario();s.budget.monthlyBudgets=[month('2026-01',5000)];
+  assert.deepEqual(validateBudget(s.budget),[]);
+  s.budget.monthlyBudgets[0].includedPayments={mortgage:false,rent:true,healthcare:false};
+  assert.deepEqual(validateBudget(s.budget),[]);
+  for(const malformed of [true,[],{mortgage:false,rent:'false',healthcare:false},{mortgage:false}]){
+    s.budget.monthlyBudgets[0].includedPayments=malformed;assert.match(validateBudget(s.budget).join(' '),/included payments must record a boolean/);
+  }
 });

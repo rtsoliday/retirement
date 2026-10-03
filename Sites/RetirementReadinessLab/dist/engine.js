@@ -1,7 +1,7 @@
 import {runSeparatePeople} from './person-engine.js';
 import {depositSavings,hasFutureSavings} from './savings.js';
 import {buildPathPoints,buildBalanceBands,buildFundingSurvival,medianOfSorted} from './chart-data.js';
-import {ENGINE_VERSION, scenarioEngineVersion, validateScenario, retirementAge, ruleOf55Applies, setAnnualBaseSpending, scenarioTimeline, usesCalendarDates, setRetirementAge, localCalendarDate, addCalendarMonths, calendarMonthsBetween, FREE_SIMULATION_PATHS} from './model.js';
+import {ENGINE_VERSION, scenarioEngineVersion, validateScenario, retirementAge, ruleOf55Applies, setAnnualBaseSpending, scenarioTimeline, forecastRetirementDate, usesCalendarDates, setRetirementAge, localCalendarDate, addCalendarMonths, calendarMonthsBetween, FREE_SIMULATION_PATHS} from './model.js';
 import {maleMortality,femaleMortality} from './mortality.js';
 import {taxableSocialSecurity,ordinaryIncomeTax,rothConversionPlan} from './tax.js';
 import {RothConversionLedger} from './roth-conversions.js';
@@ -167,7 +167,7 @@ export function runOne(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails
     const accounts={...b,cash:Math.max(0,b.cash)},portfolio=accounts.pretax+accounts.roth+accounts.taxable+accounts.cash;
     const netAssets=portfolio+home-mortgageBalance;
     requireFinite(portfolio,netAssets);
-    monthlyDetails.push({month,age:(Math.round(h.retirementAge*12)+month)/12,date:usesCalendarDates(s)?addCalendarMonths(h.retirementDate,month):null,...accounts,home,mortgage:mortgageBalance,portfolio,netAssets,unfundedAmount:Math.max(0,-b.cash),...(monthlyCashFlow?{cashFlow:monthlyCashFlow}:{})});
+    monthlyDetails.push({month,age:(Math.round(h.retirementAge*12)+month)/12,date:usesCalendarDates(s)?addCalendarMonths(forecastRetirementDate(s),month):null,...accounts,home,mortgage:mortgageBalance,portfolio,netAssets,unfundedAmount:Math.max(0,-b.cash),...(monthlyCashFlow?{cashFlow:monthlyCashFlow}:{})});
   }
   recordMonth(0);
   function recordTaxYear(taxYear,status){if(taxYears)taxYears.push({taxYear,status,ordinaryIncome:annualOrdinaryIncome,socialSecurity:annualSocialSecurity,tax:annualTaxPaid,pretaxDistributions:annualPretaxDistributions,requiredMinimumDistribution:annualRmd,conversions:annualConversions,accounts:{...b}});}

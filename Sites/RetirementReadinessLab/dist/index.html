@@ -13,7 +13,7 @@
   <link rel="icon" type="image/svg+xml" href="./forecast-fan.svg?v=33">
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png?v=33">
   <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png?v=33">
-  <link rel="stylesheet" href="./style.css?v=49">
+  <link rel="stylesheet" href="./style.css?v=54">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -24,26 +24,26 @@
     <nav aria-label="Main navigation" id="navigation">
       <span class="nav-group">Your plan</span>
         <button data-view="dashboard" class="active">Overview</button>
-        <button data-view="setup">Assumptions</button>
+        <button data-view="setup">My plan</button>
         <button data-view="budget">Budget</button>
         <button data-view="withdrawals">How withdrawals work</button>
         <span class="nav-group">Explore & compare</span>
-      <button data-view="scenarios">Scenarios</button>
-        <button data-view="lab">Scenario lab</button>
+      <button data-view="scenarios">Saved plans</button>
+        <button data-view="lab">Compare changes</button>
         <button data-view="results">Results</button>
         <span class="nav-group">Save & share</span>
       <button data-view="reports">Reports & backup</button>
       <button data-view="billing">Plans & billing</button>
       </nav>
-      <div class="sidebar-foot">Your scenarios are saved in this browser. Export a backup before clearing browser data.</div>
+      <div class="sidebar-foot">Your plans are saved in this browser. Export a backup before clearing browser data.</div>
     </aside>
     <div class="workspace">
-      <header class="topbar"><div class="topline"><span id="page-location" class="eyebrow">Overview</span><span class="privacy">● Saved on this device</span></div><div class="topactions"><div class="scenario-select-wrap"><label for="scenario-select">Current scenario</label><select id="scenario-select"></select></div><span id="result-state" class="run-state">Ready to simulate</span><button id="run-button" class="primary">Run simulation</button></div></header>
+      <header class="topbar"><div class="topline"><span id="page-location" class="eyebrow">Overview</span><span class="privacy">● Saved on this device</span></div><div class="topactions"><div class="scenario-select-wrap"><label for="scenario-select">Current plan</label><select id="scenario-select"></select></div><span id="result-state" class="run-state">Ready to simulate</span><button id="run-button" class="primary">Run simulation</button></div></header>
       <main id="main" tabindex="-1"></main>
       <footer><span>© 2026 Robert Soliday. All rights reserved. <a href="./license.html" rel="license">License terms</a></span> <span>For U.S. retirement planning only. Educational estimates, not advice or guarantees. <a href="./methodology.html">Model scope &amp; limitations</a></span><nav class="footer-links" aria-label="Support and policies"><a href="./support.html">Support</a><a href="./privacy.html">Privacy</a><a href="./terms.html">Terms of use</a><a href="./license.html" rel="license">Code license</a><a href="./methodology.html">Model scope</a></nav></footer>
     </div>
   </div>
   <input type="file" id="import-file" accept="application/json,.json" hidden>
-  <script type="module" src="./app.js?v=42"></script>
+  <script type="module" src="./app.js?v=47"></script>
 </body>
 </html>

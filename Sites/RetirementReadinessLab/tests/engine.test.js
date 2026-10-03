@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {baseScenario,sampleScenarios,budgetEstimate,applyBudgetEstimate,validateScenario,normalizeScenario,normalizeScenarios,ROTH_CONVERSION_RATES,DEFAULT_SEED} from '../dist/model.js';
+import {baseScenario,sampleScenarios,prepareCalendarScenario,budgetEstimate,applyBudgetEstimate,validateScenario,normalizeScenario,normalizeScenarios,ROTH_CONVERSION_RATES,DEFAULT_SEED} from '../dist/model.js';
 import {runSimulation,runOne,JavaRandom,estimateDecision,searchDecision,candidateReadiness,sampleDeathAge} from '../dist/engine.js';
 import {taxableSocialSecurity,taxableOrdinaryIncome,ordinaryIncomeTax,rothConversionPlan} from '../dist/tax.js';
 import {annualBenefitAtClaimAge} from '../dist/social-security.js';
@@ -227,9 +227,24 @@ test('Roth conversion cap accepts only supported brackets when enabled',()=>{
 test('sample plans retain their comparison seed and use ten-path previews',()=>{
   for(const s of sampleScenarios()){
     assert.equal(s.household.currentAge,60);assert.equal(s.household.spouseCurrentAge,60);
-    assert.equal(s.accounts.pretax,500000);assert.equal(s.accounts.roth,50000);
+    assert.deepEqual(s.accounts,{pretax:175000,roth:17500,taxable:0,cash:17500});
+    assert.equal(s.rothHistory.contributionBasis,s.accounts.roth);
+    assert.deepEqual(s.market,baseScenario().market);
+    assert.equal(s.market.stockMeanReturn,.133);assert.equal(s.market.preRetirementMeanReturn,.133);
+    assert.equal(s.spending.annualBaseSpending,s.id==='lean-plan'?68000:75000);
     assert.equal(s.seed,DEFAULT_SEED);assert.equal(s.numberOfSimulations,10);
     const r=runSimulation(s);assert.equal(r.provenance.randomSeed,DEFAULT_SEED);assert.equal(r.provenance.simulationCount,10);assert.equal(r.riskBreakdown.simulationCount,10);assert.match(r.riskBreakdown.summary,/preview only/);
+    assert.ok(r.successProbability<=.8,`${s.name}: ${r.successProbability*10} of 10 passed`);
+  }
+});
+
+test('calendar-based examples have at least two shortfalls in the default free preview',()=>{
+  for(const today of ['2026-10-03','2026-12-31','2027-01-01','2028-02-29'])for(const s of sampleScenarios()){
+    prepareCalendarScenario(s,{today,needsReview:false});s.household.asOfDate=today;
+    s.household.separatePeople=true;s.household.spouseRetirementDate=s.household.retirementDate;
+    const r=runSimulation(s,undefined,{includeRiskAnalysis:false,includePathPoints:false});
+    assert.equal(r.provenance.simulationCount,10);assert.equal(r.provenance.randomSeed,DEFAULT_SEED);
+    assert.ok(r.successProbability<=.8,`${s.name} on ${today}: ${r.successProbability*10} of 10 passed`);
   }
 });
 

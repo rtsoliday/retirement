@@ -295,6 +295,7 @@ main{container-type:inline-size}
 /* Larger ? target on touch screens; the invisible margin stays inside the 6px field gap. */
 @media(pointer:coarse){.help-trigger{position:relative;width:28px;height:28px;font-size:.82rem}.help-trigger::before{content:'';position:absolute;inset:-6px -8px}.field-label{min-height:28px}}
 .result-explanations{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}.result-explanations h3{font-size:1rem}.result-explanations p{line-height:1.6}.review-actions{display:flex;flex-wrap:wrap;gap:12px;margin:22px 0}.assumption-summary{margin:0}.assumption-summary>div{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;padding:12px 0;border-bottom:1px solid #e5edef}.assumption-summary dd{margin:0;text-align:right;overflow-wrap:anywhere}.assumption-summary small{display:block;color:#637980;margin-top:4px}.guided-extra{border:1px solid #d4e2df;border-radius:10px;margin:18px 0;padding:14px}.guided-extra summary{font-weight:600;cursor:pointer}.guided-extra .form-group{margin-top:18px}
+.optional-question{margin:24px 0}.optional-question>h3{font-size:1rem}.optional-answers{display:flex;gap:8px;flex-wrap:wrap}.optional-answers button[aria-pressed=true]{background:#e6f3ef;border-color:#007b69;color:#064f45}.optional-question>.guided-extra{margin:12px 0}.optional-question details[hidden]{display:none}.roth-unknown-options{border:1px solid #d4e2df;border-radius:10px;padding:16px;margin:14px 0;line-height:1.5}.preview-warning summary,.planning-disclosure summary,.comparison-help summary{cursor:pointer;font-weight:650;padding:8px 0}.roth-estimate-notice p{margin:8px 0}.comparison-help{margin-top:14px}.planning-disclosure details p{margin-top:8px}@media(max-width:680px){.optional-answers button{flex:1;min-width:75px}.roth-unknown-options .actions{display:grid}.preview-warning{padding:12px 14px}.result-next-steps .actions>button{width:100%}}
 :focus-visible{outline:3px solid #9a6b10;outline-offset:3px}
 @media(max-width:600px){.result-explanations{grid-template-columns:1fr;gap:8px}.household-choice{display:grid;grid-template-columns:1fr}.assumption-summary>div{grid-template-columns:1fr}.assumption-summary dd{text-align:left}.steady-explanation{font-size:.9rem}.review-actions button{width:100%}}
 .field.checkbox{flex-wrap:wrap}.field.checkbox .field-guidance{flex:0 0 100%}
@@ -373,3 +374,39 @@ main{container-type:inline-size}
   .form-panel-head p{margin:6px 0 0}
 }
 @media print{.setup-tools,.field-none{display:none}}
+
+/* Basic savings setup is three short tasks with shared completion counts. */
+.savings-task-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:16px 20px;border-bottom:1px solid var(--line)}
+.savings-task-picker button{white-space:normal;text-align:left;display:grid;gap:5px;padding:12px;min-width:0}
+.savings-task-picker small{font-weight:400;font-size:.74rem;line-height:1.3}
+.savings-task-picker button[aria-current="step"]{background:#e4f2ec;border-color:#217662;color:#174f43}
+.savings-task-panel[hidden],[data-cost-field][hidden]{display:none}
+.account-type-guide{margin:18px 24px;padding:14px 16px;background:#f5f8f7;border:1px solid #d4e2df;border-radius:10px;font-size:.83rem;line-height:1.5}
+.account-type-guide p{margin:0 0 10px}.account-type-guide summary,.roth-record-help summary{cursor:pointer;font-weight:650}
+.account-type-guide dt{font-weight:700;margin-top:12px}.account-type-guide dd{margin:3px 0 0}
+.roth-record-help{margin-bottom:18px;font-size:.84rem;line-height:1.6}.roth-record-help ol{padding-left:22px}.roth-record-help li+li{margin-top:10px}.roth-record-help>.text-link{margin-top:8px}
+.missing-tasks{display:grid;gap:12px}.missing-tasks>div{border:1px solid #e9c8c5;border-radius:8px;padding:14px;background:#fff}
+.missing-tasks small{display:block;margin:5px 0 10px}.missing-tasks details{margin-top:10px}.missing-tasks summary{cursor:pointer}.missing-tasks ul{padding-left:20px}
+.monthly-costs{border:1px solid #cfdfd8;border-radius:9px;padding:14px;margin:18px 0;min-width:0;background:#f8fbf9}
+.monthly-costs legend{font-weight:700;font-size:.85rem}.monthly-costs .month-cost-choice{display:flex;align-items:center;gap:9px;margin:12px 0;font-size:.86rem}
+.month-cost-choice input{width:20px;height:20px;min-height:20px;flex:0 0 20px}
+.monthly-costs>.text-link,.monthly-costs>.secondary{display:block;margin-top:12px;white-space:normal;text-align:left}
+.monthly-costs [data-cost-field]{margin-bottom:16px}
+@media(max-width:680px){.savings-task-picker{padding:12px;gap:5px}.savings-task-picker button{padding:9px 7px;font-size:.72rem}.savings-task-picker small{font-size:.66rem}.account-type-guide{margin:14px 20px;padding:12px}.savings-task-panel .form-group{padding-top:16px;padding-bottom:16px}.savings-task-panel .field-guidance{font-size:.79rem;margin:4px 0}.savings-task-panel .field-none{justify-self:end;min-height:28px;margin:0}.missing-tasks>div{padding:12px}}
+@media print{.savings-task-picker{display:none}.savings-task-panel[hidden]{display:block}.monthly-costs{background:#fff}}
+
+/* Put the answer and its first action ahead of result controls and disclosures. */
+.result-first-action{margin-top:14px}.result-first-action button{max-width:100%;white-space:normal}
+.result-verdict .result-caution{margin:10px 0 0;font-size:.82rem;color:#755419;line-height:1.5}
+.result-controls{display:grid;gap:18px}.result-controls .notice{margin-bottom:0}
+.account-check h2{font-size:1.2rem;line-height:1.4}.account-check .optional-answers{margin:20px 0}.account-check .actions{margin-top:22px}
+.account-check-warning p{margin:8px 0}
+.report-summary .assumption-summary{margin-top:14px}.report-summary .assumption-summary>div{grid-template-columns:minmax(180px,1fr) minmax(0,2fr)}
+.report-summary .assumption-summary dd{text-align:left;line-height:1.6}.report-cautions{padding-left:22px;font-size:.86rem;line-height:1.6;color:var(--muted)}.report-cautions li+li{margin-top:8px}
+.report-details>summary{cursor:pointer;font-weight:700;color:var(--ink)}.report-details[open]>summary{margin-bottom:18px}.report-details .report-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.82rem;line-height:1.6}
+@media(max-width:600px){.result-first-action button{width:100%}.account-check .actions,.report-summary .actions{display:grid}.report-summary .assumption-summary>div{grid-template-columns:1fr;gap:4px}.report-summary .assumption-summary dt{font-weight:650}.report-summary .actions button{width:100%}}
+@media print{.report-backup,.report-summary .actions{display:none!important}.report-summary{break-inside:auto}.report-summary .assumption-summary>div{break-inside:avoid}.report-details:not([open]){display:none}.report-details{break-inside:auto}}
+.plan-name>label{display:block;font-weight:650;margin-bottom:8px}.plan-name>input{width:100%;max-width:480px}.retirement-inputs{grid-column:1/-1;min-width:0}.retirement-choice,.spending-included{border:0;padding:0;margin:0 0 16px;min-width:0}.retirement-choice legend,.spending-included legend{font-weight:650;margin-bottom:12px}.retirement-inputs>.field{max-width:480px}.retired-start{padding:14px 16px;margin:12px 0;background:#f0f7f4;border-radius:10px}.retired-start p{margin:6px 0 0}.retirement-inputs .inset-details{margin-top:12px}.spending-calculator>.field{margin:20px 0}.spending-included .field{margin:8px 0 18px}.spending-included .budget-cost-confirm{display:flex;align-items:flex-start;gap:8px;margin:12px 0}.spending-calculator-result{margin-top:16px}.monthly-picture-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px;margin:24px 0}.monthly-picture-metrics dt{font-weight:650;color:var(--muted)}.monthly-picture-metrics dd{margin:8px 0 0;font-size:1.65rem;font-weight:700;color:#173f34}.monthly-picture-metrics small{display:block;margin-top:8px;font-size:.85rem;font-weight:400;line-height:1.5;color:var(--muted)}.income-bridge{border-top:1px solid #dce7e1;padding-top:18px;margin-top:18px}.income-bridge h3{font-size:1rem}.income-bridge ul{padding-left:20px;line-height:1.6}.income-bridge li+li{margin-top:8px}
+@media(max-width:680px){.monthly-picture-metrics{grid-template-columns:1fr;gap:18px}.monthly-picture-metrics>div{padding-bottom:16px;border-bottom:1px solid #e5edef}.monthly-picture-metrics dd{font-size:1.4rem}.retirement-choice .optional-answers{display:grid;grid-template-columns:1fr}.retirement-choice button{width:100%}}
+
+.budget-apply-preview{border-top:1px solid var(--line);margin-top:1rem;padding-top:1rem}.budget-apply-preview h3{font-size:1rem;margin:0 0 .75rem}.budget-apply-preview dl{margin:0 0 1rem}.budget-apply-preview dl>div{margin:.75rem 0}.budget-apply-preview dt{font-weight:700}.budget-apply-preview dd{margin:.3rem 0 0;overflow-wrap:anywhere}.budget-home-choice{display:flex;gap:.6rem;align-items:flex-start;font-size:.875rem;line-height:1.5}.budget-home-choice input{flex:0 0 auto;margin-top:.25rem}.confirm-input{font-size:inherit}
