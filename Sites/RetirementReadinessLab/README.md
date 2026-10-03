@@ -8,6 +8,8 @@ Retained savings settings for inactive spouses or already-retired people, timing
 
 Saved results load per plan even if the selected plan changes during loading. Edited inputs must still match the saved calculation; imports, resets and deletions discard old results without preventing unchanged plans from loading theirs.
 
+Saved plans offers Reset all plans. After confirmation, it removes saved plans and results and restores only the three original examples, including examples previously deleted or edited. Setup progress and plan-specific answers are cleared; subscription access and the dollar-display preference are retained.
+
 Plans copied from comparisons discard the comparison's calculation date. Their overview and next forecast use today's date after saving and reopening, including for already-retired people. Separate-owner Medicare income estimates cap each owner's RMD at that owner's remaining pretax balance; exhausting the account cannot create a phantom surcharge on nonqualified Roth earnings. Saved separate-owner results from before this correction require a new run.
 
 ## Included

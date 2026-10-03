@@ -52,6 +52,49 @@ test('saved assumptions stay intact and restoring examples uses the new preview 
   assert.equal(a.current().name,'My saved plan');
 });
 
+test('Reset all plans replaces edited or deleted examples and custom plans with the original three',async()=>{
+  const defaults=structuredClone(app().state.scenarios),custom=structuredClone(defaults[0]);custom.id='custom-plan';custom.name='My plan';
+  for(const plans of [[custom],[...defaults.map(s=>({...structuredClone(s),name:'Edited example',accounts:{...s.accounts,pretax:900000}})),custom]]){
+    const preferences=new Map([['retirement-setup-step',JSON.stringify({id:'base-plan',section:5})],['retirement-setup-modes',JSON.stringify({'base-plan':true,'custom-plan':true})],['retirement-dollar-basis','future']]);
+    const a=app({scenarios:plans,selectedId:custom.id,inputSources:{'base-plan':{_origin:'Entered'},'custom-plan':{_origin:'Entered'}},optionalAnswers:{'base-plan':{'home-inputs':'yes'}},accountChecks:{'base-plan':'yes','custom-plan':'unsure'},entryPeriods:{'base-plan':{'spending.annualBaseSpending':'month'}}},{preferences});
+    a.state.view='scenarios';seedExploration(a);await completeCachedRun(a);
+    assert.match(a.scenarios(),/data-action="reset-plans"[^>]*>Reset all plans</);
+    await a.click('reset-plans');
+    assert.deepEqual(structuredClone(a.state.scenarios),defaults);assert.equal(a.current().id,'base-plan');
+    assert.deepEqual([...a.state.exampleIds],defaults.map(s=>s.id));assert.equal(a.state.results.size,0);assert.equal(a.state.resultSaveStatus.size,0);assert.equal(a.state.restoredResults.size,0);assertCleared(a);
+    assert.equal(a.state.hasStartedPlan,false);assert.equal(a.state.guided,false);assert.equal(a.state.setupSection,0);
+    assert.deepEqual(a.saved().accountChecks,{});
+    for(const s of defaults){assert.deepEqual(a.saved().inputSources[s.id],{_origin:'Sample/default'});assert.deepEqual(a.saved().optionalAnswers[s.id],{});assert.deepEqual(a.saved().entryPeriods[s.id],{});}
+    assert.equal(preferences.has('retirement-setup-step'),false);assert.equal(preferences.has('retirement-setup-modes'),false);assert.equal(preferences.get('retirement-dollar-basis'),'future');
+    const reloaded=app(a.saved(),{preferences});assert.deepEqual(structuredClone(reloaded.state.scenarios),defaults);assert.equal(reloaded.state.hasStartedPlan,false);assert.equal(reloaded.state.guided,false);
+    await a.click('reset-plans');assert.deepEqual(structuredClone(a.state.scenarios),defaults);
+  }
+});
+
+test('canceling Reset all plans preserves saved plans, results and setup preferences',async()=>{
+  const {saved,resultRecords}=await twoCachedPlans(),preferences=new Map([['retirement-setup-modes',JSON.stringify({'base-plan':true})]]);
+  let confirmation='';const a=app(saved,{resultRecords,preferences,confirm:message=>{confirmation=message;return false;}});await a.resultRestoreReady;
+  const stored=a.stored(),records=structuredClone([...resultRecords]),modes=preferences.get('retirement-setup-modes');seedExploration(a);
+  await a.click('reset-plans');
+  assert.match(confirmation,/removes all saved plans and results.*3 original example plans/);
+  assert.equal(a.stored(),stored);assert.deepEqual(structuredClone(a.state.scenarios),saved.scenarios);assert.deepEqual([...resultRecords],records);assert.equal(a.state.results.size,2);assert.ok(a.state.labResults);assert.equal(preferences.get('retirement-setup-modes'),modes);
+});
+
+test('Reset all plans retains Pro access and applies the normal Pro path default',async()=>{
+  const a=app();a.state.access.tier='pro';await a.click('reset-plans');
+  assert.equal(a.state.access.tier,'pro');assert.equal(a.state.scenarios.length,3);
+  for(const s of a.state.scenarios){assert.equal(s.numberOfSimulations,10000);assert.equal(s.simulationPathsCustomized,false);}
+});
+
+test('Reset all plans preserves newer or unsavable stored plans and reports the failed save',async()=>{
+  for(const fail of [true,false]){
+    const storage={fail},a=app({scenarios:model.sampleScenarios(),selectedId:'base-plan'},{storage});
+    if(!fail)storage.raw=JSON.stringify({scenarios:[model.baseScenario()],selectedId:'base-plan'});
+    const before=a.stored();await a.click('reset-plans');
+    assert.equal(a.stored(),before);assert.match(a.state.message,fail?/could not be saved/:/changed in another tab/);assert.doesNotMatch(a.state.message,/have been restored/);
+  }
+});
+
 test('already-retired setup runs without a separation date or future savings and preserves both date modes',async()=>{
   const s=model.prepareCalendarScenario(model.baseScenario()),date=s.household.retirementDate;
   const a=app({scenarios:[s],selectedId:s.id,inputSources:{[s.id]:{_origin:'Entered','contributions.pretax':'Unknown'}}});
@@ -303,16 +346,18 @@ test('an edit during cache loading skips only the changed plan',async()=>{
 });
 
 test('imports, resets and deletions during cache loading cannot resurrect discarded results',async()=>{
-  for(const action of ['import','reset','delete']){
+  for(const action of ['import','reset','reset-all','delete']){
     const {saved,resultRecords}=await twoCachedPlans();
     let release;const gate=new Promise(resolve=>{release=resolve;});
     const a=app(saved,{resultRecords,resultStorage:{beforeLoad:()=>gate}}),id=a.current().id;
     if(action==='import')await a.change('#import-file',{files:[{text:async()=>JSON.stringify(saved)}],value:'backup.json'});
     else if(action==='reset')await a.click('reset-assumptions');
+    else if(action==='reset-all')await a.click('reset-plans');
     else await a.click('delete-scenario',{id});
     release();await a.resultRestoreReady;
     assert.equal(a.state.results.has(id),false,action);
-    assert.equal(a.state.results.size,action==='import'?0:1,action);
+    assert.equal(a.state.results.size,['import','reset-all'].includes(action)?0:1,action);
+    if(action==='reset-all')assert.equal(resultRecords.size,0);
   }
 });
 
@@ -353,6 +398,16 @@ test('an input edit during a result write prevents stale results from being rest
   assert.equal(a.state.results.has(id),false);
   const restored=app(a.saved(),{resultRecords});await restored.resultRestoreReady;
   assert.equal(restored.state.results.has(id),false);
+});
+
+test('Reset all plans clears a result write still in flight for an original example',async()=>{
+  let release,started;
+  const gate=new Promise(resolve=>{release=resolve;}),writing=new Promise(resolve=>{started=resolve;});
+  const resultRecords=new Map(),a=app(null,{resultRecords,resultStorage:{beforeSave:async()=>{started();await gate;}}});
+  const pending=a.run(),worker=a.workers.at(-1);worker.onmessage({data:{type:'result',result:runSimulation(worker.data.scenario)}});await pending;await writing;
+  const reset=a.click('reset-plans');release();await reset;
+  assert.equal(resultRecords.size,0);assert.equal(a.state.results.size,0);assert.equal(a.state.resultSaveStatus.size,0);
+  const restored=app(a.saved(),{resultRecords});await restored.resultRestoreReady;assert.equal(restored.state.results.size,0);
 });
 
 test('temporary Roth history explicitly resolves Unknown fields and survives backup, copy and reload',async()=>{
@@ -599,7 +654,7 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
     location,history:{replaceState(_state,_title,url){const next=new URL(url,'https://example.test');location.search=next.search;location.hash=next.hash;}},confirm,
     setTimeout(fn,delay){const id=++nextTimer;timers.set(id,{fn,at:clock.now+delay});return id;},clearTimeout(id){timers.delete(id);},
     sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value)},socialState:()=>({...identity}),
-    navigator:{locks},localStorage:{getItem:key=>key==='retirement-readiness-lab-sites-v1'?readStored():preferences.get(key)||null,setItem(key,value){if(key!=='retirement-readiness-lab-sites-v1'){preferences.set(key,value);return;}if(storage.fail)throw new Error('QuotaExceededError');if(Object.hasOwn(storage,'raw'))storage.raw=value;else stored=value;}},window:{addEventListener(name,handler){windowListeners[name]=handler;},scrollTo(){}},
+    navigator:{locks},localStorage:{getItem:key=>key==='retirement-readiness-lab-sites-v1'?readStored():preferences.get(key)||null,setItem(key,value){if(key!=='retirement-readiness-lab-sites-v1'){preferences.set(key,value);return;}if(storage.fail)throw new Error('QuotaExceededError');if(Object.hasOwn(storage,'raw'))storage.raw=value;else stored=value;},removeItem:key=>preferences.delete(key)},window:{addEventListener(name,handler){windowListeners[name]=handler;},scrollTo(){}},
     document,
     chartCard:()=>'',mountCharts(){},disposeCharts(){},initializeSocialAuth:()=>new Promise(()=>{}),fetch,authHeaders:async()=>({}),...socialActions,
     Worker:class{constructor(){workers.push(this);}postMessage(data){this.data=data;}terminate(){this.terminated=true;}},
