@@ -1,13 +1,13 @@
 import {normalizeInputSources,inputSource,unknownInputPaths,FIELD_GUIDANCE,EARNINGS_EXPLANATION,EARNINGS_POINTS} from './ux-guidance.js';
-import {budgetPlanGaps,spendingInputSummary,inputTask,groupUnknownInputs,OPTIONAL_QUESTIONS,normalizeOptionalAnswers,temporaryRothValues,calculateEverydaySpending,monthlyIncomeSummary} from './plan-review.js';
+import {budgetPlanGaps,spendingInputSummary,needsPreMedicarePremium,inputTask,groupUnknownInputs,OPTIONAL_QUESTIONS,normalizeOptionalAnswers,temporaryRothValues,calculateEverydaySpending,monthlyIncomeSummary} from './plan-review.js';
 import {moneyInputValue,parseMoneyInput} from './money-input.js';
-import {createResultCache,matchingCachedResult} from './result-cache.js';
+import {createResultCache,matchingCachedResult,resultFingerprint} from './result-cache.js';
 import {oneYearGrowth} from './growth-helper.js';
 import {withdrawalContent} from './withdrawals-view.js';
 import {isPreviewResult,readinessLabel,shareLabel,ageYearRows,balanceDisplayRows,PREVIEW_WARNING} from './result-format.js';
 import {chartCard,mountCharts,disposeCharts} from './charts.js';
 import {initializeSocialAuth,socialState,authHeaders,signInSocial,linkSocialProvider,signOutSocial} from './auth.js';
-import {baseScenario,retirementAge,primaryRetirementAge,ageLabel,calendarDate,calendarMonthsBetween,localCalendarDate,prepareCalendarScenario,scenarioTimeline,forecastRetirementDate,dateLabel,syncCalendarAges,delayRetirement,sampleScenarios,normalizeScenarios,applyProSimulationDefault,validateScenario,validateScenarioStructure,budgetBreakdown,budgetMonthTotals,validateBudget,markBudgetEdited,applyBudgetEstimate,setAnnualBaseSpending,ruleOf55Applies,earlyWithdrawalContext,ANNUAL_BILLS,SEPARATE_COSTS,ROTH_CONVERSION_RATES,scenarioWarnings,ENGINE_VERSION,scenarioEngineVersion,DEFAULT_SEED,FREE_SIMULATION_PATHS,MIN_SIMULATION_PATHS,MAX_SIMULATION_PATHS,MAX_DOLLAR_AMOUNT} from './model.js';
+import {baseScenario,retirementAge,primaryRetirementAge,ageLabel,calendarDate,calendarMonthsBetween,localCalendarDate,prepareCalendarScenario,scenarioTimeline,forecastRetirementDate,dateLabel,syncCalendarAges,delayRetirement,sampleScenarios,normalizeScenarios,applyProSimulationDefault,validateScenario,validateScenarioDraft,validateScenarioStructure,budgetBreakdown,budgetMonthTotals,validateBudget,markBudgetEdited,applyBudgetEstimate,setAnnualBaseSpending,ruleOf55Applies,earlyWithdrawalContext,ANNUAL_BILLS,SEPARATE_COSTS,ROTH_CONVERSION_RATES,scenarioWarnings,ENGINE_VERSION,scenarioEngineVersion,DEFAULT_SEED,FREE_SIMULATION_PATHS,MIN_SIMULATION_PATHS,MAX_SIMULATION_PATHS,MAX_DOLLAR_AMOUNT} from './model.js';
 
 const $=s=>document.querySelector(s),escapeHTML=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=(v,d=0)=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:d}).format(v||0);
@@ -100,8 +100,12 @@ function current(){return state.scenarios.find(s=>s.id===state.selectedId)||stat
 function blockingUnknowns(s){return unknownInputPaths(s,state.inputSources).filter(path=>{
   if(path==='household.retirementDate'&&s.household.alreadyRetired||path==='household.spouseRetirementDate'&&s.household.spouseAlreadyRetired)return false;
   if(path.startsWith('contributions.')&&s.household.alreadyRetired||path.startsWith('spouseContributions.')&&(s.household.separatePeople?s.household.spouseAlreadyRetired:s.household.alreadyRetired))return false;
-  if(path==='healthcare.preMedicareMonthlyPremium')return spendingInputSummary(s,state.inputSources).preMedicareAdults>0;
-  for(const [prefix,amount,id] of [['guaranteedIncome','annualIncome','your-pension'],['spouseIncome','annualPension','spouse-pension']])if(state.optionalAnswers[s.id]?.[id]==='no'&&path.startsWith(prefix+'.')&&path!==prefix+'.'+amount&&(prefix==='guaranteedIncome'||path!=='spouseIncome.annualBenefitAt67')&&inputSource(s,state.inputSources,prefix+'.'+amount)!=='Unknown'&&s[prefix][amount]===0)return false;
+  if(path==='healthcare.preMedicareMonthlyPremium')return needsPreMedicarePremium(s);
+  if(path.startsWith('longTermCare.')&&path!=='longTermCare.enabled'&&!s.longTermCare.enabled)return false;
+  if(path==='rothConversion.marginalRateCap'&&!s.rothConversion.enabled)return false;
+  if(path==='withdrawalStrategy.drawdownTrigger'&&!s.withdrawalStrategy.useCashReserveDuringDrawdowns)return false;
+  // A resolved zero pension makes its details unused, whether entered as 0, None, or No.
+  for(const [prefix,amount] of [['guaranteedIncome','annualIncome'],['spouseIncome','annualPension']])if(path.startsWith(prefix+'.')&&path!==prefix+'.'+amount&&(prefix==='guaranteedIncome'||path!=='spouseIncome.annualBenefitAt67')&&inputSource(s,state.inputSources,prefix+'.'+amount)!=='Unknown'&&s[prefix][amount]===0)return false;
   return true;
 });}
 const SAVINGS_AMOUNT_KEYS=['pretax','employerPretax','roth','taxable','cash'];
@@ -414,12 +418,26 @@ const spouseFieldPaths=new Set(['household.spouseBirthday','household.spouseGend
 function visibleFields(s,fields){return fields.filter(([,path])=>!(s.household.filingStatus!=='Married'&&(spouseFieldPaths.has(path)||path.startsWith('spouse')||path==='household.spouseRetirementDate'||path.startsWith('workingIncome')))&&!(!s.household.separatePeople&&(path.startsWith('spouseAccounts')||path.startsWith('spouseRothHistory')||path.startsWith('spouseIncome')||path.startsWith('spouseWithdrawal')||path.startsWith('workingIncome')||path==='household.spouseRetirementDate')));}
 function getPath(obj,path){return path.split('.').reduce((v,k)=>v[k],obj);}
 function setPath(obj,path,value){const keys=path.split('.');const last=keys.pop();keys.reduce((v,k)=>v[k],obj)[last]=value;}
+function removeRothConversion(s,prefix,index){
+  const rows=s[prefix].conversions;
+  if(!Number.isInteger(index)||index<0||index>=rows.length)return false;
+  rows.splice(index,1);
+  // Review labels use row indexes, so they must move with the remaining lots.
+  const stem=prefix+'.conversions.';
+  state.inputSources[s.id]=Object.fromEntries(Object.entries(state.inputSources[s.id]).flatMap(([path,source])=>{
+    const match=path.startsWith(stem)&&/^(\d+)\.(.+)$/.exec(path.slice(stem.length));
+    if(!match)return [[path,source]];
+    const row=Number(match[1]);
+    return row===index?[]:[[row>index?stem+(row-1)+'.'+match[2]:path,source]];
+  }));
+  return true;
+}
 function preMedicareNotNeeded(s){
   const dates=['household.birthday','household.retirementDate',...(s.household.filingStatus==='Married'?['household.spouseBirthday',...(s.household.separatePeople?['household.spouseRetirementDate']:[])]:[])];
-  return dates.every(path=>inputSource(s,state.inputSources,path)!=='Unknown'||path==='household.retirementDate'&&s.household.alreadyRetired||path==='household.spouseRetirementDate'&&s.household.spouseAlreadyRetired)&&spendingInputSummary(s,state.inputSources).preMedicareAdults===0;
+  return dates.every(path=>inputSource(s,state.inputSources,path)!=='Unknown'||path==='household.retirementDate'&&s.household.alreadyRetired||path==='household.spouseRetirementDate'&&s.household.spouseAlreadyRetired)&&!needsPreMedicarePremium(s);
 }
 function preMedicareField(s){
-  return preMedicareNotNeeded(s)?'<div class="field"><strong>Pre-Medicare premiums</strong><p class="field-source">Not needed for this plan</p><p class="field-guidance">Everyone is 65 or older when retirement costs begin. Your saved premium is kept for earlier retirement dates.</p></div>':fieldHTML(s,schema[3][1][7],true);
+  return preMedicareNotNeeded(s)?'<div class="field"><strong>Pre-Medicare premiums</strong><p class="field-source">Not needed for this plan</p><p class="field-guidance">Each person is 65 or older at their own retirement. Your saved premium is kept for earlier retirement dates.</p></div>':fieldHTML(s,schema[3][1][7],true);
 }
 function refreshPreMedicareField(s){const field=$('#pre-medicare-input');if(field)field.innerHTML=preMedicareField(s);}
 function confirmInputButton(path,label){return `<button type="button" class="text-link confirm-input" data-action="confirm-input" data-path="${path}" aria-label="Use this value for ${escapeHTML(label)}">Use this value</button>`;}
@@ -945,26 +963,36 @@ function resultSaveNote(r){
   const date=new Date(r.generatedAtEpochMillis).toLocaleString();
   return `<p class="form-note saved-result">${state.restoredResults.has(current().id)?'Saved results · calculated':'Calculated'} ${escapeHTML(date)}. ${state.resultSaveStatus.get(current().id)===true?'Saved in this browser.':state.resultSaveStatus.get(current().id)==='pending'?'Saving results in this browser…':state.storageError?'Results are available in this page; browser saving is unavailable.':'Results are available in this page. Your inputs are saved; run again after reloading to regenerate results.'}</p>`;
 }
-async function saveCompletedResult(s,r,revision){
+async function saveCompletedResult(s,r){
+  const today=localCalendarDate(),fingerprint=resultFingerprint(s,today);
+  const isCurrent=()=>{
+    const plan=state.scenarios.find(p=>p.id===s.id);
+    return plan&&state.results.get(s.id)===r&&resultFingerprint(plan,today)===fingerprint;
+  };
   if(pendingSaves)await saveQueue;
+  if(!isCurrent())return;
   let saved=!savedLoadError&&!state.storageError;
   // A first sample run needs saved inputs to match its result on reload. A
   // calculation never rewrites an existing saved plan or its next-run count.
   if(saved&&lastSavedRaw===null)saved=await persist(false);
-  if(revision!==calculationRevision)return;
-  const cached=saved&&await resultCache.save(s,r,localCalendarDate());
-  if(revision!==calculationRevision){await resultCache.remove(s.id);return;}
+  if(!isCurrent())return;
+  const cached=saved&&await resultCache.save(s,r,today);
+  // Changed inputs make an in-flight record fail cache matching on reload.
+  // Do not delete here: another completed run may already have saved its result.
+  if(!isCurrent())return;
   state.resultSaveStatus.set(s.id,Boolean(cached));
   if(state.selectedId===s.id&&state.view==='results')render({preserveEditor:true});
 }
 async function restoreCompletedResults(){
   if(!hasSavedScenarios||savedLoadError)return;
-  const revision=calculationRevision;state.restoringResults=true;
+  state.restoringResults=true;
   if(state.view==='results')render({preserveEditor:true});
-  const records=await Promise.all(state.scenarios.map(async s=>({id:s.id,record:await resultCache.load(s.id)})));
-  if(revision===calculationRevision&&!state.storageError)for(const {id,record} of records){
-    const s=state.scenarios.find(plan=>plan.id===id);if(!s||state.results.has(id)||blockingUnknowns(s).length)continue;
-    try{const r=matchingCachedResult(record,s,localCalendarDate());if(r){state.results.set(id,r);state.resultSaveStatus.set(id,true);state.restoredResults.add(id);}}catch{}
+  const records=await Promise.all(state.scenarios.map(async s=>({scenario:s,record:await resultCache.load(s.id)})));
+  if(!state.storageError)for(const {scenario,record} of records){
+    // Selection changes do not affect inputs. Replaced/deleted plans must not
+    // regain old results; edits to retained plans are checked by the fingerprint.
+    const s=state.scenarios.find(plan=>plan.id===scenario.id);if(s!==scenario||state.results.has(s.id)||blockingUnknowns(s).length)continue;
+    try{const r=matchingCachedResult(record,s,localCalendarDate());if(r){state.results.set(s.id,r);state.resultSaveStatus.set(s.id,true);state.restoredResults.add(s.id);}}catch{}
   }
   state.restoringResults=false;
   if(['results','reports','withdrawals','dashboard'].includes(state.view))render({preserveEditor:true});
@@ -1135,7 +1163,7 @@ async function run(){
   const revision=calculationRevision,total=s.numberOfSimulations;
   startCalculation('Calculating this plan…');
   try{const r=await runWorker(s,'simulation',p=>setProgress(p.fraction,p.fraction>=1?'Summarizing results and sensitivity checks…':`${countLabel(Math.round(p.fraction*total))} of ${countLabel(total)} lifetimes simulated`));if(revision!==calculationRevision)return;r.uxAssumptions=deep(s);state.results.set(s.id,r);state.restoredResults.delete(s.id);state.resultSaveStatus.set(s.id,'pending');state.message='Results updated for '+s.name+'.';
-    state.resultSavingPromise=saveCompletedResult(s,r,revision);}
+    state.resultSavingPromise=saveCompletedResult(s,r);}
   catch(e){if(revision===calculationRevision)state.message=e instanceof CalculationCanceled?CALCULATION_CANCELED:'Error: '+e.message;}
   finally{finishCalculation();}
 }
@@ -1273,7 +1301,7 @@ $('#main').addEventListener('click',async e=>{const runPlan=e.target.closest('[d
   if(a==='withdrawal-settings'){state.view='setup';state.setupSection=Number(el.dataset.index);render();$('#section-title').focus();window.scrollTo(0,0);return;}
   if(a==='enable-people'){s.household.separatePeople=true;s.household.spouseRetirementDate ||= s.household.retirementDate;state.inputSources[s.id]['household.spouseRetirementDate']='Estimated';if(s.household.filingStatus==='Married')for(const path of ['spouseAccounts.pretax','spouseAccounts.roth','spouseIncome.annualBenefitAt67','spouseIncome.annualPension'])state.inputSources[s.id][path]='Unknown';state.results.delete(s.id);invalidateExploration();await persist();render();return;}
   if(a==='add-spouse-conversion'){s.spouseRothHistory.conversions.push({taxYear:2026,amount:0,taxableAmount:0});state.results.delete(s.id);invalidateExploration();await persist();render();return;}
-  if(a==='remove-spouse-conversion'){s.spouseRothHistory.conversions.splice(Number(el.dataset.index),1);state.results.delete(s.id);invalidateExploration();await persist();render();return;}
+  if(a==='remove-spouse-conversion'){if(!removeRothConversion(s,'spouseRothHistory',Number(el.dataset.index)))return;state.results.delete(s.id);invalidateExploration();await persist();render();return;}
   // The save confirmation belongs to the step where the edit happened; the
   // header status still says the plan needs a new run.
   if((a==='toggle-guided'||a==='setup-section')&&state.message===SAVED_RERUN)state.message='';
@@ -1326,7 +1354,7 @@ $('#main').addEventListener('click',async e=>{const runPlan=e.target.closest('[d
   if(a==='add-roth-conversion'||a==='remove-roth-conversion'||a==='review-roth-history'){
     personalize(s);
     if(a==='add-roth-conversion'){s.rothHistory.conversions.push({taxYear:2026,amount:0,taxableAmount:0});state.rothHistoryOpen=true;}
-    if(a==='remove-roth-conversion')s.rothHistory.conversions.splice(Number(el.dataset.index),1);
+    if(a==='remove-roth-conversion'&&!removeRothConversion(s,'rothHistory',Number(el.dataset.index)))return;
     if(a==='review-roth-history')s.rothHistory.needsReview=false;
     state.results.delete(s.id);invalidateExploration();await persist();render();return;
   }
@@ -1350,6 +1378,8 @@ $('#main').addEventListener('click',async e=>{const runPlan=e.target.closest('[d
     if(state.busy)return;
     const row=state.labResults?.[Number(el.dataset.index)];if(!row?.scenario||!row.result||row.error)return;
     const copy=deep(row.scenario);copy.id=newPlanId();copy.name=s.name+' · '+row.label;copy.numberOfSimulations=s.numberOfSimulations;
+    // The comparison's calculation date must not freeze the new plan's clock.
+    copy.household.asOfDate='';
     const sources=deep(state.inputSources[s.id]);for(const path of row.changedPaths)sources[path]='Entered';
     state.scenarios.push(copy);state.inputSources[copy.id]=sources;state.optionalAnswers[copy.id]=deep(state.optionalAnswers[s.id]||{});state.entryPeriods[copy.id]=deep(state.entryPeriods[s.id]||{});state.accountChecks[copy.id]=state.accountChecks[s.id];rememberSetupMode(copy.id,state.guided);selectScenario(copy.id);state.view='setup';state.setupSection=5;
     await persist();setMessage('Comparison copied. Review it and run the full plan.');window.scrollTo(0,0);return;
@@ -1473,7 +1503,7 @@ if(el.name==='dollar-basis'){state.dollarBasis=el.value==='today'?'today':'futur
   }
 
 });
-$('#import-file').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;try{const data=JSON.parse(await file.text()),scenarios=Array.isArray(data)?data:data.scenarios;if(!Array.isArray(scenarios)||!scenarios.length)throw new Error('No scenarios found in the file.');const normalized=normalizeScenarios(scenarios);for(const s of normalized){const errors=validateScenario(s);if(errors.length)throw new Error(`${s.name}: ${errors.join(' ')}`);prepareCalendarScenario(s);}state.scenarios=normalized;state.inputSources=normalizeInputSources(data.inputSources,normalized);state.optionalAnswers=normalizeOptionalAnswers(data.optionalAnswers,normalized);state.accountChecks=normalizeAccountChecks(data.accountChecks,normalized);state.exampleIds=new Set(Array.isArray(data.exampleIds)?data.exampleIds.filter(id=>normalized.some(s=>s.id===id)):[]);state.entryPeriods=normalizeEntryPeriods(data.entryPeriods,normalized);state.budgetReturn=null;budgetViews.clear();spendingHelpers.clear();retirementDateDrafts.clear();if(isPro())state.scenarios.forEach(applyProSimulationDefault);state.selectedId=normalized[0].id;state.results.clear();invalidateExploration();await resultCache.clear();await persist(true,true);setMessage(`${normalized.length} scenarios imported.`);}catch(error){setMessage('Error: '+error.message);}e.target.value='';});
+$('#import-file').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;try{const data=JSON.parse(await file.text()),scenarios=Array.isArray(data)?data:data.scenarios;if(!Array.isArray(scenarios)||!scenarios.length)throw new Error('No scenarios found in the file.');const normalized=normalizeScenarios(scenarios);for(const s of normalized){const errors=validateScenarioDraft(s);if(errors.length)throw new Error(`${s.name}: ${errors.join(' ')}`);prepareCalendarScenario(s);}state.scenarios=normalized;state.inputSources=normalizeInputSources(data.inputSources,normalized);state.optionalAnswers=normalizeOptionalAnswers(data.optionalAnswers,normalized);state.accountChecks=normalizeAccountChecks(data.accountChecks,normalized);state.exampleIds=new Set(Array.isArray(data.exampleIds)?data.exampleIds.filter(id=>normalized.some(s=>s.id===id)):[]);state.entryPeriods=normalizeEntryPeriods(data.entryPeriods,normalized);state.budgetReturn=null;budgetViews.clear();spendingHelpers.clear();retirementDateDrafts.clear();if(isPro())state.scenarios.forEach(applyProSimulationDefault);state.selectedId=normalized[0].id;state.results.clear();invalidateExploration();await resultCache.clear();await persist(true,true);setMessage(`${normalized.length} scenarios imported.`);}catch(error){setMessage('Error: '+error.message);}e.target.value='';});
 applyRoute(location.hash);
 render();
 const resultRestoreReady=restoreCompletedResults();

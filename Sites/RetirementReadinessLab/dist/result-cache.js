@@ -23,14 +23,27 @@ export function matchingCachedResult(record,s,today){
 // small localStorage allowance needed to save the user's plan inputs.
 export function createResultCache(indexedDB=globalThis.indexedDB){
   let opening;
-  const open=()=>opening??=new Promise((resolve,reject)=>{
-    if(!indexedDB){reject(new Error('Result storage unavailable'));return;}
-    const request=indexedDB.open('retirement-forecast-results',1);
-    request.onupgradeneeded=()=>request.result.createObjectStore('results',{keyPath:'id'});
-    request.onsuccess=()=>{const db=request.result;db.onversionchange=()=>{db.close();opening=undefined;};resolve(db);};
-    request.onerror=()=>reject(request.error);
-    request.onblocked=()=>reject(new Error('Result storage is busy'));
-  });
+  const open=()=>{
+    if(opening)return opening;
+    const attempt=new Promise((resolve,reject)=>{
+      if(!indexedDB){reject(new Error('Result storage unavailable'));return;}
+      const request=indexedDB.open('retirement-forecast-results',1);let failed=false;
+      const fail=error=>{failed=true;reject(error);};
+      request.onupgradeneeded=()=>request.result.createObjectStore('results',{keyPath:'id'});
+      request.onsuccess=()=>{
+        const db=request.result;
+        // A blocked request can finish after its callers have already retried.
+        if(failed){db.close();return;}
+        db.onversionchange=()=>{db.close();if(opening===attempt)opening=undefined;};
+        resolve(db);
+      };
+      request.onerror=()=>fail(request.error);
+      request.onblocked=()=>fail(new Error('Result storage is busy'));
+    });
+    opening=attempt;
+    attempt.catch(()=>{if(opening===attempt)opening=undefined;});
+    return attempt;
+  };
   const transaction=async(mode,operation)=>{
     try{
       const db=await open();

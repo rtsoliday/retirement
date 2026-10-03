@@ -2,6 +2,14 @@
 
 A browser port of the native Android app in `../../Android/RetirementReadinessLab/`. The web app runs as a static Sites page. Scenarios and calculations stay in the browser; no scenario data is sent to a server. Export JSON to retain plans outside browser storage.
 
+Backups can restore unfinished drafts, including missing retirement dates and financial inputs that still need correction. Complete calculation validation remains required before running a forecast.
+
+Retained savings settings for inactive spouses or already-retired people, timing and growth settings for zero pensions, disabled long-term-care cost/duration settings, and unused take-home support settings in individual plans stay editable without blocking forecasts. Unknown conversion bracket caps and cash drawdown triggers also do not block a forecast while their strategies are disabled. Re-enabling those inputs restores their calculation checks; malformed, nonfinite and unsafe data remain rejected.
+
+Saved results load per plan even if the selected plan changes during loading. Edited inputs must still match the saved calculation; imports, resets and deletions discard old results without preventing unchanged plans from loading theirs.
+
+Plans copied from comparisons discard the comparison's calculation date. Their overview and next forecast use today's date after saving and reopening, including for already-retired people. Separate-owner Medicare income estimates cap each owner's RMD at that owner's remaining pretax balance; exhausting the account cannot create a phantom surcharge on nonqualified Roth earnings. Saved separate-owner results from before this correction require a new run.
+
 ## Included
 
 - Previously applied budgets show Review needed when monthly payment choices or the final deduction confirmation are unfinished, with the saved spending amount and the next review action. New and restored examples retain 13.3% average stock and pre-retirement returns, $75,000 annual base spending ($68,000 for Lower spending), and the existing seed. Only starting savings are reduced to $210,000: $175,000 pre-tax, $17,500 Roth IRA and $17,500 cash, with matching remaining Roth contributions. Their default ten-path previews include at least two shortfalls; existing saved plan inputs are retained.

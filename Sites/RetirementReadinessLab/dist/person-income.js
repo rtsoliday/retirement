@@ -26,6 +26,7 @@ export function personPensions(s,ages,alive,deaths,months){
   let total=0;
   for(const [i,p] of streams.entries()){
     if(i===1&&s.household.filingStatus!=='Married')continue;
+    if(p.annualIncome===0)continue;
     const start=p.startAge+p.startAgeMonths/12;if(ages[i]<start)continue;
     const factor=alive[i]?1:alive[1-i]&&deaths[i]>=start?p.survivorPercent:0;
     total+=p.annualIncome/12*Math.pow(1+p.annualIncrease,months/12)*factor;

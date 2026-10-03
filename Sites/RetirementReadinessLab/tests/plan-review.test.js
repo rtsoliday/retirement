@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {baseScenario,prepareCalendarScenario,applyBudgetEstimate,addCalendarMonths} from '../dist/model.js';
-import {budgetPlanGaps,spendingInputSummary,inputTask,groupUnknownInputs,normalizeOptionalAnswers,temporaryRothValues,calculateEverydaySpending,monthlyIncomeSummary} from '../dist/plan-review.js';
-import {runSimulation} from '../dist/engine.js';
+import {baseScenario,prepareCalendarScenario,applyBudgetEstimate,addCalendarMonths,localCalendarDate} from '../dist/model.js';
+import {budgetPlanGaps,spendingInputSummary,needsPreMedicarePremium,inputTask,groupUnknownInputs,normalizeOptionalAnswers,temporaryRothValues,calculateEverydaySpending,monthlyIncomeSummary} from '../dist/plan-review.js';
+import {runSimulation,runSteadySimulation} from '../dist/engine.js';
 
 test('everyday spending subtracts only selected payments and rejects missing or excessive deductions',()=>{
   const draft={total:'6,000',mortgage:'1,500',rent:'bad',healthcare:'500',included:{mortgage:true,healthcare:true}};
@@ -47,6 +47,22 @@ test('spousal-income bridges wait for both claims in pooled and separately owned
   for(const separate of [false,true]){
     s.household.separatePeople=separate;
     assert.deepEqual(monthlyIncomeSummary(s,r,'future').bridges.find(b=>b.label==='Spouse Social Security from your record'),{label:'Spouse Social Security from your record',date:'2030-10-02',months:48});
+  }
+});
+
+test('pooled spousal-income bridges match the simulated age-62 start for earlier claim choices',()=>{
+  const s=baseScenario();Object.assign(s.household,{birthday:'1960-10-02',retirementDate:'2026-10-02',spouseBirthday:'1967-10-02',asOfDate:'2026-10-02',filingStatus:'Married'});
+  s.socialSecurity.claimAge=67;
+  s.spending.generalInflationMean=s.spending.generalInflationStdDev=0;
+  for(const claimAge of [60,61,62]){
+    s.socialSecurity.spouseClaimAge=claimAge;
+    const steadySimulation=runSteadySimulation(s),r={steadySimulation};
+    const bridge=monthlyIncomeSummary(s,r,'future').bridges.find(b=>b.label==='Spouse Social Security from your record');
+    assert.deepEqual(bridge,{label:'Spouse Social Security from your record',date:'2029-10-02',months:36});
+    const ownBenefit=s.socialSecurity.annualBenefitAt67/12;
+    const firstSpousalPayment=steadySimulation.monthlyDetails.find(p=>p.cashFlow?.socialSecurity>ownBenefit);
+    assert.equal(firstSpousalPayment.month-1,bridge.months,'The bridge ends when the simulation first pays the spousal benefit');
+    assert.equal(addCalendarMonths(s.household.retirementDate,firstSpousalPayment.month-1),bridge.date);
   }
 });
 
@@ -101,4 +117,30 @@ test('monthly review combines base, active mortgage, rent and age-appropriate pr
   assert.equal(d.preMedicareAdults,1);assert.equal(d.medicareAdults,1);assert.equal(d.total,5300);
   s.mortgage.yearsLeft=1;assert.equal(spendingInputSummary(s,sources).mortgage,0,'A paid-off mortgage is absent at retirement');
   sources[s.id]['spending.annualBaseSpending']='Unknown';assert.equal(spendingInputSummary(s,sources).total,null);
+});
+
+test('staggered healthcare review separates first-month premiums from later premium requirements',()=>{
+  const today=localCalendarDate();
+  for(const spouseFirst of [false,true]){
+    const s=baseScenario();Object.assign(s.household,{separatePeople:true,filingStatus:'Married',birthday:addCalendarMonths(today,-(spouseFirst?60:67)*12),spouseBirthday:addCalendarMonths(today,-(spouseFirst?67:60)*12),retirementDate:spouseFirst?addCalendarMonths(today,60):today,spouseRetirementDate:spouseFirst?today:addCalendarMonths(today,60)});
+    const sources={[s.id]:{'healthcare.preMedicareMonthlyPremium':'Unknown'}},d=spendingInputSummary(s,sources);
+    assert.equal(d.preMedicareAdults,0);assert.equal(d.medicareAdults,1);assert.equal(d.healthcare,0);assert.equal(d.total,s.spending.annualBaseSpending/12);
+    assert.equal(needsPreMedicarePremium(s),false,'Each person retires at 65 or later');
+    s.household[spouseFirst?'retirementDate':'spouseRetirementDate']=addCalendarMonths(today,24);
+    assert.equal(needsPreMedicarePremium(s),true,'The younger person will need premiums at their later retirement at 62');
+    assert.equal(spendingInputSummary(s,sources).healthcare,0,'Those premiums are absent from the first month');
+    s.budget.monthlyBudgets=[{month:'2026-09',creditCardBills:[{monthlyAmount:4000}],adjustments:{healthcare:500}}];applyBudgetEstimate(s);
+    assert.deepEqual(budgetPlanGaps(s,sources).map(g=>g.key),['healthcare']);
+    s.household[spouseFirst?'alreadyRetired':'spouseAlreadyRetired']=true;
+    s.household[spouseFirst?'retirementDate':'spouseRetirementDate']='';
+    assert.equal(spendingInputSummary(s,sources).preMedicareAdults,1,'Already-retired status uses age today');
+    assert.equal(spendingInputSummary(s,sources).healthcare,null);
+  }
+});
+
+test('pooled plans still include both people’s premiums at their shared retirement',()=>{
+  const s=prepareCalendarScenario(baseScenario());s.household.filingStatus='Married';
+  s.household.spouseBirthday=addCalendarMonths(s.household.birthday,5*12);
+  const d=spendingInputSummary(s,{});assert.equal(d.preMedicareAdults,1);assert.equal(d.medicareAdults,1);
+  assert.equal(d.healthcare,s.healthcare.preMedicareMonthlyPremium);assert.equal(needsPreMedicarePremium(s),true);
 });

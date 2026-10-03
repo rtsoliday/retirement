@@ -20,6 +20,19 @@ const fullLife={nextDouble:()=>.999999,normal:()=>0};
 function ending(s,rng=fullLife){assert.deepEqual(validateScenario(s),[]);return runOne(s,rng).yearEnd.at(-1);}
 const near=(actual,expected)=>assert.ok(Math.abs(actual-expected)<.01,`${actual} != ${expected}`);
 
+test('pooled survivor pensions require the owner to reach the pension start month before death',()=>{
+  const s=flatPlan(65,10);s.household.filingStatus='Married';s.household.spouseCurrentAge=65;
+  s.spending.annualBaseSpending=0;
+  Object.assign(s.guaranteedIncome,{annualIncome:12000,startAge:70,startAgeMonths:6,survivorPercent:.5});
+  for(const [death,total] of [[68,0],[70,0],[71,30000]]){
+    const path=runOne(s,fullLife,{captureMonthlyDetails:true,fixedDeathAges:{primary:death,spouse:75}});
+    near(path.monthlyDetails.reduce((n,p)=>n+(p.cashFlow?.guaranteedIncome||0),0),total);
+    near(path.monthlyDetails.at(-1).cashFlow.guaranteedIncome,death<70.5?0:500);
+    near(path.monthlyDetails[66].cashFlow.guaranteedIncome,0);
+    near(path.monthlyDetails[67].cashFlow.guaranteedIncome,death<70.5?0:1000);
+  }
+});
+
 test('failure age records the actual month after crossing a birthday and bucket boundary',()=>{
   const s=flatPlan(69,2);s.household.retirementAgeMonths=6;s.accounts.roth=8500;s.spending.annualBaseSpending=12000;
   const path=runOne(s,fullLife);assert.equal(path.failureAge,842/12);assert.equal(path.success,false);

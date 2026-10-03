@@ -43,7 +43,9 @@ export function monthlyIncomeSummary(s,r,basis='today'){
     const pia=amounts.map((amount,i)=>amount/retirementBenefitFactor(births[i],67*12));
     for(const i of separate?[0,1]:[1]){
       if(!calendarDate(birthdays[i])||!(pia[i]<pia[1-i]*.5))continue;
-      const claim=Math.max(claims[i]*12,Math.round(ages[i]*12)+claims[1-i]*12-Math.round(ages[1-i]*12)),months=claim-Math.round(ages[i]*12);
+      // Match the engine's age-62 minimum for spousal payments, including
+      // earlier claim ages retained by legacy pooled plans.
+      const claim=Math.max(744,claims[i]*12,Math.round(ages[i]*12)+claims[1-i]*12-Math.round(ages[1-i]*12)),months=claim-Math.round(ages[i]*12);
       // An own benefit already listed at the same date also signals this start.
       if(months>0&&(!amounts[i]||claim>claims[i]*12))bridges.push({label:i===0?'Your Social Security from your spouse’s record':'Spouse Social Security from your record',date:addCalendarMonths(birthdays[i],claim),months});
     }
@@ -100,16 +102,25 @@ export function budgetPlanGaps(s,sources){
     ['mortgage','mortgage.monthlyPayment','mortgage payments'],
     ['rent','rent.monthlyRent','rent'],
     ['healthcare','healthcare.preMedicareMonthlyPremium','health insurance premiums']
-  ].filter(([key,path])=>(key!=='healthcare'||spendingInputSummary(s,sources).preMedicareAdults>0)&&months.some(m=>m.adjustments?.[key]>0)&&!['Entered','Estimated'].includes(inputSource(s,sources,path)))
+  ].filter(([key,path])=>(key!=='healthcare'||needsPreMedicarePremium(s))&&months.some(m=>m.adjustments?.[key]>0)&&!['Entered','Estimated'].includes(inputSource(s,sources,path)))
     .map(([key,path,label])=>({key,path,label}));
+}
+
+// A later retirement can need premiums even when the first retirement does not.
+export function needsPreMedicarePremium(s){
+  const today=localCalendarDate(),t=scenarioTimeline(s,today),h=s.household;
+  if(!h.separatePeople)return t.retirementAge<65||h.filingStatus==='Married'&&t.spouseAtRet<65;
+  return calendarMonthsBetween(h.birthday,forecastRetirementDate(s,false,today))/12<65||h.filingStatus==='Married'&&calendarMonthsBetween(h.spouseBirthday,forecastRetirementDate(s,true,today))/12<65;
 }
 
 // Review entered costs at the first retirement, in today's dollars. Taxes,
 // Medicare, inflation, age-based spending changes and care are computed per
 // simulation, so they must not be presented as a fixed total here.
 export function spendingInputSummary(s,sources){
-  const t=scenarioTimeline(s,localCalendarDate()),couple=s.household.filingStatus==='Married';
-  const preMedicareAdults=Number(t.retirementAge<65)+(couple?Number(t.spouseAtRet<65):0);
+  const today=localCalendarDate(),t=scenarioTimeline(s,today),h=s.household,couple=h.filingStatus==='Married';
+  const retiredAtStart=spouse=>!h.separatePeople||calendarMonthsBetween(t.startDate,forecastRetirementDate(s,spouse,today))<=0;
+  const preMedicareAdults=Number(retiredAtStart(false)&&t.retirementAge<65)+(couple?Number(retiredAtStart(true)&&t.spouseAtRet<65):0);
+  const medicareAdults=Number(t.retirementAge>=65)+(couple?Number(t.spouseAtRet>=65):0);
   const mortgageMonths=s.mortgage.yearsLeft*12+s.mortgage.monthsLeft;
   const mortgageActive=mortgageMonths>t.preMonths;
   const amount=(path,value)=>inputSource(s,sources,path)==='Unknown'?null:value;
@@ -118,5 +129,5 @@ export function spendingInputSummary(s,sources){
   const rent=amount('rent.monthlyRent',s.rent.monthlyRent);
   const healthcare=preMedicareAdults?amount('healthcare.preMedicareMonthlyPremium',s.healthcare.preMedicareMonthlyPremium*preMedicareAdults):0;
   const values=[base,mortgage,rent,healthcare];
-  return {base,mortgage,rent,healthcare,preMedicareAdults,medicareAdults:(couple?2:1)-preMedicareAdults,mortgageActive,total:values.includes(null)?null:values.reduce((sum,x)=>sum+x,0)};
+  return {base,mortgage,rent,healthcare,preMedicareAdults,medicareAdults,mortgageActive,total:values.includes(null)?null:values.reduce((sum,x)=>sum+x,0)};
 }

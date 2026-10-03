@@ -214,7 +214,7 @@ test('generated scenario IDs never displace an existing normalized ID',()=>{
   assert.deepEqual(normalizeScenarios(plans),plans);
 });
 
-test('single households do not require dormant spouse settings',()=>{const s=baseScenario();s.household.spouseCurrentAge=-1;s.socialSecurity.spouseClaimAge=99;s.guaranteedIncome.survivorPercent=2;assert.deepEqual(validateScenario(s),[]);s.household.filingStatus='Married';const errors=validateScenario(s).join(' ');assert.match(errors,/Spouse age/);assert.match(errors,/Spouse claim age/);assert.match(errors,/Guaranteed income/);});
+test('single households do not require dormant spouse settings',()=>{const s=baseScenario();s.guaranteedIncome.annualIncome=12000;s.household.spouseCurrentAge=-1;s.socialSecurity.spouseClaimAge=99;s.guaranteedIncome.survivorPercent=2;assert.deepEqual(validateScenario(s),[]);s.household.filingStatus='Married';const errors=validateScenario(s).join(' ');assert.match(errors,/Spouse age/);assert.match(errors,/Spouse claim age/);assert.match(errors,/Guaranteed income/);});
 
 
 test('Roth conversion cap accepts only supported brackets when enabled',()=>{
@@ -263,12 +263,12 @@ test('legacy fractional timing migrates to years and months without changing who
   assert.deepEqual(normalizeScenario(JSON.parse(JSON.stringify(s))),s);
 });
 
-test('invalid months, fractional year fields and timing beyond the horizon are rejected',()=>{
+test('invalid active months, fractional year fields and timing beyond the horizon are rejected',()=>{
   for(const [section,key] of [['household','retirementAgeMonths'],['guaranteedIncome','startAgeMonths'],['longTermCare','averageDurationMonths']])for(const value of [-1,12,.5]){
-    const s=baseScenario();s[section][key]=value;assert.match(validateScenario(s).join(' '),/Month fields/);
+    const s=baseScenario();s.guaranteedIncome.annualIncome=12000;s[section][key]=value;assert.match(validateScenario(s).join(' '),/Month fields/);
   }
   for(const [section,key] of [['guaranteedIncome','startAge'],['longTermCare','averageDurationYears']]){
-    const s=baseScenario();s[section][key]=1.5;assert.match(validateScenario(s).join(' '),/whole numbers/);
+    const s=baseScenario();s.guaranteedIncome.annualIncome=12000;s[section][key]=1.5;assert.match(validateScenario(s).join(' '),/whole numbers/);
   }
   const s=baseScenario();s.longTermCare.averageDurationYears=10;s.longTermCare.averageDurationMonths=1;assert.match(validateScenario(s).join(' '),/duration/);
   Object.assign(s.household,{filingStatus:'Married',retirementAgeMonths:11,spouseCurrentAge:112});assert.match(validateScenario(s).join(' '),/Spouse age/);
@@ -277,7 +277,7 @@ test('invalid months, fractional year fields and timing beyond the horizon are r
 
 test('legacy timing migration does not conceal out-of-range fractional inputs',()=>{
   for(const [section,key,value] of [['guaranteedIncome','startAge',-.001],['longTermCare','averageDurationYears',.9999],['longTermCare','averageDurationYears',10.0001]]){
-    const old=baseScenario();delete old.guaranteedIncome.startAgeMonths;delete old.longTermCare.averageDurationMonths;old[section][key]=value;
+    const old=baseScenario();old.guaranteedIncome.annualIncome=12000;delete old.guaranteedIncome.startAgeMonths;delete old.longTermCare.averageDurationMonths;old[section][key]=value;
     assert.ok(validateScenario(normalizeScenario(old)).length>0);
   }
 });

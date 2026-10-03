@@ -143,7 +143,7 @@ export function runOne(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails
   const birth=timeline.birthYear,spouseBirth=timeline.spouseBirthYear,primaryFactor=retirementBenefitFactor(birth,s.socialSecurity.claimAge*12),age67Factor=retirementBenefitFactor(birth,67*12);
   const spousalClaim=Math.max(744,s.socialSecurity.spouseClaimAge*12,Math.round(spouseAtRet*12)+s.socialSecurity.claimAge*12-Math.round(h.retirementAge*12)),survivorClaim=Math.max(720,s.socialSecurity.spouseClaimAge*12,Math.round(spouseAtRet*12)+Math.round(death*12)-Math.round(h.retirementAge*12));
   const spouseFactor=spousalBenefitFactor(spouseBirth,spousalClaim),survivorFactor=combinedSurvivorBenefitFactor(birth,s.socialSecurity.claimAge*12,death*12,spouseBirth,survivorClaim);
-  const infMean=monthly(s.spending.generalInflationMean),healthMean=monthly(s.healthcare.healthcareInflationMean),incomeGrowth=monthly(s.guaranteedIncome.annualIncrease),inflation=monthlyRateDistribution(s.spending.generalInflationMean,s.spending.generalInflationStdDev),healthInflation=monthlyRateDistribution(s.healthcare.healthcareInflationMean,s.healthcare.healthcareInflationStdDev);
+  const infMean=monthly(s.spending.generalInflationMean),healthMean=monthly(s.healthcare.healthcareInflationMean),incomeGrowth=s.guaranteedIncome.annualIncome>0?monthly(s.guaranteedIncome.annualIncrease):0,inflation=monthlyRateDistribution(s.spending.generalInflationMean,s.spending.generalInflationStdDev),healthInflation=monthlyRateDistribution(s.healthcare.healthcareInflationMean,s.healthcare.healthcareInflationStdDev);
   const retireBalance=sum(b),lowThreshold=retireBalance*.5;let pathFactor=spendingPath(s,0,timeline),spending=s.spending.annualBaseSpending/12*Math.pow(1+infMean,preMonths)*pathFactor;
   let rent=s.rent.monthlyRent*Math.pow(1+infMean,preMonths),home=s.home.currentValue*Math.pow(1+infMean,preMonths),seniorRent=3000*Math.pow(1+infMean,preMonths);
   const mortgage=mortgageAtRetirement(s.mortgage,preMonths);let mortgageMonths=mortgage.months,mortgageBalance=mortgage.balance;
@@ -209,7 +209,9 @@ export function runOne(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails
     const pia=s.socialSecurity.annualBenefitAt67/age67Factor/12*ssIndex,primaryClaim=s.socialSecurity.claimAge*12;
     let social=primaryAlive&&ageMonths>=primaryClaim?pia*primaryFactor:0;
     if(married&&spouseAlive){if(primaryAlive){if(ageMonths>=primaryClaim&&spouseMonths>=spousalClaim)social+=pia*spouseFactor;}else if(spouseMonths>=survivorClaim)social+=pia*survivorFactor;}
-    const guaranteed=ageMonths>=s.guaranteedIncome.startAge*12+(s.guaranteedIncome.startAgeMonths??0)&&alive>0?(primaryAlive?otherMonthly:otherMonthly*s.guaranteedIncome.survivorPercent):0;
+    const pensionStartMonths=s.guaranteedIncome.startAge*12+(s.guaranteedIncome.startAgeMonths??0);
+    const pensionSurvivorEligible=Math.round(death*12)>=pensionStartMonths;
+    const guaranteed=ageMonths>=pensionStartMonths&&alive>0?(primaryAlive?otherMonthly:pensionSurvivorEligible?otherMonthly*s.guaranteedIncome.survivorPercent:0):0;
     const prePeople=Number(primaryAlive&&ageMonths<780)+Number(spouseAlive&&spouseMonths<780),medPeople=Number(primaryAlive&&ageMonths>=780)+Number(spouseAlive&&spouseMonths>=780);
     const preCost=preMedicare*prePeople;
     // Draw returns once, in the same random-stream order, so the initial income

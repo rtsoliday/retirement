@@ -83,6 +83,20 @@ test('owned RMDs use owner birth cohort; young spouse balance creates no older-o
   const b={...s.accounts},p=new PersonAccounts(s,b);p.configure(0,2026,[20,30],[true,true],()=>0);
   close(p.people[0].rmd,requiredMinimumDistribution(100000,75,1951));close(p.people[1].rmd,0);close(p.scheduled().total,p.people[0].rmd/12);
 });
+test('initial Medicare estimates stop counting an RMD after its owner exhausts pretax savings',()=>{
+  const s=plan();Object.assign(s.household,{birthday:'1953-10-03',retirementDate:'2026-10-03',asOfDate:'2026-10-03',targetEndAge:74});
+  s.accounts.pretax=10000;s.accounts.roth=500000;s.rothHistory.firstContributionYear=2024;
+  s.spending.annualBaseSpending=92000;s.healthcare.includeMedicarePremiums=true;
+  const result=run(s,74),months=result.monthlyDetails.slice(1);
+  assert.equal(months[1].ownerAccounts[0].pretax,0);
+  // Nonqualified Roth earnings approach the first surcharge threshold. The
+  // exhausted account cannot add its year-start RMD to the income estimate.
+  for(const month of months)close(month.cashFlow.expenses,92000/12+241.89);
+  close(result.taxYears[0].requiredMinimumDistribution,requiredMinimumDistribution(10000,73,1953));
+  assert.ok(result.taxYears[0].ordinaryIncome<109000);
+  const pooled=structuredClone(s);pooled.household.separatePeople=false;
+  close(result.yearEnd.at(-1),run(pooled,74).yearEnd.at(-1));
+});
 test('SEPP protects only its owner and stops at death; the other owner remains accessible',()=>{
   const s=plan(true);s.household.birthday='1976-10-01';s.household.spouseBirthday='1976-10-01';s.household.spouseRetirementDate=s.household.retirementDate;s.withdrawalStrategy.seppEligible=true;s.spouseAccounts.pretax=20000;
   const p=new PersonAccounts(s,{...s.accounts});p.configure(0,2026,[0,20],[true,true],()=>6000);
@@ -114,12 +128,12 @@ test('seeded expanded runs remain finite through death, care, penalty and conver
     const s=plan(true);s.household.birthday='1971-10-01';s.household.spouseBirthday='1973-10-01';s.household.retirementDate=spouseFirst?'2028-10-01':'2026-10-01';s.household.spouseRetirementDate=spouseFirst?'2026-10-01':'2028-10-01';
     s.accounts.pretax=500000;s.accounts.cash=50000;s.spouseAccounts.pretax=200000;s.socialSecurity.annualBenefitAt67=24000;s.spouseIncome.annualBenefitAt67=12000;s.spending.annualBaseSpending=36000;s.longTermCare.enabled=true;
     s.market.stockMeanReturn=.06;s.market.stockStdDev=.15;s.market.bondMeanReturn=.03;s.market.bondStdDev=.05;s.contributions.roth=6000;s.spouseContributions.pretax=12000;s.rothConversion.enabled=conversions;s.withdrawalStrategy.seppEligible=sepp;s.workingIncome.spouseAnnualNet=12000;
-    const r=runSimulation(s);assert.ok(Number.isFinite(r.medianEndingBalance));assert.equal(r.provenance.engineVersion,'2026.10-separate-people');assert.ok(r.steadySimulation.monthlyDetails.every(p=>Number.isFinite(p.netAssets)&&p.ownerAccounts.every(a=>a.pretax>=-.001&&a.roth>=-.001)));
+    const r=runSimulation(s);assert.ok(Number.isFinite(r.medianEndingBalance));assert.equal(r.provenance.engineVersion,'2026.10-separate-people-medicare-rmd-v2');assert.ok(r.steadySimulation.monthlyDetails.every(p=>Number.isFinite(p.netAssets)&&p.ownerAccounts.every(a=>a.pretax>=-.001&&a.roth>=-.001)));
   }
 });
 test('new contribution/ownership fields validate amounts, dates, types and past Roth history',()=>{
   assert.deepEqual(validateScenario(plan(true)),[]);
-  for(const edit of [s=>s.contributions.pretax=-1,s=>s.spouseContributions.roth='500',s=>s.household.spouseRetirementDate='',s=>s.household.retirementDate='2099-10-01',s=>s.spouseIncome.pensionStartAgeMonths=12,s=>s.spouseAccounts.roth=500,s=>s.spouseRothHistory.conversions=[null]]){
+  for(const edit of [s=>s.contributions.pretax=-1,s=>s.spouseContributions.roth='500',s=>s.household.spouseRetirementDate='',s=>s.household.retirementDate='2099-10-01',s=>{s.spouseIncome.annualPension=100;s.spouseIncome.pensionStartAgeMonths=12;},s=>s.spouseAccounts.roth=500,s=>s.spouseRothHistory.conversions=[null]]){
     const s=plan(true);edit(s);assert.ok(validateScenario(s).length);
   }
 });
@@ -128,11 +142,14 @@ test('unknown active amounts block, zero is distinct, and inactive spouse inputs
   assert.equal(unknownInputPaths(s,sources).length,3);sources[s.id]['contributions.pretax']='Entered';s.contributions.pretax=0;assert.equal(unknownInputPaths(s,sources).length,2);
   s.household.filingStatus='Single';assert.deepEqual(unknownInputPaths(s,sources),[]);s.household.filingStatus='Married';s.household.separatePeople=false;assert.deepEqual(unknownInputPaths(s,sources),[]);
 });
-// The fixtures predate today's-dollar summaries and evenly spread preview
-// lifespans; excluding both keeps the original future-dollar results identical.
+// The fixtures predate today's-dollar summaries, evenly spread preview
+// lifespans and the pooled pension correction's cache version. These scenarios
+// have no pre-start survivor pension, so their calculated results remain identical.
 test('pre-change complete seeded results remain identical after normalization of old backups',()=>{
   const fixtures=JSON.parse(readFileSync(new URL('./fixtures/pre-household-results.json',import.meta.url)));
   for(const f of fixtures){const s=normalizeScenario(f.scenario);assert.equal(s.household.separatePeople,false);const r=runSimulation(s,undefined,{stratifyPreviewLifespans:false});delete r.generatedAtEpochMillis;delete r.todayDollars;
+    assert.match(r.provenance.engineVersion,/-survivor-pension-v2$/);
+    r.provenance.engineVersion=r.provenance.engineVersion.replace(/-survivor-pension-v2$/,'');
     assert.equal(createHash('sha256').update(JSON.stringify(r)).digest('hex'),f.sha256,f.name);
   }
 });

@@ -98,12 +98,15 @@ export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMon
         // Before a lookback exists, estimate annual income with the available
         // pretax balance and Roth history; nonqualified earnings create income.
         const annualSS=social*12,estimatedDistribution=pools.people.filter(p=>p.protected).reduce((n,p)=>n+p.sepp,0),annualOther=guaranteed*12+estimatedDistribution,estimatedInterest=Math.max(0,b.cash)*.02;
+        // A depleted owner's year-start RMD cannot be funded by the other
+        // owner's savings or added again to nonqualified Roth earnings.
+        const estimatedRmd=pools.people.reduce((n,p)=>n+Math.min(Math.max(0,p.pretax),p.rmd),0);
         for(let tier=0;tier<6;tier++){
           const annualNeed=((replaceSpending?0:baseSpending)+mortgageCost+rentCost+ltcCost+preCost+medCost+saleShortfall)*12;
           const stockPart=allocation(s,b,annualNeed),portReturn=stockPart*stock+(1-stockPart)*bond;
           const cashFirst=s.withdrawalStrategy.useCashReserveDuringDrawdowns&&portReturn<s.withdrawalStrategy.drawdownTrigger&&b.cash>0;
           const estimate=pools.plan(annualNeed,annualSS,status,annualOther,cashFirst,yearTaxIndex,seniors,taxYear,{ordinary:estimatedInterest,social:0,tax:0},incomeTax,false,support*12);
-          const other=Math.max(estimate.taxableDraw+estimatedDistribution,annualRmd)+estimate.rothTaxableEarnings+guaranteed*12+estimatedInterest,income=other+taxableSocialSecurity(other,annualSS,status);
+          const other=Math.max(estimate.taxableDraw+estimatedDistribution,estimatedRmd)+estimate.rothTaxableEarnings+guaranteed*12+estimatedInterest,income=other+taxableSocialSecurity(other,annualSS,status);
           const premium=medicarePremium(income,status,medPeople,healthIndex,yearTaxIndex,taxYear,priorYearTaxIndex);
           if(premium===medCost)break;
           medCost=premium;
@@ -160,4 +163,3 @@ export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMon
   const censored=stopAge<houseDeath,survivedThroughAge=censored?stopAge:h.retirementAge+Math.max(0,Math.ceil(houseDeath-h.retirementAge)-1);
   return {success:failureAge===null,failureAge,yearEnd,chart,survivedThroughAge,deathAge:houseDeath,observationEndAge:stopAge,censored,...(monthlyBalances?{monthlyBalances}:{}),...(monthlyDetails?{monthlyDetails}:{}),...(taxYears?{taxYears}:{}),...(today?{today}:{})};
 }
-
