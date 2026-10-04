@@ -16,7 +16,9 @@ test('lifespan quantiles invert the monthly mortality distribution',()=>{
   assert.equal(deathAgeAtQuantile('Male',65,70,.999),70);
 });
 
-test('previews spread lifespans over equal-probability bands; larger runs stay random',()=>{
+test('runs with ten or fewer paths spread lifespans over equal-probability bands; larger runs stay random',()=>{
+  assert.equal(previewLifespanQuantiles(11,1),null);
+  assert.equal(previewLifespanQuantiles(FREE_SIMULATION_PATHS,1),null);
   assert.equal(previewLifespanQuantiles(FREE_SIMULATION_PATHS+1,1),null);
   const bands=previewLifespanQuantiles(10,20260766);
   assert.deepEqual(bands.map(b=>b.primary),[.05,.15,.25,.35,.45,.55,.65,.75,.85,.95]);

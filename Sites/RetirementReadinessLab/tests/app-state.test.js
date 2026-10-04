@@ -10,6 +10,8 @@ import * as growthHelper from '../dist/growth-helper.js';
 import * as moneyInput from '../dist/money-input.js';
 import * as planReview from '../dist/plan-review.js';
 import * as resultCaching from '../dist/result-cache.js';
+import * as frontierView from '../dist/frontier-view.js';
+import * as savingsTargets from '../dist/savings-targets.js';
 import {runSimulation} from '../dist/engine.js';
 
 test('employer Roth editor preserves records, monthly deposits and history through copies and backups',async()=>{
@@ -537,8 +539,8 @@ test('one-click lower-return screening uses paired scenarios, retains results an
 test('preview warning keeps its essential caution visible and expands the full explanation',()=>{
   const a=app(),s=a.current(),r=runSimulation(s);a.state.results.set(s.id,r);
   const html=a.results();
-  assert.match(html,/10 lifetimes are too few to estimate readiness/);
-  assert.match(html,/<details><summary>Why only 10 lifetimes\?<\/summary>/);
+  assert.match(html,/100 lifetimes are too few to estimate readiness/);
+  assert.match(html,/<details><summary>Why only 100 lifetimes\?<\/summary>/);
   assert.match(html,/Zero observed outcomes does not mean an outcome is impossible/);
   assert.match(a.reportText(s,r),/SAMPLE PREVIEW ONLY: Only a small sample/);
 });
@@ -695,7 +697,7 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
     return elements.get(selector);
   }
   const document={activeElement:null,querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement(){return {click(){downloads.push({name:this.download,blob:downloadBlobs.get(this.href)});}};}};
-  const context=vm.createContext({...model,...format,...guidance,...withdrawalsView,...growthHelper,...moneyInput,...planReview,...resultCaching,createResultCache:()=>({
+  const context=vm.createContext({...model,...format,...guidance,...withdrawalsView,...growthHelper,...moneyInput,...planReview,...resultCaching,...frontierView,...savingsTargets,createResultCache:()=>({
       async load(id){const record=resultStorage.fail?null:structuredClone(resultRecords.get(id)||null);await resultStorage.beforeLoad?.(id);return record;},
       async save(s,r,today){if(resultStorage.fail)return null;await resultStorage.beforeSave?.(s,r);resultRecords.set(s.id,{id:s.id,version:1,fingerprint:resultCaching.resultFingerprint(s,today),result:structuredClone(r)});return s.id;},
       async remove(id){resultRecords.delete(id);},async clear(){resultRecords.clear();}
@@ -714,8 +716,93 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
   return {...api,workers,element,timers,document,downloads,stored:readStored,storageChanged:()=>windowListeners.storage({key:'retirement-readiness-lab-sites-v1'}),beforeUnload:event=>windowListeners.beforeunload(event),advanceTime(ms){clock.now+=ms;for(const [id,timer] of [...timers])if(timer.at<=clock.now){timers.delete(id);timer.fn();}},saved:()=>JSON.parse(readStored()),change:(selector,target)=>element(selector).listeners.change({target}),
     click:(action,extra={})=>{const el={dataset:{action,...extra}};return element('#main').listeners.click({target:{closest:selector=>selector==='[data-action]'?el:null}});}};
 }
-function seedExploration(a){a.state.labResults=[{label:'Old plan',result:null}];a.state.decision={targetReadiness:.8,simulationCount:180};}
-function assertCleared(a){assert.equal(a.state.labResults,null);assert.equal(a.state.decision,null);}
+function seedExploration(a){a.state.labResults=[{label:'Old plan',result:null}];a.state.decision={targetReadiness:.8,simulationCount:200};}
+function assertCleared(a){assert.equal(a.state.labResults,null);assert.equal(a.state.decision,null);assert.equal(a.state.claimDecision,null);assert.equal(a.state.savingsDecision,null);}
+
+test('applying an age target saves its birthday date and preserves spouse timing and full-run paths',async()=>{
+  const records=new Map(),a=app(null,{resultRecords:records});a.state.access.tier='pro';
+  const s=a.current();s.numberOfSimulations=10000;s.household.separatePeople=true;s.household.filingStatus='Married';
+  s.household.spouseRetirementDate=model.addCalendarMonths(s.household.birthday,66*12);
+  s.household.alreadyRetired=true;s.household.retirementDate='';
+  const before=structuredClone(s),id=s.id;
+  a.state.results.set(id,{old:true});records.set(id,{old:true});seedExploration(a);
+  a.state.decision={...a.state.decision,earliestRetirementAge:64,safeAnnualSpending:90000};
+  assert.match(a.lab(),/Use this retirement age/);assert.match(a.lab(),/Use this spending amount/);
+  assert.match(a.lab(),/tested separately with 200 paths/);
+  await a.click('apply-age-target');
+  assert.equal(s.household.retirementDate,model.addCalendarMonths(s.household.birthday,64*12));
+  assert.equal(s.household.retirementAge,64);assert.equal(s.household.retirementAgeMonths,0);
+  assert.equal(s.household.alreadyRetired,false);assert.equal(s.household.asOfDate,'');
+  assert.equal(s.household.spouseRetirementDate,before.household.spouseRetirementDate);
+  assert.equal(s.spending.annualBaseSpending,before.spending.annualBaseSpending);assert.equal(s.numberOfSimulations,10000);
+  assert.equal(s.seed,before.seed);assert.equal(s.id,id);assert.equal(a.state.exampleIds.has(id),false);
+  assert.equal(a.state.inputSources[id]['household.retirementDate'],'Estimated');
+  assertCleared(a);assert.equal(a.state.results.has(id),false);assert.equal(records.has(id),false);
+  assert.equal(a.state.view,'setup');assert.equal(a.state.setupSection,5);assert.match(a.state.message,/Run the full forecast/);
+  const restored=app(a.saved());assert.equal(restored.current().household.retirementDate,s.household.retirementDate);
+  assert.equal(restored.current().numberOfSimulations,10000);
+});
+
+test('applying a spending target keeps housing costs and dates, replaces an applied budget and saves Estimated',async()=>{
+  const a=app();a.state.access.tier='pro';const s=a.current();s.numberOfSimulations=500;
+  s.home.annualTaxesAndInsurance=30000;s.budget.isAppliedToAnnualBaseSpending=true;s.budget.estimateNeedsReview=false;
+  const before=structuredClone(s);a.state.results.set(s.id,{old:true});seedExploration(a);
+  a.state.decision={...a.state.decision,earliestRetirementAge:64,safeAnnualSpending:120000};
+  await a.click('apply-spending-target');
+  assert.equal(s.spending.annualBaseSpending,120000);assert.equal(s.home.annualTaxesAndInsurance,30000);
+  assert.deepEqual(structuredClone(s.household),before.household);assert.equal(s.numberOfSimulations,500);
+  assert.equal(s.budget.isAppliedToAnnualBaseSpending,false);assert.equal(s.budget.estimateNeedsReview,true);
+  assert.deepEqual(structuredClone(s.accounts),before.accounts);assert.equal(s.seed,before.seed);
+  assert.equal(a.saved().inputSources[s.id]['spending.annualBaseSpending'],'Estimated');
+  assert.equal(a.saved().scenarios[0].spending.annualBaseSpending,120000);assertCleared(a);
+  assert.equal(a.state.results.has(s.id),false);assert.equal(a.state.view,'setup');
+});
+
+test('target apply buttons require a found result and ignore clicks while busy or after invalidation',async()=>{
+  const a=app();a.state.access.tier='pro';const before=structuredClone(a.current());
+  a.state.decision={targetReadiness:.8,simulationCount:200,earliestRetirementAge:null,safeAnnualSpending:null};
+  assert.doesNotMatch(a.lab(),/data-action="apply-(?:age|spending)-target"/);
+  await a.click('apply-age-target');await a.click('apply-spending-target');
+  a.state.decision={...a.state.decision,earliestRetirementAge:64,safeAnnualSpending:0};a.state.busy=true;
+  assert.match(a.lab(),/data-action="apply-age-target" disabled/);
+  await a.click('apply-age-target');await a.click('apply-spending-target');
+  a.state.busy=false;a.state.decision=null;await a.click('apply-age-target');await a.click('apply-spending-target');
+  assert.deepEqual(structuredClone(a.current()),before);
+});
+
+test('the frontier slider previews a tested pair and applying it saves both fields without changing full-run settings',async()=>{
+  const records=new Map(),a=app(null,{resultRecords:records});a.state.access.tier='pro';
+  const s=a.current();s.numberOfSimulations=500;s.simulationPathsCustomized=true;s.household.separatePeople=true;s.household.filingStatus='Married';
+  s.household.spouseRetirementDate=model.addCalendarMonths(s.household.spouseBirthday,66*12);
+  s.budget.isAppliedToAnnualBaseSpending=true;s.budget.estimateNeedsReview=false;
+  const before=structuredClone(s),stored=a.stored();a.state.results.set(s.id,{old:true});records.set(s.id,{old:true});seedExploration(a);
+  a.state.decision.frontier={targetReadiness:.8,simulationCount:200,searchStartAge:62,searchEndAge:64,spendingSearchLimit:250000,points:[
+    {age:62,annualSpending:85000,readiness:.8,tested:true,simulationCount:200},{age:63,annualSpending:null,readiness:null},{age:64,annualSpending:120000,readiness:.803,tested:true,simulationCount:200}
+  ]};
+  a.element('#main').listeners.input({target:{dataset:{frontierSlider:''},value:'1'}});
+  assert.equal(a.state.frontierSelection,1);assert.match(a.element('#frontier-selection').innerHTML,/120,000/);
+  assert.match(a.element('#frontier-selection').innerHTML,/>64</);assert.deepEqual(structuredClone(s),before);assert.equal(a.stored(),stored);
+  await a.click('apply-frontier-target');
+  assert.equal(s.household.retirementDate,model.addCalendarMonths(s.household.birthday,64*12));assert.equal(s.spending.annualBaseSpending,120000);
+  assert.equal(s.household.spouseRetirementDate,before.household.spouseRetirementDate);assert.equal(s.numberOfSimulations,500);
+  assert.equal(s.simulationPathsCustomized,true);assert.equal(s.seed,before.seed);assert.deepEqual(structuredClone(s.accounts),before.accounts);
+  assert.equal(s.budget.isAppliedToAnnualBaseSpending,false);assert.equal(s.budget.estimateNeedsReview,true);
+  assert.equal(a.saved().inputSources[s.id]['household.retirementDate'],'Estimated');assert.equal(a.saved().inputSources[s.id]['spending.annualBaseSpending'],'Estimated');
+  assertCleared(a);assert.equal(a.state.results.has(s.id),false);assert.equal(records.has(s.id),false);assert.equal(a.state.frontierSelection,0);
+  assert.equal(a.state.view,'setup');assert.equal(a.state.setupSection,5);assert.match(a.state.message,/Retirement age and base spending target applied/);
+  const restored=app(a.saved());assert.equal(restored.current().household.retirementAge,64);assert.equal(restored.current().spending.annualBaseSpending,120000);
+  assert.equal(restored.current().numberOfSimulations,500);
+});
+
+test('frontier selection and applying ignore incomplete, failing, busy and invalidated results',async()=>{
+  const a=app(),before=structuredClone(a.current());a.state.access.tier='pro';
+  a.state.decision={targetReadiness:.8,simulationCount:200,earliestRetirementAge:null,safeAnnualSpending:null,frontier:{targetReadiness:.8,simulationCount:200,searchStartAge:64,searchEndAge:66,points:[{age:64,annualSpending:null,readiness:null},{age:65,annualSpending:100000,readiness:.79}]}};
+  assert.doesNotMatch(a.lab(),/data-action="apply-frontier-target"/);await a.click('apply-frontier-target');
+  a.state.decision.frontier.points.push({age:66,annualSpending:105000,readiness:.8,tested:true,simulationCount:200});a.state.busy=true;
+  assert.match(a.lab(),/data-action="apply-frontier-target" disabled/);await a.click('apply-frontier-target');
+  a.element('#main').listeners.input({target:{dataset:{frontierSlider:''},value:'0'}});assert.equal(a.state.frontierSelection,undefined);
+  a.state.busy=false;a.state.decision=null;await a.click('apply-frontier-target');assert.deepEqual(structuredClone(a.current()),before);
+});
 
 test('new plans model early penalties while saved and imported choices retain their previous behavior',async()=>{
   const fresh=app();fresh.state.setupSection=4;
@@ -1032,8 +1119,8 @@ test('sensitivity views and reports disclose paired comparisons and their sample
   const a=app(),s=a.current(),r=runSimulation(s);a.state.results.set(s.id,r);
   const overview=a.dashboard(),results=a.results(),report=a.reportText(s,r);
   assert.match(overview,/Assumption sensitivity/);assert.match(overview,/General inflation/);
-  assert.match(overview,/10 paired paths/);assert.match(results,/10 paired paths/);
-  assert.match(report,/Most helpful sensitivity check:/);assert.match(report,/10 paired paths/);
+  assert.match(overview,/100 paired paths/);assert.match(results,/100 paired paths/);
+  assert.match(report,/Most helpful sensitivity check:/);assert.match(report,/100 paired paths/);
   assert.doesNotMatch(report,/Primary risk:/);
   assert.match(overview,/Constant returns at the entered annual means/);
 });
@@ -1355,7 +1442,7 @@ test('calculation updates preserve focused drafts through success and failure un
     const workerCount=task==='runLab'?7:1;
     for(let i=0;i<workerCount;i++){
       const worker=a.workers[i];assert.ok(worker);
-      worker.onmessage({data:outcome==='error'?{type:'error',message:'Test calculation failure'}:{type:'result',result:task==='runDecision'?{targetReadiness:.8,simulationCount:180}:runSimulation(worker.data.scenario)}});
+      worker.onmessage({data:outcome==='error'?{type:'error',message:'Test calculation failure'}:{type:'result',result:task==='runDecision'?{targetReadiness:.8,simulationCount:200}:runSimulation(worker.data.scenario)}});
       await Promise.resolve();
       assert.equal(a.document.activeElement,editor);assert.equal(retained,editor);assert.equal(editor.value,'123456');
     }
@@ -1371,7 +1458,7 @@ test('calculation updates preserve focused drafts through success and failure un
 test('background billing renders retain the original live editor and its uncommitted value',async()=>{
   for(const access of [
     {tier:'pro',maxPaths:10000,signedIn:true,accountKey:'user'},
-    {tier:'free',maxPaths:10,signedIn:false,checkoutAvailable:true},
+    {tier:'free',maxPaths:100,signedIn:false,checkoutAvailable:true},
     {error:'unauthorized'},
   ])for(const dataset of [{field:'accounts.pretax',type:'money'},{budget:'annualPropertyTaxes'},{month:'0',part:'credit'}]){
     let finish;const a=app(null,{fetch:()=>new Promise(resolve=>{finish=resolve;})});
@@ -1499,7 +1586,7 @@ test('copy, reset, apply and import cannot overwrite a failed-save warning',asyn
 });
 
 test('billing portal remains visible for a free account with an existing customer',async()=>{
-  const a=app(null,{fetch:async()=>Response.json({tier:'free',maxPaths:10,signedIn:true,checkoutAvailable:true,billingPortalAvailable:true})});
+  const a=app(null,{fetch:async()=>Response.json({tier:'free',maxPaths:100,signedIn:true,checkoutAvailable:true,billingPortalAvailable:true})});
   await a.loadAccess();assert.match(a.billingView(),/data-action="billing-portal"/);
   a.state.access.billingPortalAvailable=false;assert.doesNotMatch(a.billingView(),/data-action="billing-portal"/);
 });
@@ -1509,7 +1596,7 @@ test('first visit leads with starting actions and an explicitly illustrative cha
   assert.match(html,/Explore how long your retirement savings could last/);
   assert.match(html,/Build my forecast/);assert.match(html,/Explore a sample plan/);
   assert.match(html,/Illustrative paths only/);assert.match(html,/Your financial inputs stay in your browser/);
-  assert.match(html,/Free preview · 10 simulated lifetimes/);assert.match(html,/Sample plan at a glance/);
+  assert.match(html,/Free preview · 100 simulated lifetimes/);assert.match(html,/Sample plan at a glance/);
   assert.ok(html.indexOf('Build my forecast')<html.indexOf('overview-upgrade-title'));
   assert.equal(a.saved(),null);
 });
@@ -1530,7 +1617,7 @@ test('automatic Pro defaults preserve the first-visit state across reloads',asyn
   const a=app();a.state.access.tier='pro';a.state.scenarios.forEach(model.applyProSimulationDefault);await a.persist(false);
   const restored=app(a.saved());restored.state.access.tier='pro';const html=restored.dashboard();
   assert.match(html,/Build my forecast/);assert.match(html,/Pro · Up to 10,000/);
-  assert.doesNotMatch(html,/overview-upgrade-title|Free preview · 10 simulated lifetimes/);
+  assert.doesNotMatch(html,/overview-upgrade-title|Free preview · 100 simulated lifetimes/);
 });
 
 test('both scenario selectors discard prior comparisons and targets',async()=>{
@@ -1580,24 +1667,24 @@ test('lower-spending comparisons use the same home-sale assumptions as an editor
   const entered=structuredClone(a.current());entered.numberOfSimulations=spendingVariant.numberOfSimulations;
   assert.equal(runSimulation(entered).successProbability,comparisonReadiness);
 });
-test('ten-path outcomes use counts and a visible warning in free and Pro views and reports',()=>{
+test('100-path outcomes use counts and a visible warning in free and Pro views and reports',()=>{
   for(const tier of ['free','pro']){
     const a=app();a.state.access.tier=tier;const r=runSimulation(a.current());a.state.results.set(a.current().id,r);a.state.labResults=[{label:'Current plan',result:r}];
-    const label=format.readinessLabel(r),percent=`${(100*r.successProbability).toFixed(1)}%`;assert.match(label,/^\d+ of 10$/);
+    const label=format.readinessLabel(r),percent=`${(100*r.successProbability).toFixed(1)}%`;assert.match(label,/^\d+ of 100$/);
     for(const html of [a.results(),a.dashboard(),a.lab()]){assert.ok(html.includes(label),label);assert.match(html,/Sample preview only/);assert.ok(!html.includes(percent),percent);}
     const report=a.reportText(a.current(),r);assert.ok(report.includes(`Lifetimes without a portfolio shortfall: ${label}`));assert.match(report,/SAMPLE PREVIEW ONLY/);assert.doesNotMatch(report,/Modeled readiness.*100\.0%/);
   }
 });
 test('larger runs retain percentage summaries without the small-preview warning',()=>{
-  const a=app();a.state.access.tier='pro';a.current().numberOfSimulations=100;const r=runSimulation(a.current());a.state.results.set(a.current().id,r);
+  const a=app();a.state.access.tier='pro';a.current().numberOfSimulations=101;const r=runSimulation(a.current());a.state.results.set(a.current().id,r);
   assert.match(a.results(),/Monte Carlo readiness/);assert.match(a.results(),/\d+\.\d%/);assert.doesNotMatch(a.results(),/Sample preview only/);
-  assert.equal(format.shareLabel(.75,4),'3 of 4');assert.equal(format.shareLabel(.75,100),'75.0%');
+  assert.equal(format.shareLabel(.75,4),'3 of 4');assert.equal(format.shareLabel(.75,101),'75.0%');
 });
 
 test('retained reports and comparisons keep their actual counts across upgrades and expiration',async()=>{
-  for(const [completedCount,nextTier,nextCount] of [[4,'pro',10000],[10,'pro',10000],[150,'free',10]]){
+  for(const [completedCount,nextTier,nextCount] of [[4,'pro',10000],[10,'pro',10000],[100,'pro',10000],[150,'free',100]]){
     const a=app(null,{fetch:async()=>Response.json({tier:nextTier,signedIn:true,accountKey:'user-a'})});
-    a.state.access.tier=completedCount>10?'pro':'free';
+    a.state.access.tier=completedCount>100?'pro':'free';
     a.current().numberOfSimulations=completedCount;
     const r=runSimulation(a.current());a.state.results.set(a.current().id,r);
     a.state.labResults=[{label:'Current plan',result:r}];
@@ -1608,8 +1695,8 @@ test('retained reports and comparisons keep their actual counts across upgrades 
     assert.ok(report.includes(`Paths for next run: ${nextCount}`));
     const html=a.lab();
     assert.ok(html.includes(`Each comparison runs ${completedCount} Monte Carlo paths`));
-    assert.ok(html.includes(completedCount<=10?'Samples without shortfall':'Modeled readiness'));
-    assert.equal(html.includes('Sample preview only'),completedCount<=10);
+    assert.ok(html.includes(completedCount<=100?'Samples without shortfall':'Modeled readiness'));
+    assert.equal(html.includes('Sample preview only'),completedCount<=100);
     assert.equal(a.state.results.get(a.current().id),r);
   }
 });
@@ -1630,7 +1717,7 @@ test('an access check that changes the tier preserves completed results and upda
 });
 test('spending targets at the search limit are shown as a lower bound',()=>{
   const a=app();a.state.access.tier='pro';
-  a.state.decision={targetReadiness:.8,simulationCount:180,earliestRetirementAge:55,safeAnnualSpending:250000,safeSpendingAtSearchLimit:true,safeSpendingSearchLimit:250000};
+  a.state.decision={targetReadiness:.8,simulationCount:200,earliestRetirementAge:55,safeAnnualSpending:250000,safeSpendingAtSearchLimit:true,safeSpendingSearchLimit:250000};
   assert.match(a.lab(),/At least \$250,000/);assert.match(a.lab(),/search stops at \$250,000/);
   a.state.decision={...a.state.decision,safeAnnualSpending:90000,safeSpendingAtSearchLimit:false};
   assert.doesNotMatch(a.lab(),/At least|search stops/);assert.match(a.lab(),/\$90,000/);
@@ -1642,7 +1729,7 @@ test('transient billing failures retain verified Pro briefly and never discard r
     const a=app(null,{clock,fetch:async()=>{if(failing){if(failure==='network')throw Error('offline');return Response.json({accountKey:'user-a',error:'Temporary outage'},{status:502});}return Response.json({tier:'pro',signedIn:true,accountKey:'user-a',maxPaths:10000});}});
     await a.loadAccess();a.state.results.set(a.current().id,runSimulation({...a.current(),numberOfSimulations:4}));seedExploration(a);failing=true;
     await a.loadAccess();assert.equal(a.isPro(),true);assert.equal(a.state.results.size,1);assert.ok(a.state.decision);assert.match(a.state.message,/last verified Pro/);
-    clock.now+=5*60*1000;assert.equal(a.isPro(),false);assert.equal(a.effectivePaths(),10);
+    clock.now+=5*60*1000;assert.equal(a.isPro(),false);assert.equal(a.effectivePaths(),100);
     await a.loadAccess();assert.equal(a.state.access.tier,'free');assert.equal(a.state.results.size,1);assert.ok(a.state.decision);
     failing=false;await a.loadAccess();assert.equal(a.isPro(),true);assert.equal(a.state.message,'');
   }
@@ -1743,9 +1830,9 @@ test('grace expiration redraws permissions without extending grace or interrupti
     a.state.view='billing';await a.loadAccess();const result=runSimulation({...a.current(),numberOfSimulations:4});a.state.results.set(a.current().id,result);seedExploration(a);
     failing=true;await a.loadAccess();a.advanceTime(60000);await a.loadAccess();assert.equal(a.timers.size,1);
     const pending=running?a.run():null,renders=a.renders();a.advanceTime(240000);
-    assert.equal(a.renders(),renders+1);assert.equal(a.timers.size,0);assert.equal(a.effectivePaths(),10);
+    assert.equal(a.renders(),renders+1);assert.equal(a.timers.size,0);assert.equal(a.effectivePaths(),100);
     assert.doesNotMatch(a.element('#main').innerHTML,/Active on this account|Owner Pro access is active|last verified Pro access is available/);
-    assert.match(a.state.message,running?/Calculating this plan/:/New runs use the 10-path/);assert.equal(a.state.results.get(a.current().id),result);assert.ok(a.state.decision);
+    assert.match(a.state.message,running?/Calculating this plan/:/New runs use the 100-path/);assert.equal(a.state.results.get(a.current().id),result);assert.ok(a.state.decision);
     if(running){assert.equal(a.workers[0].terminated,undefined);a.workers[0].onmessage({data:{type:'result',result}});await pending;}
     assert.equal(a.state.results.get(a.current().id),result);
   }
@@ -1853,13 +1940,13 @@ test('worker progress updates the running status without finishing the calculati
   const a=app(),pending=a.run(),worker=a.workers[0];
   worker.onmessage({data:{type:'progress',fraction:.5}});
   assert.equal(a.state.busy,true);assert.equal(a.element('#busy-progress').value,.5);
-  assert.match(a.element('#busy-detail').textContent,/5 of 10 lifetimes simulated/);assert.match(a.element('#result-state').textContent,/50%/);
+  assert.match(a.element('#busy-detail').textContent,/50 of 100 lifetimes simulated/);assert.match(a.element('#result-state').textContent,/50%/);
   worker.onmessage({data:{type:'result',result:runSimulation(worker.data.scenario)}});await pending;
   assert.equal(a.state.busy,false);assert.equal(a.state.progress,null);assert.equal(a.state.results.size,1);
   const b=app();b.state.access.tier='pro';const search=b.runDecision();
   b.workers[0].onmessage({data:{type:'progress',phase:'spending',checkedAges:3,totalAges:7,checkedAmounts:10,totalAmounts:501}});
   assert.match(b.element('#busy-detail').textContent,/10 of up to 501 spending amounts/);assert.equal(b.element('#busy-progress').value,17/508);
-  b.workers[0].onmessage({data:{type:'result',result:{targetReadiness:.8,simulationCount:180}}});await search;assert.equal(b.state.busy,false);
+  b.workers[0].onmessage({data:{type:'result',result:{targetReadiness:.8,simulationCount:200}}});await search;assert.equal(b.state.busy,false);
 });
 
 test('a comparison that already matches the plan is reported instead of rerun',async()=>{
@@ -1874,9 +1961,9 @@ test('a comparison that already matches the plan is reported instead of rerun',a
 test('warnings and progress use the neutral notice style; completed actions use success styling',()=>{
   const a=app();
   for(const [message,className] of [
-    ['Subscription status is unavailable. New runs use the 10-path free preview; your completed results are kept.','notice'],
+    ['Subscription status is unavailable. New runs use the 100-path free preview; your completed results are kept.','notice'],
     ['Sign in again to verify your plan. Your completed results are still available.','notice'],
-    ['Planning targets require Pro because 10 paths are too coarse.','notice'],
+    ['Planning targets require Pro because 100 paths are too coarse.','notice'],
     ['Calculation canceled. Completed results are unchanged.','notice'],
     ['Results updated for Base plan.','notice good'],
     ['Error: Something failed.','notice error'],
@@ -1885,8 +1972,8 @@ test('warnings and progress use the neutral notice style; completed actions use 
 
 test('planning targets report the whole-year ages actually searched',()=>{
   const a=app();a.state.access.tier='pro';
-  a.state.decision={targetReadiness:.8,simulationCount:180,earliestRetirementAge:null,safeAnnualSpending:null,safeSpendingAtSearchLimit:false,safeSpendingSearchLimit:250000,retirementAgeSearchStart:60,retirementAgeSearchEnd:67};
-  assert.match(a.lab(),/ages 60 through 67 with 180 paths per age/);assert.doesNotMatch(a.lab(),/through 70/);
+  a.state.decision={targetReadiness:.8,simulationCount:200,earliestRetirementAge:null,safeAnnualSpending:null,safeSpendingAtSearchLimit:false,safeSpendingSearchLimit:250000,retirementAgeSearchStart:60,retirementAgeSearchEnd:67};
+  assert.match(a.lab(),/ages 60 through 67 with 200 paths per age/);assert.doesNotMatch(a.lab(),/through 70/);
   a.state.decision={...a.state.decision,retirementAgeSearchStart:72,retirementAgeSearchEnd:70};
   assert.match(a.lab(),/No whole-year retirement age before the maximum modeling age/);
 });
@@ -1984,27 +2071,27 @@ test('withdrawal page handles a shortfall and retirement beyond the assumed life
   assert.match(a.withdrawals(),/no retirement month to illustrate/);assert.doesNotMatch(a.withdrawals(),/id="withdrawal-example-month"/);
 });
 
-test('free runs use ten paths for legacy and imported plans while preserving saved choices',async()=>{
-  for(const savedCount of [4,5000]){
+test('free runs use 100 paths for legacy and imported plans while preserving saved choices',async()=>{
+  for(const savedCount of [4,10,100,5000]){
     const s=model.baseScenario();s.numberOfSimulations=savedCount;s.simulationPathsCustomized=savedCount!==4;
     const a=app({scenarios:[s],selectedId:s.id});
-    assert.equal(a.effectivePaths(),10);assert.match(a.billingView(),/>10 paths</);
-    a.state.setupSection=4;assert.match(a.setup(),/10 paths · Free preview/);
-    const saved=a.stored(),pending=a.run();assert.equal(a.workers[0].data.scenario.numberOfSimulations,10);
-    const result=runSimulation(a.workers[0].data.scenario);assert.equal(result.provenance.simulationCount,10);
+    assert.equal(a.effectivePaths(),100);assert.match(a.billingView(),/>100 paths</);
+    a.state.setupSection=4;assert.match(a.setup(),/100 paths · Free preview/);
+    const saved=a.stored(),pending=a.run();assert.equal(a.workers[0].data.scenario.numberOfSimulations,100);
+    const result=runSimulation(a.workers[0].data.scenario);assert.equal(result.provenance.simulationCount,100);
     a.workers[0].onmessage({data:{type:'result',result}});await pending;
     assert.equal(a.stored(),saved);assert.equal(a.current().numberOfSimulations,savedCount);
     await a.change('#main',{dataset:{field:'numberOfSimulations',type:'number'},value:'1000'});
-    assert.match(a.state.message,/10 paths are available/);assert.equal(a.current().numberOfSimulations,savedCount);
+    assert.match(a.state.message,/100 paths are available/);assert.equal(a.current().numberOfSimulations,savedCount);
     a.state.access.tier='pro';assert.equal(a.effectivePaths(),savedCount,'The free allowance must not override a Pro selection');
   }
 });
 
-test('ten paths remain a counted preview and eleven paths use percentage formatting',()=>{
-  for(const count of [4,10,11]){
+test('100 paths remain a counted preview and 101 paths use percentage formatting',()=>{
+  for(const count of [4,10,100,101]){
     const result={provenance:{simulationCount:count},successProbability:.8};
-    assert.equal(format.isPreviewResult(result),count<=10);
-    assert.equal(format.readinessLabel(result),count<=10?`${Math.round(.8*count)} of ${count}`:'80.0%');
+    assert.equal(format.isPreviewResult(result),count<=100);
+    assert.equal(format.readinessLabel(result),count<=100?`${Math.round(.8*count)} of ${count}`:'80.0%');
   }
 });
 
@@ -2151,8 +2238,8 @@ test('amounts with a Monthly/Yearly control omit worked conversion examples; bal
 
 test('results distinguish zero survivors from funding, missing financial outcomes and the steady illustration',()=>{
   const a=app();a.state.dollarBasis='future';const s=a.current(),r=runSimulation(s);r.notFailedByAge=[{age:67,notFailedShare:1,aliveShare:1},{age:68,notFailedShare:1,aliveShare:0}];
-  r.balanceBands=[{age:67,median:100,pessimistic:100,optimistic:100,pathCount:10}];a.state.results.set(s.id,r);
-  const html=a.results();assert.match(html,/A simulated death is not running out of money/);assert.match(html,/Not enough simulated outcomes/);assert.match(html,/0 of 10 observed/);
+  r.balanceBands=[{age:67,median:100,pessimistic:100,optimistic:100,pathCount:100}];a.state.results.set(s.id,r);
+  const html=a.results();assert.match(html,/A simulated death is not running out of money/);assert.match(html,/Not enough simulated outcomes/);assert.match(html,/0 of 100 observed/);
   assert.match(html,/typical Monte Carlo outcome or guaranteed balance/);assert.match(html,/healthcare inflation 4.0%/);assert.match(html,/future dollars/);
   assert.equal(r.successProbability>0,true);assert.match(html,/Zero observed survivors does not mean living longer is impossible/);
   assert.equal(format.shareLabel(0,10000),'0 of 10000 observed');
@@ -2242,7 +2329,10 @@ test('Results open with a short verdict, state the preview caveat once and flag 
   assert.match(html,/What should I try next\?/);
   assert.match(html,/What to do next/);
   assert.equal(html.split('too small a sample to estimate').length-1,1);
-  assert.match(html,/lifespans run from short to long/);
+  assert.doesNotMatch(html,/lifespans run from short to long/);
+  const legacy=runSimulation({...s,numberOfSimulations:10});a.state.results.set(s.id,legacy);
+  assert.match(a.results(),/lifespans run from short to long/);
+  a.state.results.set(s.id,r);
   assert.match(html,/Based partly on sample values/);
   a.state.inputSources[s.id]={_origin:'Entered'};
   assert.doesNotMatch(a.results(),/Based partly on sample values/);
@@ -2404,6 +2494,31 @@ test('budget can be applied with excluded separate costs and returns to the acti
   assert.equal(a.state.setupSection,4);
 });
 
+test('all comparison modes allow 1000 Pro paths, keep free at 100 and respect smaller Pro selections',async()=>{
+  for(const [tier,selectedCount,expectedCount] of [['pro',10000,1000],['pro',380,380],['pro',4,4],['free',10000,100]]){
+    const completed=runSimulation({...model.baseScenario(),numberOfSimulations:4});
+    // Mock successful worker completion; this test verifies dispatch limits,
+    // displayed counts and preservation of saved choices, not engine math.
+    completed.provenance.simulationCount=expectedCount;
+    for(const [args,rowCount] of [[[],7],[[true],3],[[true,true],4],[[false,false,true],2]]){
+      const s=model.baseScenario();s.numberOfSimulations=selectedCount;s.simulationPathsCustomized=true;
+      const a=app({scenarios:[s],selectedId:s.id});a.state.access.tier=tier;
+      a.element('#main').listeners.input({target:{dataset:{labInput:'retirementDate'},value:model.addCalendarMonths(a.current().household.retirementDate,12)}});
+      a.element('#main').listeners.input({target:{dataset:{labInput:'monthlySpending'},value:'4000'}});
+      const before=JSON.stringify(a.current()),pending=a.runLab(...args);
+      for(let i=0;i<rowCount;i++){
+        const worker=a.workers[i];assert.ok(worker);
+        assert.equal(worker.data.scenario.numberOfSimulations,expectedCount,`${tier}: ${JSON.stringify(args)}`);
+        worker.onmessage({data:{type:'result',result:structuredClone(completed)}});await Promise.resolve();
+      }
+      await pending;assert.equal(a.workers.length,rowCount);
+      assert.equal(JSON.stringify(a.current()),before);
+      assert.match(a.lab(),new RegExp(`Each comparison runs ${expectedCount} Monte Carlo paths`));
+      assert.match(a.billingView(),/Comparisons use up to 1,000 paths per scenario/);
+    }
+  }
+});
+
 test('comparison copies retain personal balances, full-run count and all unchanged assumptions',async()=>{
   const s=model.baseScenario();s.accounts.pretax=456789;s.accounts.cash=54321;s.numberOfSimulations=380;s.simulationPathsCustomized=true;
   s.market.stockMeanReturn=.09;
@@ -2411,7 +2526,7 @@ test('comparison copies retain personal balances, full-run count and all unchang
   a.state.entryPeriods[s.id]={'spending.annualBaseSpending':'month'};
   a.state.inputSources[s.id]['accounts.cash']='Entered';const parent=structuredClone(a.current()),pending=a.runLab();
   for(let i=0;i<7;i++){
-    const worker=a.workers[i];assert.ok(worker);assert.equal(worker.data.scenario.numberOfSimulations,150);
+    const worker=a.workers[i];assert.ok(worker);assert.equal(worker.data.scenario.numberOfSimulations,380);
     worker.onmessage({data:{type:'result',result:runSimulation(worker.data.scenario)}});await Promise.resolve();
   }
   await pending;assert.match(a.lab(),/Create a plan with this change/);
@@ -2539,7 +2654,7 @@ test('investment review opens actual controls and labels edited rates without ap
 test('results explain zero shortfalls and route next steps to review, investments and comparisons',async()=>{
   const a=app(),s=a.current();s.market.stockMeanReturn=.133;const r=runSimulation(s);r.successProbability=1;r.riskBreakdown.primaryRisk='none';
   a.state.results.set(s.id,r);a.state.view='results';
-  let html=a.results();assert.match(html,/All 10 preview lifetimes stayed funded/);
+  let html=a.results();assert.match(html,/All 100 preview lifetimes stayed funded/);
   assert.match(html,/assumes stocks grow 13\.3% a year[^<]*Try a lower return/);assert.doesNotMatch(html,/No sensitivity check reduced shortfalls/);
   const modest=structuredClone(s);Object.assign(modest.market,{preRetirementMeanReturn:.07,stockMeanReturn:.07});
   r.uxAssumptions=modest;r.todayDollars.medianEndingBalance=modest.spending.annualBaseSpending*25;assert.match(a.results(),/about 25 years of base spending left/);
@@ -2825,4 +2940,82 @@ test('deduction reconciliation supports mixed months and uses only the latest tw
   assert.match(a.budgetCostCheck(),/the 12 months/);assert.match(a.budgetCostCheck(),/\$100\.00 \/ month/);
   await a.change('#main',{dataset:{costConfirm:''},checked:true});assert.equal(a.budgetCostsReviewed(),true,'An unused old month does not require another answer');
   await a.click('apply-budget');assert.equal(a.current().spending.annualBaseSpending,58800);
+});
+
+function claimingTargets(){return {frontier:{kind:'claiming',targetReadiness:.8,simulationCount:200,searchStartAge:62,searchEndAge:70,spendingSearchLimit:250000,points:Array.from({length:9},(_,i)=>({age:62+i,annualSpending:80000+i*5000,readiness:.8,tested:true,simulationCount:200}))}};}
+
+test('claiming target search uses its own worker and slider, then applies and saves claiming age plus spending',async()=>{
+  const records=new Map(),a=app(null,{resultRecords:records});a.state.access.tier='pro';const s=a.current();s.numberOfSimulations=500;s.simulationPathsCustomized=true;
+  s.household.filingStatus='Married';s.household.separatePeople=true;s.household.spouseRetirementDate=model.addCalendarMonths(s.household.spouseBirthday,68*12);s.socialSecurity.spouseClaimAge=69;
+  const before=structuredClone(s);seedExploration(a);
+  assert.match(a.lab(),/Find Social Security claiming age &amp; spending targets/);
+  const pending=a.runDecision(true),worker=a.workers.at(-1);assert.equal(worker.data.task,'claim-decision');
+  worker.onmessage({data:{type:'result',result:claimingTargets()}});await pending;
+  assert.ok(a.state.decision);assert.ok(a.state.claimDecision);assert.equal(a.state.claimFrontierSelection,5);
+  assert.deepEqual(structuredClone(s),before);const stored=a.stored();
+  a.element('#main').listeners.input({target:{dataset:{frontierSlider:'claiming'},value:'1'}});
+  assert.match(a.element('#claim-frontier-selection').innerHTML,/\$85,000/);assert.equal(a.state.claimFrontierSelection,1);assert.equal(a.stored(),stored);
+  a.state.results.set(s.id,{old:true});records.set(s.id,{old:true});await a.click('apply-claim-frontier-target');
+  assert.equal(s.socialSecurity.claimAge,63);assert.equal(s.spending.annualBaseSpending,85000);
+  assert.equal(s.socialSecurity.spouseClaimAge,69);assert.deepEqual(structuredClone(s.household),before.household);assert.deepEqual(structuredClone(s.accounts),before.accounts);
+  assert.equal(s.numberOfSimulations,500);assert.equal(s.simulationPathsCustomized,true);assert.equal(s.seed,before.seed);
+  assert.equal(a.saved().inputSources[s.id]['socialSecurity.claimAge'],'Estimated');assert.equal(a.saved().inputSources[s.id]['spending.annualBaseSpending'],'Estimated');
+  assertCleared(a);assert.equal(a.state.results.has(s.id),false);assert.equal(records.has(s.id),false);assert.equal(a.state.view,'setup');assert.equal(a.state.setupSection,5);
+  assert.match(a.state.message,/Social Security claiming age and base spending target applied/);
+  const restored=app(a.saved());assert.equal(restored.current().socialSecurity.claimAge,63);assert.equal(restored.current().spending.annualBaseSpending,85000);assert.equal(restored.current().numberOfSimulations,500);
+});
+
+test('claiming searches require Pro and ignore results for plans edited during the calculation',async()=>{
+  const a=app();assert.match(a.lab(),/data-action="run-claim-decision" disabled/);await a.runDecision(true);assert.equal(a.workers.length,0);
+  a.state.access.tier='pro';a.state.claimDecision=claimingTargets();seedExploration(a);
+  const pending=a.runDecision(true),worker=a.workers.at(-1);
+  await a.change('#main',{dataset:{field:'accounts.pretax',type:'money'},value:'900000'});assertCleared(a);
+  worker.onmessage({data:{type:'result',result:claimingTargets()}});await pending;
+  assertCleared(a);assert.equal(a.current().accounts.pretax,900000);assert.equal(a.state.busy,false);
+});
+
+test('claiming apply rejects untested points and ignores actions while another calculation is running',async()=>{
+  const a=app(),before=structuredClone(a.current());a.state.access.tier='pro';a.state.claimDecision=claimingTargets();
+  for(const point of a.state.claimDecision.frontier.points)point.tested=false;
+  assert.doesNotMatch(a.lab(),/data-action="apply-claim-frontier-target"/);await a.click('apply-claim-frontier-target');
+  a.state.claimDecision=claimingTargets();a.state.busy=true;assert.match(a.lab(),/data-action="apply-claim-frontier-target" disabled/);
+  await a.click('apply-claim-frontier-target');assert.deepEqual(structuredClone(a.current()),before);
+});
+
+function savingsTargetsResult(){return {frontier:{kind:'savings',targetReadiness:.8,simulationCount:200,searchStartAge:60,searchEndAge:67,fixedAnnualSpending:75000,savingsSearchLimit:1000000,allocation:[{label:'Cash',share:1}],points:[{age:60,annualSavings:40000,readiness:.81,tested:true,simulationCount:200},{age:62,annualSavings:30000,readiness:.8,tested:true,simulationCount:200}]}};}
+test('savings targets use a separate worker and slider, apply savings plus age and retain spending and employer/spouse inputs',async()=>{
+  const records=new Map(),a=app(null,{resultRecords:records});a.state.access.tier='pro';const s=a.current();s.numberOfSimulations=500;s.simulationPathsCustomized=true;
+  s.contributions.pretax=12000;s.contributions.roth=6000;s.contributions.employerPretax=3000;s.contributions.annualIncrease=.03;s.spouseContributions.cash=5000;
+  const before=structuredClone(s);seedExploration(a);a.state.claimDecision=claimingTargets();
+  assert.match(a.lab(),/Find age &amp; annual savings/);
+  const pending=a.runDecision('savings'),worker=a.workers.at(-1);assert.equal(worker.data.task,'savings-decision');
+  worker.onmessage({data:{type:'result',result:savingsTargetsResult()}});await pending;
+  assert.ok(a.state.decision);assert.ok(a.state.claimDecision);assert.ok(a.state.savingsDecision);assert.deepEqual(structuredClone(s),before);
+  a.element('#main').listeners.input({target:{dataset:{frontierSlider:'savings'},value:'1'}});
+  assert.equal(a.state.savingsFrontierSelection,1);assert.match(a.element('#savings-frontier-selection').innerHTML,/30,000/);
+  a.state.results.set(s.id,{old:true});records.set(s.id,{old:true});await a.click('apply-savings-frontier-target');
+  assert.equal(model.primaryRetirementAge(s),62);assert.equal(s.contributions.pretax,20000);assert.equal(s.contributions.roth,10000);
+  assert.equal(s.contributions.employerPretax,3000);assert.equal(s.contributions.annualIncrease,.03);assert.deepEqual(structuredClone(s.spouseContributions),before.spouseContributions);
+  assert.deepEqual(structuredClone(s.spending),before.spending);assert.deepEqual(structuredClone(s.budget),before.budget);assert.deepEqual(structuredClone(s.socialSecurity),before.socialSecurity);
+  assert.equal(s.numberOfSimulations,500);assert.equal(s.seed,before.seed);assert.equal(a.saved().inputSources[s.id]['contributions.pretax'],'Estimated');assert.equal(a.saved().inputSources[s.id]['contributions.roth'],'Estimated');
+  assertCleared(a);assert.equal(records.has(s.id),false);assert.equal(a.state.view,'setup');assert.equal(a.state.setupSection,5);
+  const restored=app(a.saved());assert.equal(model.primaryRetirementAge(restored.current()),62);assert.equal(restored.current().contributions.pretax,20000);assert.equal(restored.current().spending.annualBaseSpending,before.spending.annualBaseSpending);
+});
+test('savings targets require Pro, ignore edited-plan results and refuse untested or busy apply',async()=>{
+  const a=app();assert.match(a.lab(),/data-action="run-savings-decision" disabled/);await a.runDecision('savings');assert.equal(a.workers.length,0);
+  a.state.access.tier='pro';const pending=a.runDecision('savings'),worker=a.workers.at(-1);
+  await a.change('#main',{dataset:{field:'accounts.pretax',type:'money'},value:'900000'});
+  worker.onmessage({data:{type:'result',result:savingsTargetsResult()}});await pending;assertCleared(a);
+  const before=structuredClone(a.current());a.state.savingsDecision=savingsTargetsResult();a.state.savingsDecision.frontier.points.forEach(p=>p.tested=false);
+  assert.doesNotMatch(a.lab(),/data-action="apply-savings-frontier-target"/);await a.click('apply-savings-frontier-target');
+  a.state.savingsDecision=savingsTargetsResult();a.state.busy=true;await a.click('apply-savings-frontier-target');assert.deepEqual(structuredClone(a.current()),before);
+});
+
+test('applying savings marks only the changed employer Roth deposit field Estimated and retains separate spouse timing',async()=>{
+  const a=app(),s=a.current();a.state.access.tier='pro';s.household.filingStatus='Married';s.household.separatePeople=true;s.household.spouseRetirementDate=model.addCalendarMonths(s.household.spouseBirthday,68*12);
+  s.employerRothAccounts=[{...model.employerRothDefaults(),id:'target-roth',name:'Work Roth',owner:'you',annualContribution:10000,annualEmployerContribution:2000,annualIncrease:.04}];
+  const before=structuredClone(s);a.state.savingsDecision=savingsTargetsResult();a.state.savingsFrontierSelection=1;
+  await a.click('apply-savings-frontier-target');assert.equal(s.employerRothAccounts[0].annualContribution,30000);assert.equal(s.employerRothAccounts[0].annualEmployerContribution,2000);assert.equal(s.employerRothAccounts[0].annualIncrease,.04);
+  assert.equal(a.saved().inputSources[s.id]['employerRothAccounts.0.annualContribution'],'Estimated');assert.notEqual(a.saved().inputSources[s.id]['employerRothAccounts'],'Estimated');
+  assert.equal(s.household.spouseRetirementDate,before.household.spouseRetirementDate);assert.deepEqual(structuredClone(s.spouseContributions),before.spouseContributions);assert.deepEqual(structuredClone(s.spending),before.spending);
 });

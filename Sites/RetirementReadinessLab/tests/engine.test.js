@@ -43,10 +43,11 @@ test('tax and benefit reference rules',()=>{assert.equal(taxableSocialSecurity(1
 // Android forces the early-withdrawal penalty on for early ages; the web search keeps the plan's setting.
 test('retirement and spending decision targets keep the penalty setting and flag the spending search limit',()=>{
   const s=referenceScenario();s.seed=REFERENCE_SEED;s.spending.annualBaseSpending=71000;const result=estimateDecision(s);
-  assert.equal(result.earliestRetirementAge,53);assert.equal(result.earliestRetirementReadiness,0.8166666666666667);
+  assert.equal(result.simulationCount,200);
+  assert.equal(result.earliestRetirementAge,53);assert.equal(result.earliestRetirementReadiness,0.83);
   assert.equal(result.safeAnnualSpending,250000);assert.equal(result.safeSpendingAtSearchLimit,true);assert.equal(result.safeSpendingSearchLimit,250000);
   s.withdrawalStrategy.applyEarlyWithdrawalPenalty=true;const withPenalty=estimateDecision(s);
-  assert.equal(withPenalty.earliestRetirementAge,55);assert.equal(withPenalty.earliestRetirementReadiness,0.8722222222222222);
+  assert.equal(withPenalty.earliestRetirementAge,55);assert.equal(withPenalty.earliestRetirementReadiness,0.86);
 });
 test('safe spending below the search limit is not flagged as a lower bound',()=>{
   const s=baseScenario();s.household.currentAge=64;s.household.retirementAge=65;s.accounts={pretax:300000,roth:0,taxable:0,cash:0};
@@ -224,7 +225,7 @@ test('Roth conversion cap accepts only supported brackets when enabled',()=>{
   s.rothConversion.enabled=false;assert.deepEqual(validateScenario(s),[]);
 });
 
-test('sample plans retain their comparison seed and use ten-path previews',()=>{
+test('sample plans retain their comparison seed and use 100-path previews',()=>{
   for(const s of sampleScenarios()){
     assert.equal(s.household.currentAge,60);assert.equal(s.household.spouseCurrentAge,60);
     assert.deepEqual(s.accounts,{pretax:175000,roth:17500,taxable:0,cash:17500});
@@ -232,19 +233,19 @@ test('sample plans retain their comparison seed and use ten-path previews',()=>{
     assert.deepEqual(s.market,baseScenario().market);
     assert.equal(s.market.stockMeanReturn,.133);assert.equal(s.market.preRetirementMeanReturn,.133);
     assert.equal(s.spending.annualBaseSpending,s.id==='lean-plan'?68000:75000);
-    assert.equal(s.seed,DEFAULT_SEED);assert.equal(s.numberOfSimulations,10);
-    const r=runSimulation(s);assert.equal(r.provenance.randomSeed,DEFAULT_SEED);assert.equal(r.provenance.simulationCount,10);assert.equal(r.riskBreakdown.simulationCount,10);assert.match(r.riskBreakdown.summary,/preview only/);
-    assert.ok(r.successProbability<=.8,`${s.name}: ${r.successProbability*10} of 10 passed`);
+    assert.equal(s.seed,DEFAULT_SEED);assert.equal(s.numberOfSimulations,100);
+    const r=runSimulation(s);assert.equal(r.provenance.randomSeed,DEFAULT_SEED);assert.equal(r.provenance.simulationCount,100);assert.equal(r.riskBreakdown.simulationCount,100);assert.match(r.riskBreakdown.summary,/100 paired paths/);
+    assert.ok(r.successProbability<=.8,`${s.name}: ${r.successProbability*100} of 100 passed`);
   }
 });
 
-test('calendar-based examples have at least two shortfalls in the default free preview',()=>{
+test('calendar-based examples have shortfalls in the default free preview',()=>{
   for(const today of ['2026-10-03','2026-12-31','2027-01-01','2028-02-29'])for(const s of sampleScenarios()){
     prepareCalendarScenario(s,{today,needsReview:false});s.household.asOfDate=today;
     s.household.separatePeople=true;s.household.spouseRetirementDate=s.household.retirementDate;
     const r=runSimulation(s,undefined,{includeRiskAnalysis:false,includePathPoints:false});
-    assert.equal(r.provenance.simulationCount,10);assert.equal(r.provenance.randomSeed,DEFAULT_SEED);
-    assert.ok(r.successProbability<=.8,`${s.name} on ${today}: ${r.successProbability*10} of 10 passed`);
+    assert.equal(r.provenance.simulationCount,100);assert.equal(r.provenance.randomSeed,DEFAULT_SEED);
+    assert.ok(r.successProbability<=.8,`${s.name} on ${today}: ${r.successProbability*100} of 100 passed`);
   }
 });
 

@@ -5,6 +5,7 @@
   "engines": { "node": ">=22" },
   "scripts": {
     "test": "node scripts/test.mjs",
+    "benchmark:simulation": "node scripts/benchmark-simulation.mjs",
     "build:sites": "node scripts/build-sites.mjs"
   }
 }

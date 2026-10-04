@@ -1,0 +1,13 @@
+{
+  "sourceCommit": "c8c34b37b38f1ee3fab36f03e242172e4b97c797",
+  "hashes": {
+    "pooled": "0e471455da66b44fbf48596f773e6d1e9844f95500c5c4e25c2f3fe72d6dcbf2",
+    "shortfall-preview": "2b03972c521b4841c60f16855c5781469130874c6cbefbd2ac74ada4dcf74418",
+    "early-conversions": "06d952821f2beb1ef587dd9c74ff48ea0f45bfa9db8d57b5fe3c6a1f6bb0d2f4",
+    "sepp": "15fd360930cf71df606b71e8ee0030149d51880e352874e3f8c0c0077d70594a",
+    "separate-couple": "8d0edcf178c926c8ea4ab5c7d71b017e0833a6afbadbc99c1db1698cbfeb1e60",
+    "already-retired": "663fa17101aa0cf37040af399a02c55062dbd924aee764d86f651e98c30937a2",
+    "employer-roth": "110fa9ff6955d46bb450cacebad562d145b4ca7e9592d91db735ffd898501ab8",
+    "pooled-employer-roth": "46814b301e0aaab13b94d907dcb67830ef0f7f85cd4e97fd735361bb30241d63"
+  }
+}

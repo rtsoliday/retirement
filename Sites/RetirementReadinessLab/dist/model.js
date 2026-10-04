@@ -11,7 +11,9 @@ export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
 // Retained across engine revisions for repeatable scenario comparisons.
 // Android still uses 20260429.
 export const DEFAULT_SEED = 20260766;
-export const FREE_SIMULATION_PATHS = 10;
+export const FREE_SIMULATION_PATHS = 100;
+// Preserve small-run lifespan sampling independently of the free entitlement.
+export const SMALL_SAMPLE_PATHS = 10;
 // Keep the existing Pro selection range independent of the free allowance.
 export const MIN_SIMULATION_PATHS = 4;
 export const MAX_SIMULATION_PATHS = 10000;
@@ -147,7 +149,7 @@ const TYPE_TEMPLATE = baseScenario();
 
 export function sampleScenarios() {
   const base = baseScenario();
-  // Illustrations include shortfalls in the fixed ten-path preview.
+  // Illustrations include shortfalls in the fixed 100-path preview.
   // Keep these choices separate from defaults used to read older plans.
   base.accounts = {pretax: 175000, roth: 17500, taxable: 0, cash: 17500};
   base.rothHistory.contributionBasis = base.accounts.roth;
@@ -242,7 +244,7 @@ export function normalizeScenarios(list) {
 }
 
 export function applyProSimulationDefault(s) {
-  if (s.simulationPathsCustomized || ![MIN_SIMULATION_PATHS,FREE_SIMULATION_PATHS].includes(s.numberOfSimulations)) return false;
+  if (s.simulationPathsCustomized || ![MIN_SIMULATION_PATHS,SMALL_SAMPLE_PATHS,FREE_SIMULATION_PATHS].includes(s.numberOfSimulations)) return false;
   s.numberOfSimulations = MAX_SIMULATION_PATHS;
   return true;
 }

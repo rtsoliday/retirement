@@ -22,7 +22,7 @@ test('ending balances, failure ages and bands average the middle pair for even s
 });
 
 test('funding and survival include the final partial-year shortfall without inventing death at the cutoff',()=>{
-  const s=baseScenario();Object.assign(s.household,{currentAge:65,retirementAge:65,targetEndAge:66});
+  const s=baseScenario();s.numberOfSimulations=10;Object.assign(s.household,{currentAge:65,retirementAge:65,targetEndAge:66});
   s.accounts={pretax:0,roth:11500,taxable:0,cash:0};
   Object.assign(s.spending,{annualBaseSpending:12000,spendingPathModel:'Flat',generalInflationMean:0,generalInflationStdDev:0,lowPortfolioSpendingReduction:0});
   Object.assign(s.market,{stockMeanReturn:0,stockStdDev:0,bondMeanReturn:0,bondStdDev:0});

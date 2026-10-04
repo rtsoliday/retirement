@@ -1,4 +1,5 @@
 import {runSimulation,searchDecision,candidateReadiness} from './engine.js';
+import {searchReadinessFrontier,searchSavingsFrontier} from './target-frontier.js';
 
 // Spread target-search candidates across nested workers when the browser allows
 // them. Any worker that fails to load hands its work back to this worker, so the
@@ -40,9 +41,17 @@ self.onmessage=async e=>{
   try{
     let result;
     if(task==='decision-candidate')result=candidateReadiness(scenario,e.data.candidate);
+    else if(task==='claim-decision'||task==='savings-decision'){
+      const pool=candidatePool(scenario);
+      try{result={frontier:task==='savings-decision'?await searchSavingsFrontier(scenario,{evaluate:pool.evaluate,onProgress:progress}):await searchReadinessFrontier(scenario,{kind:'claiming',evaluate:pool.evaluate,onProgress:progress})};}
+      finally{pool.close();}
+    }
     else if(task==='decision'){
       const pool=candidatePool(scenario);
-      try{result=await searchDecision(scenario,{evaluate:pool.evaluate,concurrency:pool.size,onProgress:progress});}
+      try{
+        result=await searchDecision(scenario,{evaluate:pool.evaluate,concurrency:pool.size,onProgress:update=>progress({...update,frontierExpected:true})});
+        result.frontier=await searchReadinessFrontier(scenario,{evaluate:pool.evaluate,simulationCount:result.simulationCount,targetReadiness:result.targetReadiness,initialSpending:result.safeAnnualSpending??scenario.spending.annualBaseSpending,onProgress:progress});
+      }
       finally{pool.close();}
     }
     else result=runSimulation(scenario,fraction=>progress({fraction}));

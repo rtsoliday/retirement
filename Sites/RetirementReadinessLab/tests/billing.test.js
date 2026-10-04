@@ -27,15 +27,15 @@ const stripeEnv = { ASSETS: assets, STRIPE_SECRET_KEY: 'sk_live_fake', STRIPE_PR
   return Response.json({ error: 'unexpected' }, { status: 404 });
 } };
 
-test('free model defaults to ten paths, up to ten thousand validates, and imported seed is reset', () => {
+test('free model defaults to 100 paths, up to ten thousand validates, and imported seed is reset', () => {
   const base = baseScenario();
-  assert.equal(FREE_SIMULATION_PATHS, 10);
+  assert.equal(FREE_SIMULATION_PATHS, 100);
   assert.equal(base.numberOfSimulations, FREE_SIMULATION_PATHS);
   assert.equal(MAX_SIMULATION_PATHS, 10000);
   const imported = normalizeScenario({ ...base, numberOfSimulations: 5000, seed: 9 });
   assert.equal(imported.seed, DEFAULT_SEED);
   assert.equal(imported.numberOfSimulations, 5000);
-  assert.equal(runSimulation(base).provenance.simulationCount, 10);
+  assert.equal(runSimulation(base).provenance.simulationCount, 100);
 });
 
 test('Pro defaults to 10,000 paths and preserves a manually selected four paths', () => {
@@ -45,6 +45,12 @@ test('Pro defaults to 10,000 paths and preserves a manually selected four paths'
   assert.equal(applyProSimulationDefault(fresh), false);
   const savedFreePlan = normalizeScenario({ ...baseScenario(), numberOfSimulations: 4 });
   assert.equal(applyProSimulationDefault(savedFreePlan), true);
+  const legacyTen = normalizeScenario({ ...baseScenario(), numberOfSimulations: 10 });
+  assert.equal(applyProSimulationDefault(legacyTen), true);
+  assert.equal(legacyTen.numberOfSimulations, 10000);
+  const chosenHundred = normalizeScenario({ ...baseScenario(), simulationPathsCustomized: true });
+  assert.equal(applyProSimulationDefault(chosenHundred), false);
+  assert.equal(chosenHundred.numberOfSimulations, 100);
   const chosenFour = normalizeScenario({ ...baseScenario(), numberOfSimulations: 4, simulationPathsCustomized: true });
   assert.equal(applyProSimulationDefault(chosenFour), false);
   assert.equal(chosenFour.numberOfSimulations, 4);
@@ -56,12 +62,12 @@ test('Pro defaults to 10,000 paths and preserves a manually selected four paths'
   assert.equal(chosenFiveHundred.numberOfSimulations, 500);
 });
 
-test('anonymous and unconfigured accounts remain at ten paths without Stripe calls', async () => {
+test('anonymous and unconfigured accounts remain at 100 paths without Stripe calls', async () => {
   calls.length = 0;
   const anonymous = await (await worker.fetch(request('/api/billing/status'), stripeEnv)).json();
-  assert.deepEqual({ tier: anonymous.tier, maxPaths: anonymous.maxPaths, checkoutAvailable: anonymous.checkoutAvailable }, { tier: 'free', maxPaths: 10, checkoutAvailable: true });
+  assert.deepEqual({ tier: anonymous.tier, maxPaths: anonymous.maxPaths, checkoutAvailable: anonymous.checkoutAvailable }, { tier: 'free', maxPaths: 100, checkoutAvailable: true });
   const unconfigured = await (await worker.fetch(request('/api/billing/status', { user: 'user-123' }), { ASSETS: assets })).json();
-  assert.equal(unconfigured.maxPaths, 10);
+  assert.equal(unconfigured.maxPaths, 100);
   assert.equal(unconfigured.checkoutAvailable, false);
   assert.equal(calls.length, 0);
 });
@@ -94,7 +100,7 @@ test('active matching subscription grants Pro and canceled subscription does not
   assert.equal((await (await worker.fetch(request('/api/billing/status', { user: 'user-123' }), yearlyEnv)).json()).tier, 'pro');
   const canceledEnv = { ...stripeEnv, STRIPE_FETCH: async (url) => new URL(url).pathname === '/v1/customers/search' ? Response.json({ data: [customer] }) : Response.json({ data: [{ ...subscription, status: 'canceled' }] }) };
   const canceled = await (await worker.fetch(request('/api/billing/status', { user: 'user-123' }), canceledEnv)).json();
-  assert.equal(canceled.tier, 'free'); assert.equal(canceled.maxPaths, 10);
+  assert.equal(canceled.tier, 'free'); assert.equal(canceled.maxPaths, 100);
 });
 
 test('return session is tied to the authenticated account before Pro is granted', async () => {
@@ -268,7 +274,7 @@ test('sandbox visitors cannot check out and the signed-in owner can test Checkou
   const testEnv = { ...stripeEnv, STRIPE_SECRET_KEY: 'sk_test_fake' };
   const visitor = await (await worker.fetch(request('/api/billing/status', { user: 'someone-else' }), testEnv)).json();
   assert.equal(visitor.checkoutAvailable, false);
-  assert.equal(visitor.maxPaths, 10);
+  assert.equal(visitor.maxPaths, 100);
   assert.equal((await worker.fetch(request('/api/billing/checkout', { method: 'POST', origin: site, user: 'someone-else' }), testEnv)).status, 403);
   assert.equal(calls.length, 0);
   const ownerCustomer={id:'cus_owner',metadata:{retirement_site_user_id:'site-owner-id'}};

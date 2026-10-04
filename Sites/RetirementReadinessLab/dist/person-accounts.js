@@ -85,23 +85,27 @@ export class PersonAccounts{
       const target=p.rmd*(finalMonth?1:(this.month%12+1)/12),d=Math.min(p.pretax,Math.max(0,target-p.paid));p.pretax-=d;p.paid+=d;rmd+=d;}
     this.refresh();return {sepp,rmd,total:sepp+rmd};
   }
-  quote(gross,{cashFirst=false,conversionTax=false}={}){
-    let remaining=Math.max(0,gross),taxableDraw=0,rothTaxableEarnings=0,penalties=0;const draws=this.people.map(()=>({pretax:0,roth:0})),employerDraws=this.employer.map(()=>0),shared={cash:0,taxable:0};
-    const takeShared=key=>{const d=Math.min(Math.max(0,this.b[key]),remaining);shared[key]+=d;remaining-=d;};
-    const takePretax=()=>this.people.forEach((p,i)=>{if(p.protected)return;const d=Math.min(Math.max(0,p.pretax),remaining);draws[i].pretax=d;remaining-=d;taxableDraw+=d;penalties+=d*p.pretaxPenalty;});
-    const takeRoth=()=>this.people.forEach((p,i)=>{const d=Math.min(Math.max(0,p.roth),remaining),r=p.ledger.distribution(d,p.roth,this.taxYear,{qualified:p.qualified});draws[i].roth=d;remaining-=d;rothTaxableEarnings+=r.taxableEarnings;penalties+=p.penalty*r.penaltyBase;});
-    const takeEmployer=()=>this.employer.forEach((a,i)=>{if(!a.available)return;const d=Math.min(Math.max(0,a.balance),remaining),r=a.ledger.distribution(d,a.balance,this.calendarYear,{qualified:a.qualified});employerDraws[i]=d;remaining-=d;rothTaxableEarnings+=r.taxableEarnings;penalties+=a.penalty*r.penaltyBase;});
+  quote(gross,{cashFirst=false,conversionTax=false,capture=true}={}){
+    // Probes need only income and penalties; account draw records are needed
+    // only for the final plan passed to consume(). Neither form mutates pools.
+    let remaining=Math.max(0,gross),taxableDraw=0,rothTaxableEarnings=0,penalties=0;const draws=capture?this.people.map(()=>({pretax:0,roth:0})):null,employerDraws=capture?this.employer.map(()=>0):null,shared=capture?{cash:0,taxable:0}:null;
+    const takeShared=key=>{const d=Math.min(Math.max(0,this.b[key]),remaining);if(capture)shared[key]+=d;remaining-=d;};
+    const takePretax=()=>this.people.forEach((p,i)=>{if(p.protected)return;const d=Math.min(Math.max(0,p.pretax),remaining);if(capture)draws[i].pretax=d;remaining-=d;taxableDraw+=d;penalties+=d*p.pretaxPenalty;});
+    const takeRoth=()=>this.people.forEach((p,i)=>{const d=Math.min(Math.max(0,p.roth),remaining);if(d===0)return;const r=p.ledger.distribution(d,p.roth,this.taxYear,{qualified:p.qualified});if(capture)draws[i].roth=d;remaining-=d;rothTaxableEarnings+=r.taxableEarnings;penalties+=p.penalty*r.penaltyBase;});
+    const takeEmployer=()=>this.employer.forEach((a,i)=>{if(!a.available)return;const d=Math.min(Math.max(0,a.balance),remaining);if(d===0)return;const r=a.ledger.distribution(d,a.balance,this.calendarYear,{qualified:a.qualified});if(capture)employerDraws[i]=d;remaining-=d;rothTaxableEarnings+=r.taxableEarnings;penalties+=a.penalty*r.penaltyBase;});
     if(conversionTax){takeShared('cash');takeShared('taxable');takeRoth();takeEmployer();takePretax();}else{if(cashFirst)takeShared('cash');takePretax();takeRoth();takeEmployer();takeShared('taxable');if(!cashFirst)takeShared('cash');}
     // An unresolved gap is recorded as negative cash and causes a shortfall.
-    shared.cash+=remaining;
-    return {gross,taxableDraw,rothTaxableEarnings,penalties,draws,employerDraws,shared};
+    if(capture)shared.cash+=remaining;
+    return capture?{gross,taxableDraw,rothTaxableEarnings,penalties,draws,employerDraws,shared}:{taxableDraw,rothTaxableEarnings,penalties};
   }
   plan(need,ss,status,other,cashFirst,taxInflation,seniors,taxYear,ytd,incomeTax=ordinaryIncomeTax,conversionTax=false,netSupport=0){
-    const estimate=gross=>{const q=this.quote(gross,{cashFirst,conversionTax});const ordinary=ytd.ordinary+other+q.taxableDraw+q.rothTaxableEarnings,social=ytd.social+ss,totalTax=incomeTax(ordinary+taxableSocialSecurity(ordinary,social,status),status,taxInflation,seniors,taxYear),net=ss+other+netSupport+gross-(totalTax-ytd.tax)-q.penalties;return {...q,totalTax,net};};
-    if(estimate(0).net>=need)return estimate(0);
+    // Search probes only need net cash. Build the full plan once, retaining
+    // the same quote, tax arithmetic and 32 search iterations.
+    const estimate=(gross,capture=false)=>{const q=this.quote(gross,{cashFirst,conversionTax,capture});const ordinary=ytd.ordinary+other+q.taxableDraw+q.rothTaxableEarnings,social=ytd.social+ss,totalTax=incomeTax(ordinary+taxableSocialSecurity(ordinary,social,status),status,taxInflation,seniors,taxYear),net=ss+other+netSupport+gross-(totalTax-ytd.tax)-q.penalties;return capture?{...q,totalTax,net}:net;};
+    if(estimate(0)>=need)return estimate(0,true);
     let low=0,high=Math.max(0,need-ss-other-netSupport)*1.8+10000;
-    while(estimate(high).net<need){high*=2;if(!Number.isFinite(high))throw Error('Simulation exceeded the finite numeric range.');}
-    for(let i=0;i<32;i++){const mid=(low+high)/2;if(estimate(mid).net>=need)high=mid;else low=mid;}return estimate(high);
+    while(estimate(high)<need){high*=2;if(!Number.isFinite(high))throw Error('Simulation exceeded the finite numeric range.');}
+    for(let i=0;i<32;i++){const mid=(low+high)/2;if(estimate(mid)>=need)high=mid;else low=mid;}return estimate(high,true);
   }
   consume(q){for(const [i,p] of this.people.entries()){const d=q.draws[i];p.pretax-=d.pretax;p.paid+=d.pretax;p.ledger.distribution(d.roth,p.roth,this.taxYear,{qualified:p.qualified,consume:true});p.roth-=d.roth;}for(const [i,a] of this.employer.entries()){const d=q.employerDraws[i];a.ledger.distribution(d,a.balance,this.calendarYear,{qualified:a.qualified,consume:true});a.balance-=d;}this.b.cash-=q.shared.cash;this.b.taxable-=q.shared.taxable;this.refresh();}
   convert(amount){let remaining=amount;for(const p of this.people){if(p.protected)continue;const d=Math.min(Math.max(0,p.pretax),remaining);p.pretax-=d;p.roth+=d;p.ledger.add(d,this.taxYear);remaining-=d;}this.refresh();return amount-remaining;}

@@ -1,7 +1,8 @@
 import {runSeparatePeople} from './person-engine.js';
 import {depositSavings,hasFutureSavings} from './savings.js';
+import {setAnnualPersonalSavings} from './savings-targets.js';
 import {buildPathPoints,buildBalanceBands,buildFundingSurvival,medianOfSorted} from './chart-data.js';
-import {ENGINE_VERSION, scenarioEngineVersion, validateScenario, retirementAge, ruleOf55Applies, setAnnualBaseSpending, scenarioTimeline, forecastRetirementDate, usesCalendarDates, setRetirementAge, localCalendarDate, addCalendarMonths, calendarMonthsBetween, FREE_SIMULATION_PATHS} from './model.js';
+import {ENGINE_VERSION, scenarioEngineVersion, validateScenario, retirementAge, ruleOf55Applies, setAnnualBaseSpending, scenarioTimeline, forecastRetirementDate, usesCalendarDates, setRetirementAge, localCalendarDate, addCalendarMonths, calendarMonthsBetween, SMALL_SAMPLE_PATHS} from './model.js';
 import {maleMortality,femaleMortality} from './mortality.js';
 import {taxableSocialSecurity,ordinaryIncomeTax,rothConversionPlan} from './tax.js';
 import {RothConversionLedger} from './roth-conversions.js';
@@ -21,7 +22,17 @@ function percentile(sorted,p){return sorted.length?sorted[Math.min(sorted.length
 
 export class JavaRandom {
   constructor(seed){this.seed=(BigInt(seed)^0x5deece66dn)&MASK;this.gaussian=null;}
-  next(bits){this.seed=(this.seed*0x5deece66dn+0xbn)&MASK;return Number(this.seed>>BigInt(48-bits));}
+  get seed(){return (BigInt(this.seedHigh)<<24n)|BigInt(this.seedLow);}
+  set seed(value){const seed=BigInt(value)&MASK;this.seedHigh=Number(seed>>24n);this.seedLow=Number(seed&0xffffffn);}
+  next(bits){
+    // Two 24-bit words reproduce Java's 48-bit LCG exactly. Each product and
+    // sum is below 2^49, within Number's exact integer range; masking discards
+    // only the high bits. Avoid BigInt allocation on every random draw.
+    const low=this.seedLow*0xece66d+0xb;
+    this.seedHigh=(this.seedHigh*0xece66d+this.seedLow*0x5de+Math.floor(low/0x1000000))&0xffffff;
+    this.seedLow=low&0xffffff;
+    return Math.floor((this.seedHigh*0x1000000+this.seedLow)/2**(48-bits));
+  }
   nextDouble(){return (this.next(26)*134217728+this.next(27))/9007199254740992;}
   nextGaussian(){if(this.gaussian!==null){const x=this.gaussian;this.gaussian=null;return x;}let v1,v2,s;do{v1=2*this.nextDouble()-1;v2=2*this.nextDouble()-1;s=v1*v1+v2*v2;}while(s>=1||s===0);const m=Math.sqrt(-2*Math.log(s)/s);this.gaussian=v2*m;return v1*m;}
   normal(mean,std){return mean+this.nextGaussian()*std;}
@@ -57,11 +68,11 @@ export function deathAgeAtQuantile(gender,start,end,u){
   }
   return limit/12;
 }
-// A preview has too few paths to leave lifespans to chance. Give each path one
+// A run of ten or fewer paths has too few lifespans to leave to chance. Give each path one
 // equal-probability band of the mortality table instead. Spouse bands use a
 // seeded shuffle so the two lifespans in a path are not paired by rank.
 export function previewLifespanQuantiles(n,seed){
-  if(n>FREE_SIMULATION_PATHS)return null;
+  if(n>SMALL_SAMPLE_PATHS)return null;
   const rng=new JavaRandom(BigInt(seed)),spouse=Array.from({length:n},(_,i)=>i);
   for(let i=n-1;i>0;i--){const j=Math.floor(rng.nextDouble()*(i+1));[spouse[i],spouse[j]]=[spouse[j],spouse[i]];}
   return Array.from({length:n},(_,i)=>({primary:(i+.5)/n,spouse:(spouse[i]+.5)/n}));
@@ -106,23 +117,24 @@ function withdrawConversionTax(b,amount,ledger,taxYear,rothPenalty){
 // brackets for the entire year. Never annualize a draw that can exhaust pretax.
 function withdrawalPlan(need,ss,status,other,b,cashFirst,taxInflation,seniors,taxYear,penalty,ytd={ordinary:0,social:0,tax:0},ledger=null,rothPenalty=0,{pretaxAvailable=b.pretax,incomeTax=ordinaryIncomeTax,rothQualified=false}={}){
   requireFinite(need,ss,other,sum(b),pretaxAvailable,taxInflation,ytd.ordinary,ytd.social,ytd.tax);
-  function estimate(gross){
+  function estimate(gross,capture=false){
     const taxableDraw=Math.min(Math.max(0,pretaxAvailable),Math.max(0,gross-(cashFirst?Math.max(0,b.cash):0)));
     const rothDraw=Math.max(0,gross-(cashFirst?Math.max(0,b.cash):0)-taxableDraw);
-    const roth=ledger?.distribution(rothDraw,b.roth,taxYear,{qualified:rothQualified})??{taxableEarnings:0,penaltyBase:0};
-    const ordinary=ytd.ordinary+other+taxableDraw+roth.taxableEarnings,social=ytd.social+ss;
+    const roth=rothDraw>0?ledger?.distribution(rothDraw,b.roth,taxYear,{qualified:rothQualified}):null;
+    const rothTaxableEarnings=roth?.taxableEarnings??0,rothPenaltyBase=roth?.penaltyBase??0;
+    const ordinary=ytd.ordinary+other+taxableDraw+rothTaxableEarnings,social=ytd.social+ss;
     const taxableSS=taxableSocialSecurity(ordinary,social,status);
     const totalTax=incomeTax(ordinary+taxableSS,status,taxInflation,seniors,taxYear),tax=totalTax-ytd.tax;
-    const recapture=rothPenalty*roth.penaltyBase;
+    const recapture=rothPenalty*rothPenaltyBase;
     const net=ss+other+gross-tax-taxableDraw*Math.max(0,penalty)-recapture;
     requireFinite(gross,taxableDraw,totalTax,net);
-    return {gross,taxableDraw,rothTaxableEarnings:roth.taxableEarnings,totalTax,net};
+    return capture?{gross,taxableDraw,rothTaxableEarnings,totalTax,net}:net;
   }
-  if(estimate(0).net>=need)return estimate(0);
+  if(estimate(0)>=need)return estimate(0,true);
   let low=0,high=Math.max(0,need-ss-other)*1.8+10000;
-  while(estimate(high).net<need){high*=2;requireFinite(high);}
-  for(let i=0;i<32;i++){const mid=(low+high)/2;if(estimate(mid).net>=need)high=mid;else low=mid;}
-  return estimate(high);
+  while(estimate(high)<need){high*=2;requireFinite(high);}
+  for(let i=0;i<32;i++){const mid=(low+high)/2;if(estimate(mid)>=need)high=mid;else low=mid;}
+  return estimate(high,true);
 }
 const life=[84.6,83.7,82.8,81.8,80.8,79.8,78.8,77.9,76.9,75.9,74.9,73.9,72.9,71.9,70.9,69.9,69,68,67,66,65,64.1,63.1,62.1,61.1,60.2,59.2,58.2,57.3,56.3,55.3,54.4,53.4,52.5,51.5,50.5,49.6,48.6,47.7,46.7,45.7,44.8,43.8,42.9,41.9,41,40,39,38.1,37.1,36.2,35.3,34.3,33.4,32.5,31.6,30.6,29.8,28.9,28,27.1,26.2,25.4,24.5,23.7,22.9,22,21.2,20.4,19.6,18.8,18,17.2,16.4,15.6,14.8,14.1,13.3,12.6,11.9,11.2,10.5,9.9,9.3,8.7,8.1,7.6,7.1,6.6,6.1,5.7,5.3,4.9,4.6,4.3,4,3.7,3.4,3.2,3,2.8,2.6,2.5,2.3,2.2,2.1,2.1,2.1,2,2,2,2,2,1.9,1.9,1.8,1.8,1.6,1.4,1.1,1];
 export function seppPayment(balance,age){const years=life[Math.max(0,Math.floor(age))];if(!years||balance<=0)return 0;return balance/((1-Math.pow(1.05,-years))/.05);}
@@ -325,7 +337,7 @@ function riskBreakdown(s,paths,lifespanQuantiles=null){
   });
   const best=checks.reduce((best,check)=>check.netReduction>(best?.netReduction??0)?check:best,null);
   const values=Object.fromEntries(checks.map(c=>[c.key,c.netReduction>0?`${c.netReduction} fewer shortfalls`:c.netReduction<0?`${-c.netReduction} more shortfalls`:'No reduction']));
-  const summary=`Sensitivity checks compare ${count} paired paths (${baselineFailures} original shortfalls). They change one assumption at a time; effects overlap and do not identify every cause. ${count<=FREE_SIMULATION_PATHS?'Small runs are a preview only.':''}`.trim();
+  const summary=`Sensitivity checks compare ${count} paired paths (${baselineFailures} original shortfalls). They change one assumption at a time; effects overlap and do not identify every cause. ${count<=SMALL_SAMPLE_PATHS?'Small runs are a preview only.':''}`.trim();
   return {...values,checks,simulationCount:count,baselineFailures,method:'paired assumption sensitivity',summary,primaryRisk:best?.key??'none',recommendedNextTest:best?`${best.description} reduced shortfalls by ${best.netReduction} in the ${count}-path sensitivity check. ${best.recommendedNextTest}`:'No sensitivity check reduced shortfalls. Compare spending, income, retirement age, and combined assumptions.'};
 }
 // An additional illustration follows constant entered rates and fixed long
@@ -376,7 +388,8 @@ export function runSimulation(s,onProgress=()=>{},options={}){
 }
 
 // The candidates a planning-target search examines, in search order.
-export function decisionPlan(s,targetReadiness=.80,simulationCount=180,maxRetirementAge=70){
+export const TARGET_SIMULATION_PATHS=200;
+export function decisionPlan(s,targetReadiness=.80,simulationCount=TARGET_SIMULATION_PATHS,maxRetirementAge=70){
   const errors=validateScenario(s);if(errors.length)throw new Error(errors.join(' '));
   if(targetReadiness<0||targetReadiness>1)throw new Error('Target readiness must be between 0% and 100%.');
   const count=clamp(simulationCount,50,10000),h=s.household;
@@ -395,6 +408,7 @@ export function decisionPlan(s,targetReadiness=.80,simulationCount=180,maxRetire
 }
 // Candidates that cannot meet the target need no remaining paths and report 0.
 // Qualifying candidates run every path, so their readiness is exact.
+// At 80% of 200 paths, rejection starts with the 41st failed path.
 function screenedReadiness(variant,count,targetReadiness){
   const errors=validateScenario(variant);if(errors.length)throw new Error(errors.join(' '));
   let successes=0;
@@ -413,13 +427,20 @@ export function spendingReadiness(s,spending,count,targetReadiness){
   const variant=structuredClone(s);setAnnualBaseSpending(variant,spending);variant.numberOfSimulations=count;variant.seed=s.seed+20000;
   return screenedReadiness(variant,count,targetReadiness);
 }
-export function candidateReadiness(s,{kind,value,count,targetReadiness}){
+export function candidateReadiness(s,{kind,value,age,count,targetReadiness}){
+  if(kind==='frontier'||kind==='claim-frontier'||kind==='savings-frontier'){
+    const variant=structuredClone(s);
+    if(kind==='claim-frontier')variant.socialSecurity.claimAge=age;else setRetirementAge(variant,age);
+    if(kind==='savings-frontier')setAnnualPersonalSavings(variant,value);else setAnnualBaseSpending(variant,value);
+    variant.numberOfSimulations=count;variant.seed=s.seed+20000;
+    return screenedReadiness(variant,count,targetReadiness);
+  }
   return kind==='age'?retirementAgeReadiness(s,value,count,targetReadiness):spendingReadiness(s,value,count,targetReadiness);
 }
 function decisionResult(plan,age,spending,safeSpendingAtSearchLimit){
   return {targetReadiness:plan.targetReadiness,simulationCount:plan.count,earliestRetirementAge:age?.value??null,earliestRetirementReadiness:age?.readiness??null,safeAnnualSpending:spending?.value??null,safeSpendingReadiness:spending?.readiness??null,safeSpendingAtSearchLimit,safeSpendingSearchLimit:plan.safeSpendingSearchLimit,retirementAgeSearchStart:plan.firstAge,retirementAgeSearchEnd:plan.lastAge};
 }
-export function estimateDecision(s,targetReadiness=.80,simulationCount=180,maxRetirementAge=70){
+export function estimateDecision(s,targetReadiness=.80,simulationCount=TARGET_SIMULATION_PATHS,maxRetirementAge=70){
   const plan=decisionPlan(s,targetReadiness,simulationCount,maxRetirementAge);
   const task=(kind,value)=>({kind,value,count:plan.count,targetReadiness:plan.targetReadiness});
   const first=(kind,values)=>{for(const value of values){const readiness=candidateReadiness(s,task(kind,value));if(readiness>=plan.targetReadiness)return {value,readiness};}return null;};
@@ -459,7 +480,7 @@ function firstQualifying(values,evaluate,targetReadiness,concurrency,onChecked){
 }
 // The same search as estimateDecision, with candidates evaluated through an
 // asynchronous `evaluate(task)` so a caller can spread them across workers.
-export async function searchDecision(s,{evaluate,concurrency=1,onProgress,targetReadiness=.80,simulationCount=180,maxRetirementAge=70}={}){
+export async function searchDecision(s,{evaluate,concurrency=1,onProgress,targetReadiness=.80,simulationCount=TARGET_SIMULATION_PATHS,maxRetirementAge=70}={}){
   const plan=decisionPlan(s,targetReadiness,simulationCount,maxRetirementAge);
   const run=evaluate??(task=>candidateReadiness(s,task)),width=Math.max(1,Math.floor(concurrency)||1);
   const task=(kind,value)=>({kind,value,count:plan.count,targetReadiness:plan.targetReadiness});
