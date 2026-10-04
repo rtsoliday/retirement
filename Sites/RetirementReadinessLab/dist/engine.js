@@ -9,6 +9,7 @@ import {mortgageAtRetirement,payMortgage} from './mortgage.js';
 import {retirementBenefitFactor,spousalBenefitFactor,combinedSurvivorBenefitFactor} from './social-security.js';
 import {monthlyRateDistribution,sampleMonthlyRate} from './annual-rates.js';
 import {requiredMinimumDistribution} from './distributions.js';
+import {hasEmployerRoth,prepareCalendarScenario,baseScenario} from './model.js';
 
 const STRIDE=-7046029254386353131n, MASK=(1n<<48n)-1n;
 export const monthly=r=>Math.pow(Math.max(.0001,1+r),1/12)-1;
@@ -127,7 +128,13 @@ const life=[84.6,83.7,82.8,81.8,80.8,79.8,78.8,77.9,76.9,75.9,74.9,73.9,72.9,71.
 export function seppPayment(balance,age){const years=life[Math.max(0,Math.floor(age))];if(!years||balance<=0)return 0;return balance/((1-Math.pow(1.05,-years))/.05);}
 
 export function runOne(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails=false,captureTaxDetails=false,captureTodayDollars=false,taxesEnabled=true,horizonReductionYears=0,fixedDeathAges=null,lifespanQuantiles=null}={}){
-  if(s.household.separatePeople)return runSeparatePeople(s,rng,{captureMonthlyBalances,captureMonthlyDetails,captureTaxDetails,captureTodayDollars,taxesEnabled,horizonReductionYears,fixedDeathAges,lifespanQuantiles});
+  if(s.household.separatePeople||hasEmployerRoth(s)){
+    // Existing pooled accounts remain primary-owned. Employer plans retain
+    // their explicit owners without reinterpreting saved spouse drafts.
+    let owned=s;
+    if(!s.household.separatePeople){owned=prepareCalendarScenario(structuredClone(s),{today:s.household.asOfDate||localCalendarDate(),needsReview:false});const defaults=baseScenario();owned.household.separatePeople=true;owned.household.spouseRetirementDate=owned.household.retirementDate;owned.household.spouseAlreadyRetired=owned.household.alreadyRetired;for(const key of ['spouseAccounts','spouseRothHistory','spouseIncome','workingIncome','spouseWithdrawal'])owned[key]=defaults[key];}
+    return runSeparatePeople(owned,rng,{captureMonthlyBalances,captureMonthlyDetails,captureTaxDetails,captureTodayDollars,taxesEnabled,horizonReductionYears,fixedDeathAges,lifespanQuantiles});
+  }
   const timeline=scenarioTimeline(s),h={...s.household,currentAge:timeline.currentAge,retirementAge:timeline.retirementAge},b={...s.accounts},preMonths=timeline.preMonths;
   const preReturns=monthlyRateDistribution(s.market.preRetirementMeanReturn,s.market.preRetirementStdDev),cashGrowth=monthly(.02),incomeTax=taxesEnabled?ordinaryIncomeTax:()=>0;
   const rh=s.rothHistory,rothLedger=new RothConversionLedger(rh.contributionBasis,rh.firstContributionYear,rh.conversions),ruleOf55=ruleOf55Applies(s);

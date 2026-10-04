@@ -12,6 +12,55 @@ import * as planReview from '../dist/plan-review.js';
 import * as resultCaching from '../dist/result-cache.js';
 import {runSimulation} from '../dist/engine.js';
 
+test('employer Roth editor preserves records, monthly deposits and history through copies and backups',async()=>{
+  const a=app();a.state.setupSection=1;a.state.view='setup';
+  await a.click('account-answer',{answer:'yes'});
+  await a.click('add-employer-roth');const s=a.current(),stem='employerRothAccounts.0.';
+  assert.match(a.setup(),/data-field="employerRothAccounts.0.contributionBasis"/);
+  assert.ok(guidance.unknownInputPaths(s,a.state.inputSources).includes(stem+'balance'));
+  const count=a.workers.length;await a.run();assert.equal(a.workers.length,count);
+  for(const [key,type,value] of [['name','text','My 403b'],['type','select','403b'],['balance','money','100000'],['contributionBasis','money','60000'],['firstContributionYear','number','2021']])await a.change('#main',{dataset:{field:stem+key,type},value});
+  await a.change('#main',{dataset:{entryPeriod:stem+'annualContribution'},value:'month'});
+  await a.change('#main',{dataset:{field:stem+'annualContribution',type:'money'},value:'500'});
+  assert.equal(s.employerRothAccounts[0].annualContribution,6000);
+  a.state.setupSection=5;assert.match(a.setup(),/Future savings \/ year[\s\S]*You \$6,000/);a.state.setupSection=1;
+  await a.click('add-employer-conversion',{account:'0'});
+  for(const [key,value] of [['taxYear','2025'],['amount','10000'],['taxableAmount','8000']])await a.change('#main',{dataset:{field:stem+'conversions.0.'+key,type:key==='taxYear'?'number':'money'},value});
+  const report=a.reportText(s,null);assert.match(report,/My 403b · Roth 403\(b\) · You/);assert.match(report,/Employer Roth value today: \$100,000/);assert.match(report,/Remaining after-tax contributions and converted principal: \$60,000/);
+  assert.doesNotMatch(report,/none have been entered/);
+  const expected=structuredClone(s.employerRothAccounts);
+  const restored=app(a.saved());assert.deepEqual(structuredClone(restored.current().employerRothAccounts),expected);assert.equal(restored.saved().entryPeriods[s.id][stem+'annualContribution'],'month');
+  await a.click('new-scenario');assert.deepEqual(structuredClone(a.current().employerRothAccounts),expected);
+  await a.click('export-backup');const backup=JSON.parse(await a.downloads.at(-1).blob.text()),imported=app();
+  await imported.change('#import-file',{files:[{text:async()=>JSON.stringify(backup)}],value:'backup.json'});
+  assert.deepEqual(structuredClone(imported.current().employerRothAccounts),expected);
+});
+
+test('removing employer records and conversion rows reindexes review metadata without stale Unknown blockers',async()=>{
+  const a=app();a.state.setupSection=1;
+  for(let i=0;i<2;i++)await a.click('add-employer-roth');const s=a.current();
+  await a.change('#main',{dataset:{field:'employerRothAccounts.1.balance',type:'money'},value:'8000'});
+  await a.click('add-employer-conversion',{account:'1'});await a.click('add-employer-conversion',{account:'1'});
+  await a.change('#main',{dataset:{field:'employerRothAccounts.1.conversions.1.amount',type:'money'},value:''});
+  await a.click('remove-employer-conversion',{account:'1',index:'0'});
+  assert.equal(a.state.inputSources[s.id]['employerRothAccounts.1.conversions.0.amount'],'Unknown');
+  await a.click('remove-employer-roth',{account:'0'});
+  assert.equal(s.employerRothAccounts[0].balance,8000);assert.equal(a.state.inputSources[s.id]['employerRothAccounts.0.balance'],'Entered');
+  assert.equal(a.state.inputSources[s.id]['employerRothAccounts.0.conversions.0.amount'],'Unknown');
+  await a.click('remove-employer-roth',{account:'0'});assert.deepEqual(guidance.unknownInputPaths(s,a.state.inputSources),[]);
+  assert.deepEqual(structuredClone(app(a.saved()).current().employerRothAccounts),[]);
+});
+
+test('employer optional dates can be cleared and a known zero settles initially unknown funding history',async()=>{
+  const a=app();a.state.setupSection=1;await a.click('add-employer-roth');const s=a.current();
+  await a.change('#main',{dataset:{field:'employerRothAccounts.0.accessDate',type:'date'},value:'2035-01-01'});
+  await a.change('#main',{dataset:{field:'employerRothAccounts.0.accessDate',type:'date'},value:''});
+  assert.equal(s.employerRothAccounts[0].accessDate,'');
+  await a.change('#main',{dataset:{field:'employerRothAccounts.0.balance',type:'money'},value:'0'});
+  assert.deepEqual(guidance.unknownInputPaths(s,a.state.inputSources),[]);
+  assert.equal(a.state.inputSources[s.id]['employerRothAccounts.0.firstContributionYear'],'Entered');
+});
+
 test('previously applied budgets explain unfinished payment review without changing saved spending',async()=>{
   const s=model.baseScenario();s.budget.monthlyBudgets=[{month:'2026-09',creditCardBills:[{monthlyAmount:4000}]}];model.applyBudgetEstimate(s);
   const a=app({scenarios:[s],selectedId:s.id});a.state.view='budget';
@@ -587,7 +636,7 @@ test('unknown Roth records save a draft and preserve retained values and all inv
   await a.run();assert.equal(a.workers.length,0);
   const restored=app(a.saved());restored.state.setupSection=1;
   assert.match(restored.setup(),/a \$50,000 Roth IRA could contain \$30,000/);
-  assert.match(restored.setup(),/Those employer Roth accounts are not supported/);
+  assert.match(restored.setup(),/Add each plan under Employer Roth accounts/);
   assert.equal(restored.current().market.stockMeanReturn,before.market.stockMeanReturn);
   await a.click('input-none',{path:'accounts.roth'});
   assert.equal(a.saved().inputSources[before.id]['rothHistory.firstContributionYear'],'Entered');
@@ -2648,7 +2697,7 @@ test('editor modes belong to each plan and guided choices in older saves are res
   assert.equal(legacy.state.guided,true);
 });
 
-test('personal setup asks about unsupported accounts before changing any financial inputs',async()=>{
+test('personal setup identifies supported employer Roth accounts before changing financial inputs',async()=>{
   const a=app(),before=structuredClone(a.current());
   assert.match(a.dashboard(),/data-action="check-accounts">Build my forecast/);
   await a.click('check-accounts');assert.equal(a.state.view,'account-check');
@@ -2657,7 +2706,8 @@ test('personal setup asks about unsupported accounts before changing any financi
   for(const answer of ['yes','unsure','no']){
     await a.click('account-answer',{answer});assert.deepEqual(structuredClone(a.current()),before);
     assert.match(a.accountCheck(),new RegExp(`data-answer="${answer}" aria-pressed="true"`));
-    if(answer!=='no')assert.match(a.accountCheck(),/incomplete/);
+    if(answer==='yes')assert.match(a.accountCheck(),/accounts are supported/);
+    else if(answer==='unsure')assert.match(a.accountCheck(),/Check your account statement/);
     else assert.match(a.accountCheck(),/Continue to household setup/);
   }
   await a.click('start-plan');assert.equal(a.state.view,'setup');assert.equal(a.state.guided,true);
@@ -2673,7 +2723,7 @@ test('account checks survive reload, copies and backups, without changing the ca
   await a.click('export-backup');const backup=JSON.parse(await a.downloads.at(-1).blob.text());
   const imported=app();await imported.change('#import-file',{files:[{text:async()=>JSON.stringify(backup)}],value:'backup.json'});
   assert.equal(imported.state.accountChecks[a.current().id],'yes');
-  assert.match(imported.reportSummaryText(imported.current()),/ACCOUNT CHECK:.*incomplete/);
+  assert.match(imported.reportSummaryText(imported.current()),/ACCOUNT CHECK:.*none have been entered/);
   const old=app({scenarios:[model.baseScenario()],accountChecks:{'base-plan':'bad',other:'yes'}});
   assert.deepEqual(structuredClone(old.state.accountChecks),{});assert.doesNotMatch(old.reportSummaryText(old.current()),/ACCOUNT CHECK:/);
 });

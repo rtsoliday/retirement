@@ -77,6 +77,7 @@ for(const prefix of ['contributions','spouseContributions'])for(const key of ['p
 export function unknownInputPaths(s,sources){
   return Object.entries(sources[s.id]||{}).filter(([path,source])=>{
     if(path==='_origin'||source!=='Unknown')return false;
+    if(path.startsWith('employerRothAccounts.')&&s.household.filingStatus!=='Married'&&s.employerRothAccounts[Number(path.split('.')[1])]?.owner==='spouse')return false;
     if(s.household.filingStatus!=='Married'&&(path.startsWith('spouse')||path.startsWith('workingIncome')||['household.spouseBirthday','household.spouseGender','household.spouseRetirementDate','socialSecurity.spouseClaimAge','guaranteedIncome.survivorPercent'].includes(path)))return false;
     if(!s.household.separatePeople&&(path.startsWith('spouseAccounts')||path.startsWith('spouseRothHistory')||path.startsWith('spouseIncome')||path.startsWith('spouseWithdrawal')||path.startsWith('workingIncome')||path==='household.spouseRetirementDate'))return false;
     return true;

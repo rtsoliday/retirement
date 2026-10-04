@@ -1,9 +1,11 @@
 import {savingsDefaults,hasFutureSavings} from './savings.js';
+import {employerRothDefaults,employerRothTotal,hasEmployerRoth,validateEmployerRoth} from './employer-roth.js';
+export {employerRothDefaults,employerRothTotal,hasEmployerRoth};
 export const ENGINE_VERSION = '2026.09-calendar-dates';
 export const scenarioEngineVersion=s=>{
   const version=s.household.alreadyRetired||s.household.separatePeople&&s.household.filingStatus==='Married'&&s.household.spouseAlreadyRetired?'2026.10-retired-forecast':s.household.separatePeople?'2026.10-separate-people':hasFutureSavings(s)?'2026.10-savings-contributions':ENGINE_VERSION;
   // Saved results predating these calculation corrections need a rerun.
-  return version+(s.household.separatePeople?'-medicare-rmd-v2':'-survivor-pension-v2');
+  return version+(s.household.separatePeople?'-medicare-rmd-v2':'-survivor-pension-v2')+(hasEmployerRoth(s)?'-employer-roth-v1':'');
 };
 export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
 // Retained across engine revisions for repeatable scenario comparisons.
@@ -118,6 +120,7 @@ export function baseScenario() {
     accounts: {pretax: 500000, roth: 50000, taxable: 0, cash: 50000},
     contributions:savingsDefaults(), spouseContributions:savingsDefaults(),
     spouseAccounts:{pretax:0,roth:0},
+    employerRothAccounts:[],
     spouseRothHistory:{contributionBasis:0,firstContributionYear:0,conversions:[],needsReview:false},
     spouseIncome:{annualBenefitAt67:0,annualPension:0,pensionStartAge:65,pensionStartAgeMonths:0,annualIncrease:0,survivorPercent:0},
     workingIncome:{primaryAnnualNet:0,spouseAnnualNet:0,annualIncrease:0},
@@ -184,6 +187,13 @@ export function normalizeScenario(raw) {
       result[key] = {...base[key], ...raw[key]};
     } else result[key] = raw[key];
   }
+  if(raw.employerRothAccounts!==undefined){
+    if(!Array.isArray(raw.employerRothAccounts))throw new Error('Employer Roth accounts must be an array.');
+    result.employerRothAccounts=raw.employerRothAccounts.map(a=>{
+      if(!object(a))throw new Error('Each employer Roth account must be an object.');
+      return {...employerRothDefaults(),...a};
+    });
+  }
   // The new default applies to new plans. An older saved/imported plan with
   // no penalty field previously modeled none; retain that behavior too.
   if(raw.withdrawalStrategy?.applyEarlyWithdrawalPenalty===undefined)result.withdrawalStrategy.applyEarlyWithdrawalPenalty=false;
@@ -242,7 +252,7 @@ export function validateScenarioStructure(s) {
   const wrongTypes=[];
   (function compare(expected,actual,path){for(const [key,value] of Object.entries(expected)){if(value===null)continue;const next=path?`${path}.${key}`:key;if(Array.isArray(value)){if(!Array.isArray(actual?.[key]))wrongTypes.push(next);}else if(typeof value==='object'){if(actual?.[key]&&typeof actual[key]==='object'&&!Array.isArray(actual[key]))compare(value,actual[key],next);else wrongTypes.push(next);}else if(typeof actual?.[key]!==typeof value)wrongTypes.push(next);}})(TYPE_TEMPLATE,s,'');
   if (wrongTypes.length) return [`These assumptions have the wrong type: ${wrongTypes.join(', ')}.`];
-  return [...validateBudgetStructure(s.budget),...validateRothHistoryStructure(s.rothHistory),...validateRothHistoryStructure(s.spouseRothHistory)];
+  return [...validateBudgetStructure(s.budget),...validateRothHistoryStructure(s.rothHistory),...validateRothHistoryStructure(s.spouseRothHistory),...validateEmployerRoth(s.employerRothAccounts)];
 }
 
 export function validateRothHistoryStructure(history) {
@@ -280,6 +290,16 @@ export function validateScenario(s) {
   const errors=validateScenarioDraft(s);
   if(errors.length)return errors;
   const h=s.household, a=s.accounts, sp=s.spending,timeline=scenarioTimeline(s),primaryPension=s.guaranteedIncome.annualIncome>0;
+  errors.push(...validateEmployerRoth(s.employerRothAccounts,{complete:true,today:h.asOfDate||localCalendarDate(),married:h.filingStatus==='Married'}));
+  for(const a of s.employerRothAccounts){
+    if(a.owner==='spouse'&&h.filingStatus!=='Married')continue;
+    const spouse=a.owner==='spouse',date=forecastRetirementDate(s,spouse&&h.separatePeople),start=timeline.startDate||forecastRetirementDate(s),birthday=spouse?h.spouseBirthday:h.birthday,w=spouse&&h.separatePeople?s.spouseWithdrawal:s.withdrawalStrategy;
+    if(a.rolloverDate&&!a.accessDate&&date&&a.rolloverDate<date)errors.push(a.name+': a pre-retirement rollover needs its permitted access date. Confirm an eligible in-service direct rollover with the plan.');
+    if(a.separationDate&&birthday&&a.separationDate<birthday)errors.push(a.name+': employer separation cannot precede the owner’s birthday.');
+    if(a.plannedConversionAmount===0)continue;
+    if(start&&a.plannedConversionDate<start)errors.push(a.name+': planned in-plan conversion must be on or after the forecast starts.');
+    if(w.seppEligible&&calendarMonthsBetween(birthday,date)/12<59.5&&a.plannedConversionDate>=date&&a.plannedConversionDate<addCalendarMonths(date,Math.max(60,Math.ceil(59.5*12-calendarMonthsBetween(birthday,date)))))errors.push(a.name+': an in-plan conversion cannot use SEPP-protected pre-tax savings.');
+  }
   // Mortality and life-expectancy tables are indexed by whole years.
   if (![h.targetEndAge,...(usesCalendarDates(s)?[]:[h.currentAge,h.retirementAge,...(h.filingStatus==='Married'?[h.spouseCurrentAge]:[])])].every(Number.isInteger)) errors.push('Ages must be whole numbers.');
   if(usesCalendarDates(s)){
@@ -466,7 +486,7 @@ export function setAnnualBaseSpending(scenario,amount) {
 }
 
 export function scenarioWarnings(s) {
-  const notes=[],h=s.household,total=Object.values(s.accounts).reduce((a,b)=>a+b,0),years=retirementAge(s)-h.currentAge;
+  const notes=[],h=s.household,total=Object.values(s.accounts).reduce((a,b)=>a+b,0)+employerRothTotal(s),years=retirementAge(s)-h.currentAge;
   if(retirementAge(s)<50)notes.push('Retiring before 50 creates a long drawdown period.');
   if(s.spending.annualBaseSpending/Math.max(1,total)>.07)notes.push('Annual base spending exceeds 7% of current assets.');
   if(s.spending.generalInflationMean<.015)notes.push('General inflation below 1.5% may understate spending pressure.');

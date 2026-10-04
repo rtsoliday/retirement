@@ -50,7 +50,7 @@ export function monthlyIncomeSummary(s,r,basis='today'){
       if(months>0&&(!amounts[i]||claim>claims[i]*12))bridges.push({label:i===0?'Your Social Security from your spouse’s record':'Spouse Social Security from your record',date:addCalendarMonths(birthdays[i],claim),months});
     }
   }
-  return {date:calendarDate(start)?start:row.date,expenses:divide(c.expenses),socialSecurity:divide(c.socialSecurity),pension:divide(c.guaranteedIncome),workingSupport:divide(c.workingSupport),income:divide(c.socialSecurity+c.guaranteedIncome+(c.workingSupport||0)),withdrawals:divide(c.additionalWithdrawal+c.seppDistribution+c.rmdDistribution),taxes:divide(c.incomeTax+c.earlyPenalty),unfunded:divide(row.unfundedAmount),bridges};
+  return {date:calendarDate(start)?start:row.date,expenses:divide(c.expenses),socialSecurity:divide(c.socialSecurity),pension:divide(c.guaranteedIncome),workingSupport:divide(c.workingSupport),income:divide(c.socialSecurity+c.guaranteedIncome+(c.workingSupport||0)),withdrawals:divide(c.additionalWithdrawal+c.seppDistribution+c.rmdDistribution+(c.inPlanConversionTax||0)),taxes:divide(c.incomeTax+c.earlyPenalty+(c.inPlanConversionTax||0)),unfunded:divide(row.unfundedAmount),bridges};
 }
 
 export const OPTIONAL_QUESTIONS={
@@ -74,6 +74,7 @@ export function temporaryRothValues(s,sources,prefix){
 
 // A single route for progress counts, grouped review and direct edit links.
 export function inputTask(path){
+  if(path.startsWith('employerRothAccounts.'))return {key:'employer-roth',label:'Employer Roth accounts',step:1,task:0};
   if (/^(spouseAccounts|spouseRothHistory)\./.test(path)) return {key:'spouse-accounts',label:'Spouse’s accounts',step:1,task:0};
   if (/^(accounts\.(pretax|roth)|rothHistory\.)/.test(path)) return {key:'your-accounts',label:'Your accounts',step:1,task:0};
   if (path.startsWith('accounts.')) return {key:'shared-accounts',label:'Shared cash and investments',step:1,task:0};

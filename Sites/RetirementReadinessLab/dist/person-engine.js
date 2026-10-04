@@ -10,7 +10,7 @@ export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMon
   const timeline=scenarioTimeline(s),h={...s.household,currentAge:timeline.currentAge,retirementAge:timeline.retirementAge},b={...s.accounts},preMonths=timeline.preMonths;
   const preReturns=monthlyRateDistribution(s.market.preRetirementMeanReturn,s.market.preRetirementStdDev),cashGrowth=monthly(.02),incomeTax=taxesEnabled?ordinaryIncomeTax:()=>0;
   const pools=new PersonAccounts(s,b);
-  for(let i=0;i<preMonths;i++){pools.grow(sampleMonthlyRate(preReturns,rng),cashGrowth);pools.deposits(i,true);sum(b);}
+  for(let i=0;i<preMonths;i++){pools.events(i,true);pools.grow(sampleMonthlyRate(preReturns,rng),cashGrowth);pools.deposits(i,true);sum(b);}
   const married=h.filingStatus==='Married',spouseAtRet=timeline.spouseAtRet;
   // The reporting cutoff must not determine death or move terminal care sooner.
   // Draw the full lifetime from the table, then truncate cash flows separately.
@@ -69,7 +69,8 @@ export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMon
     // Owner-specific withdrawal rules; inherited accounts become the surviving
     // spouse’s own accounts after the modeled death year.
     pools.configure(m,taxYear,[primaryDeathYear,spouseDeathYear],[primaryAlive,spouseAlive],seppPayment);
-    if(!taxesEnabled)for(const p of pools.people)p.penalty=p.pretaxPenalty=0;
+    const transfers=pools.events(m);annualConversions+=transfers.conversion;
+    if(!taxesEnabled){for(const p of pools.people)p.penalty=p.pretaxPenalty=0;for(const a of pools.employer)a.penalty=0;}
     annualRmd=pools.people.reduce((n,p)=>n+p.rmd,0);
     const seppProtected=pools.people.some(p=>p.protected);
     const inLtc=primaryAlive&&ltc!==null&&ageMonths>=Math.round(ltc*12),spouseInLtc=spouseAlive&&spouseLtcPrimary!==null&&ageMonths>=Math.round(spouseLtcPrimary*12),ltcPeople=Number(inLtc)+Number(spouseInLtc),outside=alive-ltcPeople,replaceSpending=alive>0&&outside===0;
@@ -97,7 +98,7 @@ export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMon
       if(history===null){
         // Before a lookback exists, estimate annual income with the available
         // pretax balance and Roth history; nonqualified earnings create income.
-        const annualSS=social*12,estimatedDistribution=pools.people.filter(p=>p.protected).reduce((n,p)=>n+p.sepp,0),annualOther=guaranteed*12+estimatedDistribution,estimatedInterest=Math.max(0,b.cash)*.02;
+        const annualSS=social*12,estimatedDistribution=pools.people.filter(p=>p.protected).reduce((n,p)=>n+p.sepp,0),annualOther=guaranteed*12+estimatedDistribution+transfers.conversion,estimatedInterest=Math.max(0,b.cash)*.02;
         // A depleted owner's year-start RMD cannot be funded by the other
         // owner's savings or added again to nonqualified Roth earnings.
         const estimatedRmd=pools.people.reduce((n,p)=>n+Math.min(Math.max(0,p.pretax),p.rmd),0);
@@ -106,7 +107,7 @@ export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMon
           const stockPart=allocation(s,b,annualNeed),portReturn=stockPart*stock+(1-stockPart)*bond;
           const cashFirst=s.withdrawalStrategy.useCashReserveDuringDrawdowns&&portReturn<s.withdrawalStrategy.drawdownTrigger&&b.cash>0;
           const estimate=pools.plan(annualNeed,annualSS,status,annualOther,cashFirst,yearTaxIndex,seniors,taxYear,{ordinary:estimatedInterest,social:0,tax:0},incomeTax,false,support*12);
-          const other=Math.max(estimate.taxableDraw+estimatedDistribution,estimatedRmd)+estimate.rothTaxableEarnings+guaranteed*12+estimatedInterest,income=other+taxableSocialSecurity(other,annualSS,status);
+          const other=Math.max(estimate.taxableDraw+estimatedDistribution,estimatedRmd)+estimate.rothTaxableEarnings+guaranteed*12+estimatedInterest+transfers.conversion,income=other+taxableSocialSecurity(other,annualSS,status);
           const premium=medicarePremium(income,status,medPeople,healthIndex,yearTaxIndex,taxYear,priorYearTaxIndex);
           if(premium===medCost)break;
           medCost=premium;
@@ -127,10 +128,16 @@ export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMon
     pools.consume(plan);
     if(monthlyDetails){
       // Capture the existing calculations without changing their timing or draws.
-      monthlyCashFlow={expenses:need,socialSecurity:social,guaranteedIncome:guaranteed,seppDistribution,rmdDistribution,additionalWithdrawal:plan.gross,incomeTax:plan.totalTax-annualTaxPaid,earlyPenalty:plan.penalties,workingSupport:support,savingsContributions:deposited,surplus:Math.max(0,plan.net-need),cashFirst,seppProtected,conversionAmount:0,conversionTax:0,accountWithdrawals:Object.fromEntries(Object.keys(beforeWithdrawals).map(key=>[key,Math.max(0,Math.min(beforeWithdrawals[key],beforeWithdrawals[key]-b[key]))]))};
+      monthlyCashFlow={expenses:need,socialSecurity:social,guaranteedIncome:guaranteed,seppDistribution,rmdDistribution,additionalWithdrawal:plan.gross,incomeTax:plan.totalTax-annualTaxPaid,earlyPenalty:plan.penalties,workingSupport:support,savingsContributions:deposited,surplus:Math.max(0,plan.net-need),cashFirst,seppProtected,conversionAmount:0,conversionTax:0,...(pools.employer.length?{inPlanConversion:transfers.conversion,employerRothRollover:transfers.rollover}:{}),accountWithdrawals:Object.fromEntries(Object.keys(beforeWithdrawals).map(key=>[key,Math.max(0,Math.min(beforeWithdrawals[key],beforeWithdrawals[key]-b[key]))]))};
     }
     const surplus=Math.max(0,plan.net-need);if(surplus>.01)b.cash+=surplus;
     annualOrdinaryIncome+=plan.taxableDraw+plan.rothTaxableEarnings+scheduledDistribution+guaranteed+cashInterest;annualPretaxDistributions+=plan.taxableDraw+scheduledDistribution;annualSocialSecurity+=social;annualTaxPaid=plan.totalTax;
+    if(transfers.conversion>0){
+      annualOrdinaryIncome+=transfers.conversion;
+      const payment=pools.plan(0,0,status,0,false,yearTaxIndex,seniors,taxYear,{ordinary:annualOrdinaryIncome,social:annualSocialSecurity,tax:annualTaxPaid},incomeTax,true);
+      pools.consume(payment);annualOrdinaryIncome+=payment.taxableDraw+payment.rothTaxableEarnings;annualPretaxDistributions+=payment.taxableDraw;annualTaxPaid=payment.totalTax;
+      if(monthlyCashFlow)monthlyCashFlow.inPlanConversionTax=payment.gross;
+    }
     if(taxesEnabled&&s.rothConversion.enabled&&monthInYear===11){
       const available=pools.people.filter(p=>!p.protected).reduce((n,p)=>n+p.pretax,0),conversion=rothConversionPlan(available,annualOrdinaryIncome,s.rothConversion.marginalRateCap,status,yearTaxIndex,seniors,taxYear,annualSocialSecurity);
       if(conversion.amount>0){const amount=pools.convert(conversion.amount);annualOrdinaryIncome+=amount;

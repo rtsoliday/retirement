@@ -3,6 +3,7 @@ import {requiredMinimumDistribution} from './distributions.js';
 import {ordinaryIncomeTax,taxableSocialSecurity} from './tax.js';
 import {calendarMonthsBetween,scenarioTimeline,forecastRetirementDate,localCalendarDate,addCalendarMonths,calendarDate} from './model.js';
 import {monthlySavings} from './savings.js';
+import {EmployerRothLedger} from './employer-roth.js';
 
 // Keep separate ownership even though results summarize the household total.
 export class PersonAccounts{
@@ -11,13 +12,15 @@ export class PersonAccounts{
     const make=(accounts,history,birthday,date,actualDate,savings,withdrawal,age,birth)=>({pretax:accounts.pretax,roth:accounts.roth,ledger:new RothConversionLedger(history.contributionBasis,history.firstContributionYear,history.conversions),retire:calendarMonthsBetween(start,date),retireAge:calendarMonthsBetween(birthday,date)/12,rule55:withdrawal.ruleOf55Eligible&&calendarDate(actualDate)?.getUTCFullYear()>=birth+55,seppSelected:withdrawal.seppEligible,savings,age,birth,rmd:0,paid:0,sepp:0,seppEnd:0});
     this.people=[make(s.accounts,s.rothHistory,s.household.birthday,forecastRetirementDate(s),s.household.retirementDate,s.contributions,s.withdrawalStrategy,t.retirementAge,t.birthYear)];
     if(s.household.filingStatus==='Married')this.people.push(make(s.spouseAccounts,s.spouseRothHistory,s.household.spouseBirthday,forecastRetirementDate(s,true),s.household.spouseRetirementDate,s.spouseContributions,s.spouseWithdrawal,t.spouseAtRet,t.spouseBirthYear));
+    this.employer=(s.employerRothAccounts||[]).filter(a=>a.owner==='you'||this.people.length===2).map(a=>({...a,person:this.people[a.owner==='spouse'?1:0],ledger:new EmployerRothLedger(a),rolled:false,converted:false}));
     this.today=today;this.start=start;this.preMonths=t.preMonths;this.refresh();
   }
-  refresh(){this.b.pretax=this.people.reduce((n,p)=>n+p.pretax,0);this.b.roth=this.people.reduce((n,p)=>n+p.roth,0);}
-  grow(rate,cashRate){for(const p of this.people){p.pretax*=1+rate;p.roth*=1+rate;}this.b.taxable*=1+rate;this.b.cash*=1+cashRate;this.refresh();}
+  refresh(){this.b.pretax=this.people.reduce((n,p)=>n+p.pretax,0);const ira=this.people.reduce((n,p)=>n+p.roth,0),employer=this.employer.reduce((n,a)=>n+a.balance,0);this.b.roth=ira+employer;if(this.employer.length){this.b.rothIRA=ira;this.b.employerRoth=employer;}}
+  grow(rate,cashRate){for(const p of this.people){p.pretax*=1+rate;p.roth*=1+rate;}for(const a of this.employer)a.balance*=1+rate;this.b.taxable*=1+rate;this.b.cash*=1+cashRate;this.refresh();}
   deposits(month,pre=false){
     let total=0;const offset=pre?month:month+this.preMonths,date=addCalendarMonths(this.today,offset+1),year=calendarDate(date).getUTCFullYear();
     for(const p of this.people){if(!pre&&(!p.alive||month>=p.retire))continue;const d=monthlySavings(p.savings,offset);p.pretax+=d.pretax;p.roth+=d.roth;this.b.taxable+=d.taxable;this.b.cash+=d.cash;total+=Object.values(d).reduce((a,v)=>a+v,0);if(d.roth){p.ledger.openingBalance+=d.roth;if(!p.ledger.firstContributionYear)p.ledger.firstContributionYear=year;}}
+    for(const a of this.employer){const p=a.person;if(a.rolled||!pre&&(!p.alive||month>=p.retire))continue;const d=(a.annualContribution+a.annualEmployerContribution)/12*Math.pow(1+a.annualIncrease,offset/12);a.balance+=d;a.ledger.deposit(d,year);total+=d;}
     this.refresh();return total;
   }
   configure(month,taxYear,deathYears,alive,seppPayment){
@@ -30,6 +33,10 @@ export class PersonAccounts{
         for(const lot of p.ledger.lots)survivor.ledger.add(lot.amount,lot.taxYear,lot.taxableAmount);
         const first=p.ledger.firstContributionYear;if(first&&(!survivor.ledger.firstContributionYear||first<survivor.ledger.firstContributionYear))survivor.ledger.firstContributionYear=first;
         p.pretax=p.roth=0;p.ledger=new RothConversionLedger();
+        // Simplified spouse inheritance: keep each employer plan separate,
+        // preserving its participation and conversion history. It becomes the
+        // survivor's own plan after the modeled death year.
+        for(const a of this.employer)if(a.person===p){a.person=survivor;a.ruleOf55Eligible=false;a.disabled=false;a.accessDate='';a.separationDate='';a.rolloverDate='';a.plannedConversionAmount=0;a.annualContribution=a.annualEmployerContribution=0;}
       }
       for(const p of this.people){p.rmd=requiredMinimumDistribution(p.pretax,Math.floor(p.ownerAge),p.birth);p.paid=0;}
     }
@@ -40,7 +47,37 @@ export class PersonAccounts{
       p.pretaxPenalty=p.penalty&&!(p.rule55&&month>=p.retire)?p.penalty:0;
       p.qualified=p.ledger.isQualified(taxYear,p.ownerAge,p.afterDeath);
     }
+    if(this.employer.length){
+      this.date=addCalendarMonths(this.start,month);this.calendarYear=Number(this.date.slice(0,4));this.taxYear=this.calendarYear;
+      for(const p of this.people){
+        p.disabled=this.employer.some(a=>a.person===p&&a.disabled);
+        if(p.disabled)p.penalty=p.pretaxPenalty=0;
+        p.qualified=p.ledger.isQualified(this.calendarYear,p.ownerAge,p.afterDeath||p.disabled);
+      }
+      for(const a of this.employer){const p=a.person;
+        a.available=p.afterDeath||this.date>=(a.accessDate||addCalendarMonths(this.start,p.retire));
+        a.qualified=a.ledger.isQualified(this.calendarYear,p.ownerAge,p.afterDeath,p.disabled);
+        const rule55=a.ruleOf55Eligible&&Number(a.separationDate.slice(0,4))>=p.birth+55&&this.date>=a.separationDate;
+        a.penalty=p.penalty&&!(rule55||p.disabled)?p.penalty:0;
+      }
+    }
     this.refresh();
+  }
+  events(month,pre=false){
+    if(!this.employer.length)return {conversion:0,rollover:0};
+    const date=addCalendarMonths(pre?this.today:this.start,month),year=Number(date.slice(0,4));let conversion=0,rollover=0;
+    for(const a of this.employer){const p=a.person,age=p.age+(pre?month-this.preMonths:month)/12;
+      if(!pre&&!p.alive)continue;
+      if(a.rolloverDate&&!a.rolled&&date>=a.rolloverDate){
+        const first=p.ledger.firstContributionYear||year,qualified=a.ledger.isQualified(year,age,p.afterDeath,this.employer.some(other=>other.person===p&&other.disabled));
+        a.ledger.rollover(a.balance,year,qualified,p.ledger);p.ledger.firstContributionYear=first;p.roth+=a.balance;rollover+=a.balance;a.balance=0;a.rolled=true;
+      }
+      if(!pre&&a.plannedConversionAmount>0&&!a.converted&&!a.rolled&&date>=a.plannedConversionDate){
+        if(p.protected)throw new Error('An in-plan conversion cannot use an active SEPP-protected pre-tax account.');
+        const d=Math.min(Math.max(0,p.pretax-Math.max(0,p.rmd-p.paid)),a.plannedConversionAmount);p.pretax-=d;a.balance+=d;a.ledger.convert(d,year);conversion+=d;a.converted=true;
+      }
+    }
+    this.refresh();return {conversion,rollover};
   }
   scheduled(finalMonth=false){
     let sepp=0,rmd=0;
@@ -49,14 +86,15 @@ export class PersonAccounts{
     this.refresh();return {sepp,rmd,total:sepp+rmd};
   }
   quote(gross,{cashFirst=false,conversionTax=false}={}){
-    let remaining=Math.max(0,gross),taxableDraw=0,rothTaxableEarnings=0,penalties=0;const draws=this.people.map(()=>({pretax:0,roth:0})),shared={cash:0,taxable:0};
+    let remaining=Math.max(0,gross),taxableDraw=0,rothTaxableEarnings=0,penalties=0;const draws=this.people.map(()=>({pretax:0,roth:0})),employerDraws=this.employer.map(()=>0),shared={cash:0,taxable:0};
     const takeShared=key=>{const d=Math.min(Math.max(0,this.b[key]),remaining);shared[key]+=d;remaining-=d;};
     const takePretax=()=>this.people.forEach((p,i)=>{if(p.protected)return;const d=Math.min(Math.max(0,p.pretax),remaining);draws[i].pretax=d;remaining-=d;taxableDraw+=d;penalties+=d*p.pretaxPenalty;});
     const takeRoth=()=>this.people.forEach((p,i)=>{const d=Math.min(Math.max(0,p.roth),remaining),r=p.ledger.distribution(d,p.roth,this.taxYear,{qualified:p.qualified});draws[i].roth=d;remaining-=d;rothTaxableEarnings+=r.taxableEarnings;penalties+=p.penalty*r.penaltyBase;});
-    if(conversionTax){takeShared('cash');takeShared('taxable');takeRoth();takePretax();}else{if(cashFirst)takeShared('cash');takePretax();takeRoth();takeShared('taxable');if(!cashFirst)takeShared('cash');}
+    const takeEmployer=()=>this.employer.forEach((a,i)=>{if(!a.available)return;const d=Math.min(Math.max(0,a.balance),remaining),r=a.ledger.distribution(d,a.balance,this.calendarYear,{qualified:a.qualified});employerDraws[i]=d;remaining-=d;rothTaxableEarnings+=r.taxableEarnings;penalties+=a.penalty*r.penaltyBase;});
+    if(conversionTax){takeShared('cash');takeShared('taxable');takeRoth();takeEmployer();takePretax();}else{if(cashFirst)takeShared('cash');takePretax();takeRoth();takeEmployer();takeShared('taxable');if(!cashFirst)takeShared('cash');}
     // An unresolved gap is recorded as negative cash and causes a shortfall.
     shared.cash+=remaining;
-    return {gross,taxableDraw,rothTaxableEarnings,penalties,draws,shared};
+    return {gross,taxableDraw,rothTaxableEarnings,penalties,draws,employerDraws,shared};
   }
   plan(need,ss,status,other,cashFirst,taxInflation,seniors,taxYear,ytd,incomeTax=ordinaryIncomeTax,conversionTax=false,netSupport=0){
     const estimate=gross=>{const q=this.quote(gross,{cashFirst,conversionTax});const ordinary=ytd.ordinary+other+q.taxableDraw+q.rothTaxableEarnings,social=ytd.social+ss,totalTax=incomeTax(ordinary+taxableSocialSecurity(ordinary,social,status),status,taxInflation,seniors,taxYear),net=ss+other+netSupport+gross-(totalTax-ytd.tax)-q.penalties;return {...q,totalTax,net};};
@@ -65,7 +103,7 @@ export class PersonAccounts{
     while(estimate(high).net<need){high*=2;if(!Number.isFinite(high))throw Error('Simulation exceeded the finite numeric range.');}
     for(let i=0;i<32;i++){const mid=(low+high)/2;if(estimate(mid).net>=need)high=mid;else low=mid;}return estimate(high);
   }
-  consume(q){for(const [i,p] of this.people.entries()){const d=q.draws[i];p.pretax-=d.pretax;p.paid+=d.pretax;p.ledger.distribution(d.roth,p.roth,this.taxYear,{qualified:p.qualified,consume:true});p.roth-=d.roth;}this.b.cash-=q.shared.cash;this.b.taxable-=q.shared.taxable;this.refresh();}
+  consume(q){for(const [i,p] of this.people.entries()){const d=q.draws[i];p.pretax-=d.pretax;p.paid+=d.pretax;p.ledger.distribution(d.roth,p.roth,this.taxYear,{qualified:p.qualified,consume:true});p.roth-=d.roth;}for(const [i,a] of this.employer.entries()){const d=q.employerDraws[i];a.ledger.distribution(d,a.balance,this.calendarYear,{qualified:a.qualified,consume:true});a.balance-=d;}this.b.cash-=q.shared.cash;this.b.taxable-=q.shared.taxable;this.refresh();}
   convert(amount){let remaining=amount;for(const p of this.people){if(p.protected)continue;const d=Math.min(Math.max(0,p.pretax),remaining);p.pretax-=d;p.roth+=d;p.ledger.add(d,this.taxYear);remaining-=d;}this.refresh();return amount-remaining;}
-  snapshot(){return this.people.map(p=>({pretax:p.pretax,roth:p.roth,contributionBasis:p.ledger.openingBalance,firstContributionYear:p.ledger.firstContributionYear}));}
+  snapshot(){return this.people.map(p=>({pretax:p.pretax,roth:p.roth,contributionBasis:p.ledger.openingBalance,firstContributionYear:p.ledger.firstContributionYear,...(this.employer.length?{employerRoth:this.employer.filter(a=>a.person===p).map(a=>({name:a.name,type:a.type,balance:a.balance,contributionBasis:a.ledger.basis,firstContributionYear:a.ledger.firstContributionYear,rolled:a.rolled}))}:{})}));}
 }
