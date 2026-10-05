@@ -486,6 +486,20 @@ export function candidateReadiness(s,{kind,value,age,count,targetReadiness}){
   }
   return kind==='age'?retirementAgeReadiness(s,value,count,targetReadiness):spendingReadiness(s,value,count,targetReadiness);
 }
+// Readiness and median ending balance (today's dollars) for one stock
+// allocation schedule. Every schedule with the same seed sees the same paths.
+export function allocationOutcome(s,{allocation,count,seed}){
+  const variant=structuredClone(s);variant.postRetirementAllocation={...allocation};variant.numberOfSimulations=count;variant.seed=seed;
+  if(usesCalendarDates(variant))variant.household.asOfDate ||= localCalendarDate();
+  const errors=validateScenario(variant);if(errors.length)throw new Error(errors.join(' '));
+  let successes=0;const endings=[];
+  for(let i=0;i<count;i++){
+    const path=runOne(variant,new JavaRandom(BigInt(seed)+BigInt(i)*STRIDE),{captureTodayDollars:true}),end=path.today.yearEnd;
+    if(path.success)successes++;
+    endings.push(Math.max(0,end[end.length-1]??0));
+  }
+  return {readiness:successes/count,medianEndingBalance:medianOfSorted(endings.sort((a,b)=>a-b))};
+}
 function decisionResult(plan,age,spending,safeSpendingAtSearchLimit){
   return {targetReadiness:plan.targetReadiness,simulationCount:plan.count,earliestRetirementAge:age?.value??null,earliestRetirementReadiness:age?.readiness??null,safeAnnualSpending:spending?.value??null,safeSpendingReadiness:spending?.readiness??null,safeSpendingAtSearchLimit,safeSpendingSearchLimit:plan.safeSpendingSearchLimit,retirementAgeSearchStart:plan.firstAge,retirementAgeSearchEnd:plan.lastAge};
 }

@@ -8,7 +8,7 @@ import {oneYearGrowth} from './growth-helper.js';
 import {withdrawalContent} from './withdrawals-view.js';
 import {isPreviewResult,readinessLabel,shareLabel,ageYearRows,balanceDisplayRows,PREVIEW_WARNING} from './result-format.js';
 import {LAB_LEVERS,LAB_PRESETS,LAB_MAX_WHAT_IFS,LAB_FREE_WHAT_IFS,LAB_MAX_SETS,LIVE_ESTIMATE_PATHS,SENSITIVITY_PATHS,STRESS_TESTS,SENSITIVITY_INPUTS,labLever,applyWhatIf,whatIfErrors,describeChanges,autoName,newWhatIf,labId,defaultLabSets,normalizeLabSets,copyLabSets,readinessDelta,labMetrics,labSummary,labCsv} from './plan-lab.js';
-import {labPage} from './plan-lab-view.js';
+import {labPage,allocationCard} from './plan-lab-view.js';
 import {chartCard,mountCharts,disposeCharts} from './charts.js';
 import {initializeSocialAuth,socialState,authHeaders,signInSocial,linkSocialProvider,signOutSocial} from './auth.js';
 import {baseScenario,employerRothDefaults,employerRothTotal,hasEmployerRoth,retirementAge,primaryRetirementAge,ageLabel,calendarDate,calendarMonthsBetween,addCalendarMonths,partTimeIncomeActive,homePlanActive,localCalendarDate,prepareCalendarScenario,scenarioTimeline,forecastRetirementDate,dateLabel,syncCalendarAges,setRetirementAge,delayRetirement,sampleScenarios,normalizeScenarios,applyProSimulationDefault,validateScenario,validateScenarioDraft,validateScenarioStructure,budgetBreakdown,budgetMonthTotals,validateBudget,markBudgetEdited,applyBudgetEstimate,setAnnualBaseSpending,ruleOf55Applies,earlyWithdrawalContext,ANNUAL_BILLS,SEPARATE_COSTS,ROTH_CONVERSION_RATES,scenarioWarnings,ENGINE_VERSION,scenarioEngineVersion,DEFAULT_SEED,FREE_SIMULATION_PATHS,SMALL_SAMPLE_PATHS,MIN_SIMULATION_PATHS,MAX_SIMULATION_PATHS,MAX_DOLLAR_AMOUNT} from './model.js';
@@ -51,7 +51,7 @@ try{
 const hasSavedScenarios=Boolean(savedScenarios);
 const savedSelectedId=typeof saved?.selectedId==='string'||typeof saved?.selectedId==='number'?String(saved.selectedId).trim():'';
 function originalPlans(){return sampleScenarios().map(s=>{prepareCalendarScenario(s,{needsReview:false});s.household.separatePeople=true;s.household.spouseRetirementDate=s.household.retirementDate;return s;});}
-const state={scenarios:savedScenarios||originalPlans(),selectedId:savedSelectedId||'base-plan',view:'dashboard',results:new Map(),labResults:null,decision:null,claimDecision:null,savingsDecision:null,busy:false,message:savedLoadError,access:{tier:'free',maxPaths:FREE_SIMULATION_PATHS,signedIn:false,checkoutAvailable:false},auth:{configured:false,chatgptSignedIn:false,signedIn:false,linkedProviders:[],enabledProviders:{google:false}},advancedOpen:false,allocationOpen:false,setupSection:0};
+const state={scenarios:savedScenarios||originalPlans(),selectedId:savedSelectedId||'base-plan',view:'dashboard',results:new Map(),labResults:null,decision:null,claimDecision:null,savingsDecision:null,allocationDecision:null,busy:false,message:savedLoadError,access:{tier:'free',maxPaths:FREE_SIMULATION_PATHS,signedIn:false,checkoutAvailable:false},auth:{configured:false,chatgptSignedIn:false,signedIn:false,linkedProviders:[],enabledProviders:{google:false}},advancedOpen:false,allocationOpen:false,setupSection:0};
 if(!state.scenarios.some(s=>s.id===state.selectedId))state.selectedId=state.scenarios[0].id;
 state.inputSources=normalizeInputSources(saved?.inputSources,state.scenarios,hasSavedScenarios?'Saved value; source not recorded':'Sample/default');
 state.optionalAnswers=normalizeOptionalAnswers(saved?.optionalAnswers,state.scenarios);
@@ -192,7 +192,7 @@ function persist(markStarted=true,replaceUnreadable=false){
   saveQueue=saveQueue.then(save,save).finally(()=>{pendingSaves--;});return saveQueue;
 }
 let calculationRevision=0,liveWorker=null;
-function invalidateExploration(){calculationRevision++;state.labResults=null;stopLiveEstimate();state.labLive={status:'idle'};state.decision=null;state.claimDecision=null;state.savingsDecision=null;state.savingsFrontierSelection=0;state.frontierSelection=0;state.claimFrontierSelection=0;state.message='';}
+function invalidateExploration(){calculationRevision++;state.labResults=null;stopLiveEstimate();state.labLive={status:'idle'};state.decision=null;state.claimDecision=null;state.savingsDecision=null;state.allocationDecision=null;state.savingsFrontierSelection=0;state.frontierSelection=0;state.claimFrontierSelection=0;state.message='';}
 function selectScenario(id){invalidateExploration();state.selectedId=id;state.guided=rememberedSetupMode(id);state.budgetReturn=null;}
 function result(){return state.results.get(current().id);}
 function setMessage(message,options){state.message=state.storageError||message;render(options);}
@@ -1028,6 +1028,7 @@ function labGoalHtml(){
   const kind=state.labUi.goal.kind,busy=state.busy,add=k=>`<button class="secondary" data-action="lab-frontier-whatif" data-kind="${k}" ${busy?'disabled':''}>Add as a what-if</button>`;
   if(kind==='claiming')return frontierCard(state.claimDecision?.frontier,state.claimFrontierSelection,busy,add('claiming'));
   if(kind==='savings')return frontierCard(state.savingsDecision?.frontier,state.savingsFrontierSelection,busy,add('savings'));
+  if(kind==='allocation')return allocationCard(state.allocationDecision,busy);
   return planningTargets(add('retirement'));
 }
 function labViewModel(){
@@ -1299,6 +1300,19 @@ async function runDecision(kind=false,targetReadiness=null){
   catch(e){if(revision===calculationRevision)state.message=e instanceof CalculationCanceled?TARGETS_CANCELED:'Error: '+e.message;}
   finally{finishCalculation();}
 }
+// Each pass sweeps every band once; most searches settle before the last pass.
+const allocationProgress=p=>p.phase==='check'?.9:.9*((p.pass-1)*p.bands+p.band)/(p.maxPasses*p.bands);
+function allocationDetail(p){return p.phase==='check'?`Checking the best schedule against yours on ${countLabel(p.checkPaths)} fresh paths`:`Pass ${p.pass} of up to ${p.maxPasses} · ${p.bandLabel??'Under 30×'} band · ${countLabel(p.tested)} schedules tested`;}
+async function runAllocationSearch(){
+  if(state.busy)return;
+  if(!isPro()){setMessage(TARGETS_NEED_PRO);return;}
+  if(blockingUnknowns(current()).length){setMessage('Error: Review Unknown inputs before running.');return;}
+  const revision=calculationRevision,s=simulationScenario();
+  startCalculation('Finding the stock allocation with the highest readiness…');
+  try{const d=await runWorker(s,'allocation-decision',p=>setProgress(allocationProgress(p),allocationDetail(p)));if(revision!==calculationRevision)return;state.allocationDecision=d;state.labUi.goal.kind='allocation';state.message=d.changed?'Stock allocation search finished.':'Stock allocation search finished. Your current schedule is already the best one found.';}
+  catch(e){if(revision===calculationRevision)state.message=e instanceof CalculationCanceled?TARGETS_CANCELED:'Error: '+e.message;}
+  finally{finishCalculation();}
+}
 // Comparison runs need balances, funding curves and the lifetime totals, not
 // the scatter points or the separate sensitivity checks of a full forecast.
 const LAB_RUN_OPTIONS={includeRiskAnalysis:false,includePathPoints:false,captureMetrics:true};
@@ -1405,7 +1419,7 @@ async function labChange(el,s){
   if(d.labSeries!==undefined){if(el.checked)ui.hidden.delete(d.labSeries);else ui.hidden.add(d.labSeries);render({preserveEditor:true});return true;}
   if(d.labChartAge!==undefined){const age=Number(el.value);if(Number.isInteger(age))ui.chartAge=age;render({preserveEditor:true});return true;}
   if(d.labStressTarget!==undefined){ui.stressTarget=el.value;ui.stressTargetChosen=true;render({preserveEditor:true});return true;}
-  if(d.labGoal==='kind'){if(['retirement','claiming','savings'].includes(el.value))ui.goal.kind=el.value;render({preserveEditor:true});return true;}
+  if(d.labGoal==='kind'){if(['retirement','claiming','savings','allocation'].includes(el.value))ui.goal.kind=el.value;render({preserveEditor:true});return true;}
   if(d.labGoal==='target'){const value=Number(el.value);if(value>=70&&value<=95)ui.goal.target=value/100;return true;}
   return false;
 }
@@ -1422,7 +1436,11 @@ async function labAction(a,el,s){
   if(a==='run-lab'){await runLab();return;}
   if(a==='run-lab-stress'){await runLabStress();return;}
   if(a==='run-lab-sensitivity'){await runLabSensitivity();return;}
-  if(a==='run-lab-goal'){await runDecision(ui.goal.kind,ui.goal.target);return;}
+  if(a==='run-lab-goal'){if(ui.goal.kind==='allocation')await runAllocationSearch();else await runDecision(ui.goal.kind,ui.goal.target);return;}
+  if(a==='lab-allocation-whatif'){
+    const d=state.allocationDecision;if(!d?.changed)return;
+    const w=labAddWhatIf({stockAllocation:{...d.suggested.allocation}},'Optimized stock allocation');if(!w)return;await persist(false);setMessage(`Added “${w.name}”. Run the comparison to see it side by side.`);return;
+  }
   if(a==='compare-lower-returns'){
     state.view='lab';const changes={returnCap:.07};
     if(Math.max(s.market.stockMeanReturn,s.market.preRetirementMeanReturn)<=.07){setMessage('Your plan already assumes average returns of 7% or less.');return;}
@@ -1455,7 +1473,7 @@ async function labAction(a,el,s){
   if(a==='lab-lever-cancel'){ui.editingLever=null;ui.leverError='';render();return;}
   if(a==='lab-lever-save'){
     const w=labWhatIf(ui.editing),lever=labLever(el.dataset.lever);if(!w||!lever||ui.editingLever!==lever.key)return;
-    const read=lever.read(ui.leverDraft,s);if(read.error){ui.leverError=read.error;render({preserveEditor:true});return;}
+    const read=lever.read(ui.leverDraft,s,w.changes[lever.key]);if(read.error){ui.leverError=read.error;render({preserveEditor:true});return;}
     const before=deep(w.changes),next={...w.changes,[lever.key]:read.value},errors=whatIfErrors(s,next);
     if(errors.length){ui.leverError=errors[0];render({preserveEditor:true});return;}
     w.changes=next;renameIfAuto(w,before);ui.editingLever=null;ui.leverError='';await persist(false);render();runLiveEstimate();return;
@@ -1695,6 +1713,17 @@ $('#main').addEventListener('click',async e=>{const runPlan=e.target.closest('[d
     personalize(s);h.open=true;state.results.delete(s.id);invalidateExploration();await persist();setMessage('Yearly savings updated from your statements and marked Estimated. Run the plan to refresh results.');return;
   }
   if(a==='apply-budget'){if(!budgetCostsReviewed()){setMessage('Error: Review each month’s housing and health payment choices, then confirm the deduction summary before applying the budget.');return;}try{personalize(s);const replaceHomeCosts=budgetReplaceHomeCosts(s);applyBudgetEstimate(s,{replaceHomeCosts});state.inputSources[s.id]['spending.annualBaseSpending']='Estimated';if(replaceHomeCosts)state.inputSources[s.id]['home.annualTaxesAndInsurance']='Estimated';state.results.delete(s.id);invalidateExploration();await persist();setMessage('Budget estimate applied. Run the plan to refresh results.');}catch(error){setMessage('Error: '+error.message);}}
+  if(a==='apply-allocation-target'){
+    const d=state.allocationDecision;if(state.busy||!d?.changed)return;
+    const next=deep(s);Object.assign(next.postRetirementAllocation,d.suggested.allocation);
+    const errors=validateScenario(next);if(errors.length){setMessage('Error: '+errors.join(' '));return;}
+    const changed=comparisonChangedPaths(s,next);if(!changed.length){setMessage('Your plan already uses this allocation. Run the full forecast to check it.');return;}
+    Object.assign(s,next);personalize(s);
+    for(const path of changed)state.inputSources[s.id][path]='Estimated';
+    state.results.delete(s.id);invalidateExploration();await resultCache.remove(s.id);
+    state.view='setup';state.setupSection=5;
+    await persist();setMessage('Stock allocation applied and marked Estimated. Run the full forecast to check the updated plan.');window.scrollTo(0,0);return;
+  }
   if(a==='apply-age-target'||a==='apply-spending-target'||a==='apply-frontier-target'||a==='apply-claim-frontier-target'||a==='apply-savings-frontier-target'){
     const claiming=a==='apply-claim-frontier-target',savings=a==='apply-savings-frontier-target',[resultKey,selectionKey]=decisionKeys(savings?'savings':claiming?'claiming':'retirement'),decision=state[resultKey];
     if(state.busy||!decision)return;

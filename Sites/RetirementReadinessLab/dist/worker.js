@@ -1,11 +1,14 @@
-import {runSimulation,searchDecision,candidateReadiness} from './engine.js';
+import {runSimulation,searchDecision,candidateReadiness,allocationOutcome} from './engine.js';
 import {searchReadinessFrontier,searchSavingsFrontier} from './target-frontier.js';
+import {searchAllocation} from './allocation-search.js';
+
+const evaluateCandidate=(scenario,task)=>task.kind==='allocation'?allocationOutcome(scenario,task):candidateReadiness(scenario,task);
 
 // Spread target-search candidates across nested workers when the browser allows
 // them. Any worker that fails to load hands its work back to this worker, so the
 // search still finishes with the same answer.
 function candidatePool(scenario){
-  const inline=task=>Promise.resolve().then(()=>candidateReadiness(scenario,task));
+  const inline=task=>Promise.resolve().then(()=>evaluateCandidate(scenario,task));
   const size=Math.min(8,(self.navigator?.hardwareConcurrency||1)-1);
   if(size<2||typeof Worker!=='function')return {size:1,evaluate:inline,close(){}};
   const idle=[],queue=[],jobs=new Map(),workers=[];let broken=false;
@@ -42,7 +45,12 @@ self.onmessage=async e=>{
   const target=Number.isFinite(options.targetReadiness)?{targetReadiness:options.targetReadiness}:{};
   try{
     let result;
-    if(task==='decision-candidate')result=candidateReadiness(scenario,e.data.candidate);
+    if(task==='decision-candidate')result=evaluateCandidate(scenario,e.data.candidate);
+    else if(task==='allocation-decision'){
+      const pool=candidatePool(scenario);
+      try{result=await searchAllocation(scenario,{evaluate:pool.evaluate,onProgress:progress});}
+      finally{pool.close();}
+    }
     else if(task==='claim-decision'||task==='savings-decision'){
       const pool=candidatePool(scenario);
       try{result={frontier:task==='savings-decision'?await searchSavingsFrontier(scenario,{evaluate:pool.evaluate,onProgress:progress,...target}):await searchReadinessFrontier(scenario,{kind:'claiming',evaluate:pool.evaluate,onProgress:progress,...target})};}

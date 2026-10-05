@@ -1,5 +1,5 @@
 import {LAB_LEVERS,LAB_LEVER_GROUPS,LAB_PRESETS,LAB_MAX_WHAT_IFS,LAB_FREE_WHAT_IFS,LAB_MAX_SETS,STRESS_TESTS,readinessDelta} from './plan-lab.js';
-import {readinessLabel,ageYearRows} from './result-format.js';
+import {readinessLabel,shareLabel,ageYearRows} from './result-format.js';
 
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=(v,d=0)=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:d}).format(v||0);
@@ -50,7 +50,7 @@ function planCards(vm){
 
 function field(lever,f){
   const id=`lab-${lever.key}-${f.name}`,attrs=`id="${id}" data-lab-lever="${lever.key}" data-lab-field="${f.name}"`;
-  const input=f.type==='select'?`<select ${attrs}>${f.options.map(([v,t])=>`<option value="${esc(v)}" ${String(v)===String(f.value)?'selected':''}>${esc(t)}</option>`).join('')}</select>`:f.type==='money'?`<span class="money-entry"><span aria-hidden="true">$</span><input ${attrs} type="text" inputmode="decimal" value="${esc(f.value)}"></span>`:`<input ${attrs} type="${f.type==='number'?'text':f.type}" ${f.type==='number'?'inputmode="numeric"':''} ${f.min?`min="${f.min}"`:''} value="${esc(f.value)}">`;
+  const input=f.type==='select'?`<select ${attrs}>${f.options.map(([v,t])=>`<option value="${esc(v)}" ${String(v)===String(f.value)?'selected':''}>${esc(t)}</option>`).join('')}</select>`:f.type==='money'?`<span class="money-entry"><span aria-hidden="true">$</span><input ${attrs} type="text" inputmode="decimal" value="${esc(f.value)}"></span>`:`<input ${attrs} type="${f.type==='number'?'text':f.type}" ${f.type==='number'?`inputmode="${esc(f.inputmode??'numeric')}"`:''} ${f.min?`min="${f.min}"`:''} value="${esc(f.value)}">`;
   return `<div class="field"><label for="${id}">${esc(f.label)}</label>${input}</div>`;
 }
 function leverRow(lever,vm){
@@ -113,9 +113,25 @@ function sensitivityCard(vm){
 
 function goalCard(vm,frontierHtml){
   const g=vm.goal,head=`<div class="lab-section-head"><div><h2 id="lab-goal-title">Goal finder</h2><p class="form-note">Pick a readiness target and what you are willing to change.</p></div></div>`;
-  if(!vm.pro)return `<section class="card lab-goal" aria-labelledby="lab-goal-title">${head}${lockedNote('Find the retirement age, spending, savings or claiming age that reaches your target.')}</section>`;
-  const kinds=[['retirement','Retirement age & spending'],['claiming','Social Security claiming age & spending'],['savings','Retirement age & annual savings']];
-  return `<section class="card lab-goal" aria-labelledby="lab-goal-title">${head}<div class="fields lab-goal-fields"><div class="field"><label for="lab-goal-target">Target readiness <output id="lab-goal-target-value">${Math.round(g.target*100)}%</output></label><input id="lab-goal-target" type="range" min="70" max="95" step="5" value="${Math.round(g.target*100)}" data-lab-goal="target"></div><div class="field"><label for="lab-goal-kind">Change</label><select id="lab-goal-kind" data-lab-goal="kind">${kinds.map(([k,l])=>`<option value="${k}" ${k===g.kind?'selected':''}>${esc(l)}</option>`).join('')}</select></div></div><button class="primary" data-action="run-lab-goal" ${vm.busy?'disabled':''}>Find options</button>${frontierHtml}</section>`;
+  if(!vm.pro)return `<section class="card lab-goal" aria-labelledby="lab-goal-title">${head}${lockedNote('Find the retirement age, spending, savings, claiming age or stock allocation that works best for your plan.')}</section>`;
+  const kinds=[['retirement','Retirement age & spending'],['claiming','Social Security claiming age & spending'],['savings','Retirement age & annual savings'],['allocation','Stock allocation by portfolio size']];
+  const allocation=g.kind==='allocation';
+  // The allocation optimizer maximizes readiness instead of meeting a target.
+  const target=allocation?`<div class="field"><span class="metric-label">Goal</span><p class="form-note lab-goal-explain">Highest readiness; among schedules within 1 point of it, the larger median balance.</p></div>`:`<div class="field"><label for="lab-goal-target">Target readiness <output id="lab-goal-target-value">${Math.round(g.target*100)}%</output></label><input id="lab-goal-target" type="range" min="70" max="95" step="5" value="${Math.round(g.target*100)}" data-lab-goal="target"></div>`;
+  return `<section class="card lab-goal" aria-labelledby="lab-goal-title">${head}<div class="fields lab-goal-fields">${target}<div class="field"><label for="lab-goal-kind">Change</label><select id="lab-goal-kind" data-lab-goal="kind">${kinds.map(([k,l])=>`<option value="${k}" ${k===g.kind?'selected':''}>${esc(l)}</option>`).join('')}</select></div></div><button class="primary" data-action="run-lab-goal" ${vm.busy?'disabled':''}>${allocation?'Find the best allocation':'Find options'}</button>${frontierHtml}</section>`;
+}
+
+// Optimizer results: the current and suggested schedules band by band, with
+// both rerun on the same fresh paths.
+export function allocationCard(d,busy=false){
+  if(!d)return '';
+  const pct=v=>`${Number((v*100).toFixed(2))}%`,share=v=>shareLabel(v,d.checkPaths),cur=d.current,sug=d.suggested;
+  const raised=sug.readiness>cur.readiness,headline=!d.changed?'Your current schedule is already the best one found.':d.improved?(raised?`This schedule raises readiness from ${share(cur.readiness)} to ${share(sug.readiness)}.`:'This schedule keeps readiness within a point and leaves a larger median balance.'):'The best schedule on the search paths did not beat yours on fresh paths.';
+  const rows=d.bands.map(b=>{const moved=b.suggested!==b.current;return `<tr${moved?' class="changed"':''}><th scope="row">${esc(b.label)}</th><td>${pct(b.current)}</td><td>${pct(b.suggested)}${b.affectedResults?'':' <small>no effect found</small>'}</td></tr>`;}).join('');
+  const stat=(label,a,b)=>`<div><dt>${label}</dt><dd><span>${a}</span><span aria-hidden="true">→</span><strong>${b}</strong></dd></div>`;
+  const actions=d.changed?`<div class="actions"><button class="primary" data-action="apply-allocation-target" ${busy?'disabled':''}>Use this allocation</button><button class="secondary" data-action="lab-allocation-whatif" ${busy?'disabled':''}>Add as a what-if</button></div>`:'';
+  const noEffect=d.bands.some(b=>!b.affectedResults)?' “No effect found” means changing that band did not change readiness or median ending balance in the tested schedules; it does not prove the band was unused.':'';
+  return `<section class="card readiness-frontier allocation-result"><h2>Stock allocation by portfolio size</h2><p>${esc(headline)}</p><table class="allocation-table"><caption class="visually-hidden">Stock share by savings level, current and suggested</caption><thead><tr><th scope="col">Savings vs. yearly spending</th><th scope="col">Current</th><th scope="col">Suggested</th></tr></thead><tbody>${rows}</tbody></table><dl class="allocation-stats">${stat('Readiness',share(cur.readiness),share(sug.readiness))}${stat('Median left, today’s dollars',money(cur.medianEndingBalance),money(sug.medianEndingBalance))}</dl>${actions}<p class="form-note frontier-search-note">Tested ${d.tested.toLocaleString('en-US')} schedules on ${d.searchPaths.toLocaleString('en-US')} paths, moving one band at a time in 10-point steps (${d.passes} pass${d.passes===1?'':'es'}). The numbers above come from ${d.checkPaths.toLocaleString('en-US')} fresh paths, so they are not fitted to the search. The allocation applies after retirement; each band compares invested savings with a year of modeled costs.${noEffect} This search does not guarantee a global optimum. Better schedules may exist between the tested steps or in combinations of bands that were not tested together.</p></section>`;
 }
 
 function stressSection(vm){

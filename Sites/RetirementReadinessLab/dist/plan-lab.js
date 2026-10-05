@@ -20,6 +20,9 @@ const CAP_OPTIONS=[.05,.06,.07,.08,.09,.10].map(n=>[String(n),`Stocks and pre-re
 const HEALTH_OPTIONS=[-.25,.25,.5].map(n=>[String(n),`${n>0?'+':'−'}${pct(Math.abs(n))} premiums and care costs`]);
 const PATTERN_OPTIONS=[['Flat','Steady before inflation'],['EmpiricalAgeDecline','Gradual decline from 65 to 85']];
 const HOME_OPTIONS=[['downsize','Downsize to a smaller home'],['rent','Sell and rent']];
+const ALLOCATION_BAND_NAMES=['Under 30×','30–35×','35–40×','40–45×','45–50×','50× or more'];
+const stockPercent=v=>String(Number((100*v).toPrecision(15)));
+const schedulePercents=a=>ALLOCATION_KEYS.map(k=>stockPercent(a[k])).join('/')+'%';
 
 // Each lever reads a draft of strings, writes one change and describes it.
 // Applying a lever never edits the saved plan; it edits a comparison copy.
@@ -60,6 +63,14 @@ export const LAB_LEVERS=[
     fields:(s,v)=>[{name:'annual',label:'Your yearly savings',type:'money',value:moneyInputValue(v??annualPersonalSavings(s))}],
     read:d=>{const n=amount(d.annual);return n===null?{error:'Enter yearly savings of 0 or more.'}:{value:n};},
     apply:(s,v)=>setAnnualPersonalSavings(s,v),describe:v=>`Save ${money(v)} a year`},
+  // A whole schedule, such as one from the stock allocation optimizer. A stock
+  // and bond mix change applies on top of it.
+  {key:'stockAllocation',group:'Saving & investing',label:'Stock allocation by portfolio size',isNew:true,available:()=>true,
+    current:s=>schedulePercents(s.postRetirementAllocation),
+    fields:(s,v)=>ALLOCATION_KEYS.map((k,i)=>({name:k,label:`${ALLOCATION_BAND_NAMES[i]} spending, % stocks`,type:'number',inputmode:'decimal',value:stockPercent((v??s.postRetirementAllocation)[k])})),
+    read:(d,s,v)=>{const out={},original=v??s?.postRetirementAllocation;for(const [i,k] of ALLOCATION_KEYS.entries()){const raw=String(d[k]??'').trim(),n=Number(raw);if(!raw||!Number.isFinite(n)||n<0||n>100)return {error:`${ALLOCATION_BAND_NAMES[i]} spending: enter a percentage from 0 to 100.`};out[k]=original&&raw===stockPercent(original[k])?original[k]:n/100;}return {value:out};},
+    apply:(s,v)=>{for(const k of ALLOCATION_KEYS)s.postRetirementAllocation[k]=v[k];},
+    describe:v=>`Stocks ${schedulePercents(v)} by savings level`},
   {key:'stockShift',group:'Saving & investing',label:'Stock and bond mix',available:()=>true,
     current:s=>`${pct(s.postRetirementAllocation.stockUnder30x)} stocks at the start of retirement`,
     fields:(s,v)=>[{name:'shift',label:'Change after retirement',type:'select',value:String(v??-10),options:MIX_OPTIONS}],
@@ -157,6 +168,7 @@ const CHANGE_VALIDATORS={
   spendingPathModel:v=>PATTERN_OPTIONS.some(([value])=>value===v),
   oneTimeExpenses:v=>Array.isArray(v)&&v.length<=MAX_ONE_TIME_EXPENSES&&v.every(x=>savedObject(x)&&savedAge(x.age)&&savedAmount(x.amount)&&typeof (x.label??'')==='string'),
   annualSavings:savedAmount,
+  stockAllocation:v=>savedObject(v)&&ALLOCATION_KEYS.every(k=>Number.isFinite(v[k])&&v[k]>=0&&v[k]<=1),
   stockShift:v=>savedChoice(MIX_OPTIONS,v),
   returnCap:v=>savedChoice(CAP_OPTIONS,v),
   rothConversion:v=>savedObject(v)&&typeof v.enabled==='boolean'&&savedChoice(ROTH_OPTIONS.slice(1),v.marginalRateCap),

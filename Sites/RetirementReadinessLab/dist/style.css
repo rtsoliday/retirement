@@ -557,6 +557,10 @@ main{container-type:inline-size}
 .lab-goal .field output{font-weight:800;color:var(--ink);margin-left:6px}
 .lab-goal-fields{grid-template-columns:minmax(0,1fr) minmax(0,1.5fr);margin-bottom:12px}
 .lab-goal .card{box-shadow:none;border:0;border-top:1px solid var(--line);border-radius:0;padding:16px 0 0;margin-top:16px}
+/* Stock allocation optimizer: current and suggested schedules, then readiness and balance before → after. */
+.lab-goal-explain{margin:6px 0 0;font-size:.8rem;line-height:1.5}
+.allocation-table{width:100%;border-collapse:collapse;font-size:.84rem;font-variant-numeric:tabular-nums;margin:6px 0 14px}.allocation-table th,.allocation-table td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:right}.allocation-table th:first-child{text-align:left;font-weight:600;color:var(--ink)}.allocation-table tbody th{text-transform:none;letter-spacing:0;font-size:.84rem}.allocation-table thead th{font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}.allocation-table tr.changed td:last-child{color:var(--accent);font-weight:800}.allocation-table small{font-weight:500;color:var(--muted);font-size:.72rem}
+.allocation-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:0}.allocation-stats>div{padding:10px 12px;border:1px solid var(--line);border-radius:8px}.allocation-stats dt{font-size:.72rem;color:var(--muted)}.allocation-stats dd{margin:4px 0 0;display:flex;gap:8px;align-items:baseline;font-variant-numeric:tabular-nums;color:var(--muted)}.allocation-stats dd strong{color:var(--ink);font-size:1.05rem}
 .lab-stress-pick{min-width:220px}
 .lab-stress-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:14px}
 .lab-stress-card{padding:16px;border-radius:12px;background:#fff;border:1px solid var(--line);display:flex;flex-direction:column;gap:10px}

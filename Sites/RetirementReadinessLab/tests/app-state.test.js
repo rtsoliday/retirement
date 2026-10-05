@@ -745,7 +745,7 @@ async function nextWorker(a,index){for(let i=0;i<50&&!a.workers[index]?.data;i++
 const labRows=a=>a.labViewModel().rows;
 const leverInput=(a,lever,field,value)=>a.element('#main').listeners.input({target:{dataset:{labLever:lever,labField:field},value}});
 async function setLever(a,lever,values){await a.click('lab-lever-edit',{lever});for(const [field,value] of Object.entries(values))leverInput(a,lever,field,value);await a.click('lab-lever-save',{lever});}
-function assertCleared(a){assert.equal(a.state.labResults,null);assert.equal(a.state.decision,null);assert.equal(a.state.claimDecision,null);assert.equal(a.state.savingsDecision,null);}
+function assertCleared(a){assert.equal(a.state.labResults,null);assert.equal(a.state.decision,null);assert.equal(a.state.claimDecision,null);assert.equal(a.state.savingsDecision,null);assert.equal(a.state.allocationDecision,null);}
 
 test('applying an age target saves its birthday date and preserves spouse timing and full-run paths',async()=>{
   const records=new Map(),a=app(null,{resultRecords:records});a.state.access.tier='pro';
@@ -3086,6 +3086,52 @@ test('free accounts see locked Pro tools; the goal finder passes its readiness t
   const count=a.labViewModel().set.whatIfs.length;await a.click('lab-remove',{id:a.labViewModel().set.whatIfs[0].id});
   await a.click('lab-frontier-whatif',{kind:'claiming'});const w=a.labViewModel().set.whatIfs.at(-1);
   assert.equal(a.labViewModel().set.whatIfs.length,count);assert.equal(w.changes.claimAge,67);assert.equal(w.changes.annualBaseSpending,105000);
+});
+
+test('the goal finder optimizes stock allocation, shows its progress, adds it as a what-if and applies it',async()=>{
+  const a=app();a.state.access.tier='pro';a.state.view='lab';
+  await a.change('#main',{dataset:{labGoal:'kind'},value:'allocation'});
+  const page=a.lab();assert.match(page,/Find the best allocation/);assert.doesNotMatch(page,/id="lab-goal-target"/,'The optimizer has no readiness target');
+  const pending=a.click('run-lab-goal'),worker=await nextWorker(a,0);assert.equal(worker.data.task,'allocation-decision');assert.equal(worker.data.options,undefined);
+  worker.onmessage({data:{type:'progress',phase:'search',pass:1,maxPasses:3,band:2,bands:6,bandLabel:'35–40×',tested:25,checkPaths:2000}});
+  assert.equal(a.element('#busy-detail').textContent,'Pass 1 of up to 3 · 35–40× band · 25 schedules tested');
+  const keys=['stockUnder30x','stock30xTo35x','stock35xTo40x','stock40xTo45x','stock45xTo50x','stock50xOrMore'],current=structuredClone(a.current().postRetirementAllocation),suggested={...current,stock30xTo35x:1,stock35xTo40x:1};
+  const result={searchPaths:500,checkPaths:2000,nearTie:.01,tested:81,passes:2,changed:true,improved:true,current:{allocation:current,readiness:.98,medianEndingBalance:2600000},suggested:{allocation:suggested,readiness:.98,medianEndingBalance:2700000},searchResults:{},bands:keys.map((key,i)=>({key,label:key,current:current[key],suggested:suggested[key],affectedResults:i<3}))};
+  worker.onmessage({data:{type:'result',result}});await pending;
+  const html=a.lab();assert.match(html,/data-action="apply-allocation-target"/);assert.match(html,/keeps readiness within a point and leaves a larger median balance/);
+  await a.click('lab-allocation-whatif');const w=a.labViewModel().set.whatIfs.at(-1);
+  assert.equal(w.name,'Optimized stock allocation');assert.deepEqual(structuredClone(w.changes),{stockAllocation:suggested});
+  await a.click('apply-allocation-target');const s=a.current();
+  assert.deepEqual(structuredClone(s.postRetirementAllocation),suggested);
+  assert.equal(a.state.inputSources[s.id]['postRetirementAllocation.stock30xTo35x'],'Estimated');assert.equal(a.state.inputSources[s.id]['postRetirementAllocation.stockUnder30x'],undefined);
+  assertCleared(a);assert.equal(a.state.view,'setup');
+});
+
+test('allocation searches enforce Pro access and discard results after canceling or editing the plan',async()=>{
+  const free=app();free.state.labUi.goal.kind='allocation';await free.click('run-lab-goal');
+  assert.equal(free.workers.length,0);assert.match(free.state.message,/Pro/);
+  for(const action of ['cancel','edit','switch']){
+    const a=app();a.state.access.tier='pro';a.state.labUi.goal.kind='allocation';
+    const pending=a.click('run-lab-goal'),worker=await nextWorker(a,0);
+    if(action==='cancel'){await a.click('cancel-calculation');assert.equal(worker.terminated,true);}
+    else{
+      if(action==='edit')await a.change('#main',{dataset:{field:'market.stockMeanReturn',type:'percent'},value:'10'});
+      else await a.click('select-scenario',{id:a.state.scenarios[1].id});
+      worker.onmessage({data:{type:'result',result:{changed:true,suggested:{allocation:{stockUnder30x:0}}}}});
+    }
+    await pending;assert.equal(a.state.allocationDecision,null);assert.equal(a.state.busy,false);
+  }
+});
+
+test('reopening an optimizer what-if retains every fractional band while another band is edited',async()=>{
+  const a=app();a.state.access.tier='pro';a.state.view='lab';
+  const allocation={...a.current().postRetirementAllocation,stockUnder30x:.5001,stock35xTo40x:1/3};
+  a.state.allocationDecision={changed:true,suggested:{allocation}};
+  await a.click('lab-allocation-whatif');const w=a.labViewModel().set.whatIfs.at(-1);
+  await a.click('lab-edit',{id:w.id});
+  await setLever(a,'stockAllocation',{stock30xTo35x:'55.5'});
+  assert.deepEqual(structuredClone(w.changes.stockAllocation),{...allocation,stock30xTo35x:.555});
+  assert.deepEqual(structuredClone(a.saved().labSets[a.current().id].sets[0].whatIfs.at(-1).changes.stockAllocation),{...allocation,stock30xTo35x:.555});
 });
 
 test('the live estimate runs separately for Pro edits and CSV and report downloads include every compared plan',async()=>{
