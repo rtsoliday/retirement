@@ -1,6 +1,12 @@
 import { billing } from './billing.js';
 import { authConfig, OWNER_CHATGPT_USER_ID, OWNER_GOOGLE_EMAIL } from './auth.js';
+import { recordMetric, usageMetrics } from './metrics.js';
+import { billingMetrics } from './admin-billing.js';
+import { mcp } from './mcp.js';
+import { mcpMetrics } from './mcp-storage.js';
+import { verificationApi,verificationRpc } from './mcp-verification.js';
 const ADMIN_HTML = '__ADMIN_HTML__';
+const MCP_VERIFICATION_HTML = '__MCP_VERIFICATION_HTML__';
 const ZONE_ID = '19fc99ed5a9bc17308d434c3c7d959aa';
 const ALLOWED_DAYS = new Set([7, 30]);
 
@@ -100,6 +106,39 @@ function owner(request) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/api/admin/mcp-verification') return verificationApi(request,env,owner(request));
+    if (url.pathname === '/api/admin/mcp-verification/rpc') return verificationRpc(request,env,owner(request));
+    if (['/mcp-verification','/mcp-verification/','/mcp-verification.html'].includes(url.pathname)) {
+      if (!owner(request) || !request.headers.get('oai-authenticated-user-id')) return json({error:'Owner sign-in required'},403);
+      if (request.method !== 'GET') return json({error:'Use GET'},405);
+      return new Response(MCP_VERIFICATION_HTML,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow','Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"}});
+    }
+    if (url.pathname === '/mcp') return mcp(request, env, owner(request));
+    if (url.pathname === '/ai-assistants' || url.pathname === '/ai-assistants/' || url.pathname === '/ai-assistants.html') {
+      const asset = await env.ASSETS.fetch(new Request(new URL('/ai-assistants.html', url), request));
+      const headers = new Headers(asset.headers); headers.set('Cache-Control', 'no-store');
+      const html = await asset.text();
+      const availability = env.MCP_CALCULATIONS_ENABLED === 'true' ? 'Hosted forecasts are available to connected accounts.' : 'Hosted forecasts are in owner testing. General access will open after runtime verification.';
+      return new Response(html.replace(/<p id="availability">[^<]*<\/p>/, `<p id="availability">${availability}</p>`), { status: asset.status, headers });
+    }
+    if (url.pathname === '/api/admin/mcp') {
+      if (!owner(request)) return json({ error: 'Admin access required' }, 403);
+      if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
+      const days = Number(url.searchParams.get('days') || 7);
+      if (!ALLOWED_DAYS.has(days)) return json({ error: 'Choose 7 or 30 days' }, 400);
+      try { return json(await mcpMetrics(env, utcWindow(days))); }
+      catch { return json({ error: 'Assistant tool statistics unavailable. Please retry.' }, 503); }
+    }
+    if (url.pathname === '/api/metrics/event') return recordMetric(request, env, owner(request), json);
+    if (url.pathname === '/api/admin/usage' || url.pathname === '/api/admin/billing') {
+      if (!owner(request)) return json({ error: 'Admin access required' }, 403);
+      if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405);
+      const days = Number(url.searchParams.get('days') || 7);
+      if (!ALLOWED_DAYS.has(days)) return json({ error: 'Choose 7 or 30 days' }, 400);
+      try {
+        return json(await (url.pathname.endsWith('/usage') ? usageMetrics(env, utcWindow(days), days) : billingMetrics(env, utcWindow(days))));
+      } catch { return json({ error: url.pathname.endsWith('/usage') ? 'Usage statistics unavailable. Please retry.' : 'Subscription statistics unavailable. Check the Stripe connection and retry.' }, 503); }
+    }
     if (url.pathname === '/api/auth/config') return authConfig(request, env);
     if (url.pathname.startsWith('/api/billing/')) return billing(request, env, url.pathname, owner(request));
     if (url.pathname === '/api/admin/traffic') {

@@ -104,7 +104,10 @@ function adminBrowser(){
   const context=vm.createContext({Intl,Date,fetch:url=>new Promise((resolve,reject)=>pending.push({url,resolve,reject})),document:{querySelector:element,querySelectorAll:()=>days,createElement:()=>({dataset:{},style:{},setAttribute(){},append(){}})}});
   vm.runInContext(readFileSync(new URL('../dist/admin.js',import.meta.url),'utf8'),context);
   const data=n=>({series:[{date:'2026-09-29',pageViews:n,uniqueIps:n}],pageViews:n,peakDailyUniqueIps:n,start:'2026-09-29'});
-  return {element,days,pending,data};
+  const traffic=[];
+  Object.defineProperty(traffic, '0', {get:()=>pending.filter(p=>p.url.includes('/traffic'))[0]});
+  Object.defineProperty(traffic, '1', {get:()=>pending.filter(p=>p.url.includes('/traffic'))[1]});
+  return {element,days,pending:traffic,allPending:pending,data};
 }
 
 test('stale analytics successes, HTTP errors and network errors cannot replace the selected range',async()=>{
@@ -119,4 +122,27 @@ test('a stale analytics completion cannot reenable refresh while the latest requ
   const a=adminBrowser();a.days[1].listeners.click();a.pending[0].resolve(Response.json(a.data(7)));await new Promise(setImmediate);
   assert.equal(a.element('#refresh').disabled,true);assert.equal(a.element('#total-views').textContent,'');
   a.pending[1].resolve(Response.json(a.data(30)));await new Promise(setImmediate);assert.equal(a.element('#refresh').disabled,false);
+});
+
+test('usage and billing load independently and discard superseded successes and failures',async()=>{
+  const a=adminBrowser();
+  const firstUsage=a.allPending.find(p=>p.url==='/api/admin/usage?days=7');
+  const firstBilling=a.allPending.find(p=>p.url==='/api/admin/billing?days=7');
+  a.days[1].listeners.click();
+  a.allPending.find(p=>p.url==='/api/admin/usage?days=30').resolve(Response.json({simulationStarts:42,firstRecordedDate:'2026-10-04',series:[{date:'2026-10-04',starts:42}],referrals:[{source:'google.com',arrivals:12}]}));
+  a.allPending.find(p=>p.url==='/api/admin/billing?days=30').resolve(Response.json({mode:'test',activeSubscriptions:2,monthlyRecurringCents:500,grossCollectedCents:2000}));
+  await new Promise(setImmediate);
+  assert.equal(a.element('#simulation-starts').textContent,'42');
+  assert.equal(a.element('#paid-subscriptions').textContent,'2');
+  assert.match(a.element('#billing-status').textContent,/TEST MODE/);
+  firstUsage.reject(Error('old outage'));
+  firstBilling.resolve(Response.json({error:'old failure'},{status:503}));
+  await new Promise(setImmediate);
+  assert.equal(a.element('#usage-data').hidden,false);
+  assert.equal(a.element('#billing-data').hidden,false);
+  // A current Cloudflare failure cannot hide either new section.
+  a.pending[1].resolve(Response.json({error:'Cloudflare unavailable'},{status:503}));
+  await new Promise(setImmediate);
+  assert.equal(a.element('#usage-data').hidden,false);
+  assert.equal(a.element('#billing-data').hidden,false);
 });

@@ -1,4 +1,5 @@
 import {setAnnualPersonalSavings} from './savings-targets.js';
+import {reportUsage} from './usage-metrics.js';
 import {frontierCard,frontierPlot,frontierSelection,frontierChoices,selectedFrontierPoint,frontierUi,frontierAmount} from './frontier-view.js';
 import {normalizeInputSources,inputSource,unknownInputPaths,FIELD_GUIDANCE,EARNINGS_EXPLANATION,EARNINGS_POINTS} from './ux-guidance.js';
 import {budgetPlanGaps,spendingInputSummary,needsPreMedicarePremium,inputTask,groupUnknownInputs,OPTIONAL_QUESTIONS,normalizeOptionalAnswers,temporaryRothValues,calculateEverydaySpending,monthlyIncomeSummary} from './plan-review.js';
@@ -1248,6 +1249,8 @@ function syncRoute(){
 }
 function rememberedStep(id){try{const saved=JSON.parse(localStorage.getItem(SETUP_STEP_KEY));return saved?.id===id&&Number.isInteger(saved.section)&&saved.section>=0&&saved.section<=5?saved.section:0;}catch{return 0;}}
 function rememberStep(){if(state.view!=='setup')return;rememberSetupMode(current().id,state.guided);if(!state.guided)return;try{localStorage.setItem(SETUP_STEP_KEY,JSON.stringify({id:current().id,section:state.setupSection}));}catch{}}
+// Keep measurement separate from saved scenarios and calculation messages.
+reportUsage('arrival', document.referrer);
 class CalculationCanceled extends Error{}
 let cancelCalculation=null;
 function runWorker(s,task='simulation',onProgress=null,options=null){return new Promise((resolve,reject)=>{
@@ -1258,6 +1261,7 @@ function runWorker(s,task='simulation',onProgress=null,options=null){return new 
   worker.onmessage=e=>{if(e.data.type==='progress'){onProgress?.(e.data);return;}finish();e.data.type==='result'?resolve(e.data.result):reject(new Error(e.data.message));};
   worker.onerror=e=>{finish();reject(new Error((e.message||'Calculation failed')+'. Reload this page to load the latest calculator, then try again.'));};
   worker.postMessage(options?{scenario:s,task,options}:{scenario:s,task});
+  if(task==='simulation')reportUsage('simulation_start');
 });}
 function startCalculation(message){state.busy=true;state.busyMessage=message;state.progress={fraction:0,detail:''};state.message=message;render({preserveEditor:true});}
 function finishCalculation(){state.busy=false;state.progress=null;render({preserveEditor:true});}
@@ -1429,7 +1433,7 @@ function labAddWhatIf(changes,name=''){
   const w=newWhatIf(current(),changes,name);set.whatIfs.push(w);return w;
 }
 // Generated names follow the changes; a name the visitor typed stays as it is.
-function renameIfAuto(w,before){if(w.name===autoName(before,current())||w.name==='New what-if')w.name=autoName(w.changes,current());}
+function renameIfAuto(w,before){if(w.name===autoName(before,current())||w.name==='New what-if'||w.name==='Retire 2 years later'&&before.retirementDate?.delayMonths===24)w.name=autoName(w.changes,current());}
 function openLever(w,lever){const ui=state.labUi;ui.editingLever=lever.key;ui.leverError='';ui.leverDraft=Object.fromEntries(lever.fields(current(),w.changes[lever.key]).map(f=>[f.name,f.value]));}
 async function labAction(a,el,s){
   const ui=state.labUi,entry=labEntry(s),set=activeLabSet(s),id=el.dataset.id;

@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {JavaRandom,runOne,runSimulation} from '../dist/engine.js';
-import {simulationScenarios} from './fixtures/simulation-scenarios.js';
+import * as reference from './reference/pre-optimization/engine.js';
+import {verifyReference,assertReference} from './reference-checks.js';
 
 // Independent pre-optimization implementation of java.util.Random. Pin every
 // draw, including carry/wraparound, negative/large seeds and cached Gaussians.
@@ -36,13 +36,14 @@ test('mixed uniform, Gaussian and zero-volatility draws retain the exact stream'
   }
 });
 
-const {hashes}=JSON.parse(readFileSync(new URL('./fixtures/simulation-results-sha256.json',import.meta.url)));
-for(const [name,s] of simulationScenarios())test(`Exact pre-optimization results and monthly tax traces: ${name}`,()=>{
-  const result=runSimulation(s);delete result.generatedAtEpochMillis;
-  const paths=[0,1,7].map(i=>runOne(s,new JavaRandom(BigInt(s.seed)+BigInt(i)*-7046029254386353131n),{
-    captureMonthlyBalances:true,captureMonthlyDetails:true,captureTaxDetails:true,captureTodayDollars:true
-  }));
-  // Hashes were recorded from the unchanged engine at sourceCommit in the
-  // fixture. Only the wall-clock generation timestamp is excluded.
-  assert.equal(createHash('sha256').update(JSON.stringify({result,paths})).digest('hex'),hashes[name]);
+verifyReference('pre-optimization');
+const scenarios=JSON.parse(readFileSync(new URL('./fixtures/simulation-reference-inputs.json',import.meta.url)));
+for(const [name,s] of scenarios)test(`Exact pre-optimization results and monthly tax traces: ${name}`,()=>{
+  function capture(engine){
+    const result=engine.runSimulation(structuredClone(s));delete result.generatedAtEpochMillis;
+    const paths=[0,1,7].map(i=>engine.runOne(structuredClone(s),new engine.JavaRandom(BigInt(s.seed)+BigInt(i)*-7046029254386353131n),{
+      captureMonthlyBalances:true,captureMonthlyDetails:true,captureTaxDetails:true,captureTodayDollars:true
+    }));return {result,paths};
+  }
+  assertReference(capture({JavaRandom,runOne,runSimulation}),capture(reference),name);
 });

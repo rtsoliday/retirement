@@ -1,0 +1,26 @@
+Subject: ChatGPT Sites hosting measurements needed for Retirement Forecast MCP
+
+Hello OpenAI Support,
+
+Please route this request to the ChatGPT Sites hosting team.
+
+I own Retirement Forecast, https://retirementforecast.us.
+Site ID: appgprj_6ab98ae02cd481919b2a1d47edb8ee3c
+Live saved version: 118
+Source commit: d5d1c0f2868b3a3059239e9504688596f200feca
+Latest successful deployment: appgdep_6ac3a792740c81918b4d20c19ddfda56
+MCP endpoint: https://retirement-readiness-lab-web.rtsoliday123.chatgpt.site/mcp
+
+We are finishing acceptance testing for two synthetic retirement comparisons. All 740 local tests pass. Hosted repeated calculations, overlap rejection, explicit cancellation, and recovery after disconnect or an abandoned lease have passed. Actual provider CPU-termination recovery has not been verified.
+
+The Sites tools expose request CPU and wall time, but do not expose the effective CPU configuration or peak isolate memory. Could you provide the following evidence, or a supported way for us to obtain it?
+
+1. Confirm whether the deployed Worker has at least 30,000 ms of CPU allowance. Its packaged wrangler configuration requests limits.cpu_ms: 30000.
+2. Measure peak isolate memory for three repeated runs of each approved synthetic 1,000-path comparison (employer Roth and separate couple). Our project's acceptance threshold is below 90 MiB, or 94,371,840 bytes. Please identify the measurement method and Worker version, with CPU and wall times per run.
+3. Help arrange a controlled provider CPU-termination test, followed by successful calculation after our two-minute lease expires, without restarting or redeploying between those requests. A simulated abandoned lease has passed, but does not prove recovery after actual CPU termination. Please agree the controlled test arrangement with me before changing production settings.
+
+The attached retirement-forecast-support.pdf contains the reviewed synthetic requests and sanitized verification evidence from October 5, 2026 (timestamps are UTC). A ZIP with machine-readable JSON is also available if needed. The evidence contains no authentication headers, cookies, access tokens, or personal retirement plans.
+
+These are our project release criteria, not a claim about published Sites guarantees. General MCP calculations remain disabled while we obtain the missing evidence. Owner verification controls and the temporary shortened deadline are currently disabled too (runtime revision 14).
+
+Thank you.

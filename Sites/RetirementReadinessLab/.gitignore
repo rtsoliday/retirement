@@ -1,2 +1,5 @@
 .sites-build/
 .sites-source/
+node_modules/
+admin-stats-tests.log
+mcp-tests.log

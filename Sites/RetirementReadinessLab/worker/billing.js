@@ -1,5 +1,5 @@
 // Stripe grants subscriber access; verified owner identities have complimentary Pro access.
-// Financial scenarios never reach this Worker.
+// Browser forecasts stay local; MCP forecasts use temporary hosted processing.
 import { chatgptPrincipal, firebasePrincipal, principal as requestPrincipal, IdentityKeysUnavailableError, OWNER_CHATGPT_USER_ID, OWNER_GOOGLE_EMAIL, OWNER_FIREBASE_UID } from './auth.js';
 const FREE_PATHS = 100;
 const PRO_PATHS = 10000;
@@ -215,6 +215,17 @@ async function status(request, env, user, isOwner = false) {
     const result = await access(env, user, new URL(request.url).searchParams.get('session_id'), request.headers.get('x-retirement-customer'));
     return json({ tier: result.pro ? 'pro' : 'free', maxPaths: result.pro ? PRO_PATHS : FREE_PATHS, signedIn: true, checkoutAvailable: enabled, billingPortalAvailable: Boolean(result.customerId), billingCustomerId: result.customerId, accountKey: reference(user), accountProvider: user.provider });
   } catch { return json({ signedIn: true, accountKey: reference(user), accountProvider: user.provider, error: 'Could not verify subscription. Please retry.' }, 502); }
+}
+
+// Shared entitlement lookup for authenticated hosted tools. Caller-supplied
+// account IDs, tier claims and customer references never grant Pro access.
+export async function forecastEntitlement(request, env, isOwner = false) {
+  const user = chatgptPrincipal(request);
+  if (!user) throw new Error('Authentication required');
+  if (isOwnerAccount(user) || isOwner) return { user, tier: 'pro', maxPaths: 1000 };
+  if (!env.STRIPE_SECRET_KEY) return { user, tier: 'free', maxPaths: 100 };
+  const result = await access(env, user);
+  return { user, tier: result.pro ? 'pro' : 'free', maxPaths: result.pro ? 1000 : 100 };
 }
 async function checkoutHistory(env, customer, user) {
   const references = new Set([reference(user), customer.metadata?.retirement_site_user_id,
@@ -451,4 +462,4 @@ export async function billing(request, env, pathname, isOwner = false) {
   if (pathname === '/api/billing/portal') return portal(request, env, user);
   return json({ error: 'Not found' }, 404);
 }
-export { access, activeSubscription, customers, safeStripeUrl };
+export { access, activeSubscription, customers, safeStripeUrl, stripe, isProSubscription };

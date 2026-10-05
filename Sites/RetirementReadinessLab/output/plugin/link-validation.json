@@ -1,0 +1,22 @@
+[
+  {
+    "url": "https://retirementforecast.us",
+    "status": 200,
+    "title": "Retirement Forecast - Monte Carlo Simulator"
+  },
+  {
+    "url": "https://retirementforecast.us/support",
+    "status": 200,
+    "title": "Support & billing help — Retirement Forecast"
+  },
+  {
+    "url": "https://retirementforecast.us/privacy",
+    "status": 200,
+    "title": "Privacy notice — Retirement Forecast"
+  },
+  {
+    "url": "https://retirementforecast.us/terms",
+    "status": 200,
+    "title": "Terms of use — Retirement Forecast"
+  }
+]

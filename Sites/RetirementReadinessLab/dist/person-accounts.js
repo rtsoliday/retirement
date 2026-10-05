@@ -5,10 +5,26 @@ import {calendarMonthsBetween,scenarioTimeline,forecastRetirementDate,localCalen
 import {monthlySavings} from './savings.js';
 import {EmployerRothLedger} from './employer-roth.js';
 
+// Shared account-group orders contain no balances or scenario data.
+const QUOTE_ORDERS={Standard:[0,1,2,3],TaxableFirst:[3,0,1,2],RothLast:[0,3,1,2]},CONVERSION_ORDER=[4,3,1,2,0];
+
+// Dates depend on the reviewed scenario, not on random draws or account state.
+// Keep this memo private to one calculation; never retain it between requests.
+export function accountCalendar(s,{reuseDates=true}={}){
+  const timeline=scenarioTimeline(s),today=s.household.asOfDate||localCalendarDate(),start=timeline.startDate||s.household.retirementDate;
+  const startDates=new Map(),todayDates=new Map(),depositYears=new Map();
+  const date=(base,cache,month)=>{if(!reuseDates)return addCalendarMonths(base,month);if(!cache.has(month))cache.set(month,addCalendarMonths(base,month));return cache.get(month);};
+  return {timeline,today,start,
+    startDate:month=>date(start,startDates,month),
+    todayDate:month=>date(today,todayDates,month),
+    depositYear:month=>{if(!reuseDates)return calendarDate(date(today,todayDates,month)).getUTCFullYear();if(!depositYears.has(month))depositYears.set(month,calendarDate(date(today,todayDates,month)).getUTCFullYear());return depositYears.get(month);},
+  };
+}
+
 // Keep separate ownership even though results summarize the household total.
 export class PersonAccounts{
-  constructor(s,b){
-    this.s=s;this.b=b;const t=scenarioTimeline(s),today=s.household.asOfDate||localCalendarDate(),start=t.startDate||s.household.retirementDate;
+  constructor(s,b,calendar=accountCalendar(s)){
+    this.s=s;this.b=b;this.calendar=calendar;const {timeline:t,today,start}=calendar;
     const make=(accounts,history,birthday,date,actualDate,savings,withdrawal,age,birth)=>({pretax:accounts.pretax,roth:accounts.roth,ledger:new RothConversionLedger(history.contributionBasis,history.firstContributionYear,history.conversions),retire:calendarMonthsBetween(start,date),retireAge:calendarMonthsBetween(birthday,date)/12,rule55:withdrawal.ruleOf55Eligible&&calendarDate(actualDate)?.getUTCFullYear()>=birth+55,seppSelected:withdrawal.seppEligible,savings,age,birth,rmd:0,paid:0,sepp:0,seppEnd:0});
     this.people=[make(s.accounts,s.rothHistory,s.household.birthday,forecastRetirementDate(s),s.household.retirementDate,s.contributions,s.withdrawalStrategy,t.retirementAge,t.birthYear)];
     if(s.household.filingStatus==='Married')this.people.push(make(s.spouseAccounts,s.spouseRothHistory,s.household.spouseBirthday,forecastRetirementDate(s,true),s.household.spouseRetirementDate,s.spouseContributions,s.spouseWithdrawal,t.spouseAtRet,t.spouseBirthYear));
@@ -18,7 +34,7 @@ export class PersonAccounts{
   refresh(){this.b.pretax=this.people.reduce((n,p)=>n+p.pretax,0);const ira=this.people.reduce((n,p)=>n+p.roth,0),employer=this.employer.reduce((n,a)=>n+a.balance,0);this.b.roth=ira+employer;if(this.employer.length){this.b.rothIRA=ira;this.b.employerRoth=employer;}}
   grow(rate,cashRate){for(const p of this.people){p.pretax*=1+rate;p.roth*=1+rate;}for(const a of this.employer)a.balance*=1+rate;this.b.taxable*=1+rate;this.b.cash*=1+cashRate;this.refresh();}
   deposits(month,pre=false){
-    let total=0;const offset=pre?month:month+this.preMonths,date=addCalendarMonths(this.today,offset+1),year=calendarDate(date).getUTCFullYear();
+    let total=0;const offset=pre?month:month+this.preMonths,year=this.calendar.depositYear(offset+1);
     for(const p of this.people){if(!pre&&(!p.alive||month>=p.retire))continue;const d=monthlySavings(p.savings,offset);p.pretax+=d.pretax;p.roth+=d.roth;this.b.taxable+=d.taxable;this.b.cash+=d.cash;total+=Object.values(d).reduce((a,v)=>a+v,0);if(d.roth){p.ledger.openingBalance+=d.roth;if(!p.ledger.firstContributionYear)p.ledger.firstContributionYear=year;}}
     for(const a of this.employer){const p=a.person;if(a.rolled||!pre&&(!p.alive||month>=p.retire))continue;const d=(a.annualContribution+a.annualEmployerContribution)/12*Math.pow(1+a.annualIncrease,offset/12);a.balance+=d;a.ledger.deposit(d,year);total+=d;}
     this.refresh();return total;
@@ -48,14 +64,14 @@ export class PersonAccounts{
       p.qualified=p.ledger.isQualified(taxYear,p.ownerAge,p.afterDeath);
     }
     if(this.employer.length){
-      this.date=addCalendarMonths(this.start,month);this.calendarYear=Number(this.date.slice(0,4));this.taxYear=this.calendarYear;
+      this.date=this.calendar.startDate(month);this.calendarYear=Number(this.date.slice(0,4));this.taxYear=this.calendarYear;
       for(const p of this.people){
         p.disabled=this.employer.some(a=>a.person===p&&a.disabled);
         if(p.disabled)p.penalty=p.pretaxPenalty=0;
         p.qualified=p.ledger.isQualified(this.calendarYear,p.ownerAge,p.afterDeath||p.disabled);
       }
       for(const a of this.employer){const p=a.person;
-        a.available=p.afterDeath||this.date>=(a.accessDate||addCalendarMonths(this.start,p.retire));
+        a.available=p.afterDeath||this.date>=(a.accessDate||this.calendar.startDate(p.retire));
         a.qualified=a.ledger.isQualified(this.calendarYear,p.ownerAge,p.afterDeath,p.disabled);
         const rule55=a.ruleOf55Eligible&&Number(a.separationDate.slice(0,4))>=p.birth+55&&this.date>=a.separationDate;
         a.penalty=p.penalty&&!(rule55||p.disabled)?p.penalty:0;
@@ -65,7 +81,7 @@ export class PersonAccounts{
   }
   events(month,pre=false){
     if(!this.employer.length)return {conversion:0,rollover:0};
-    const date=addCalendarMonths(pre?this.today:this.start,month),year=Number(date.slice(0,4));let conversion=0,rollover=0;
+    const date=pre?this.calendar.todayDate(month):this.calendar.startDate(month),year=Number(date.slice(0,4));let conversion=0,rollover=0;
     for(const a of this.employer){const p=a.person,age=p.age+(pre?month-this.preMonths:month)/12;
       if(!pre&&!p.alive)continue;
       if(a.rolloverDate&&!a.rolled&&date>=a.rolloverDate){
@@ -85,7 +101,26 @@ export class PersonAccounts{
       const target=p.rmd*(finalMonth?1:(this.month%12+1)/12),d=Math.min(p.pretax,Math.max(0,target-p.paid));p.pretax-=d;p.paid+=d;rmd+=d;}
     this.refresh();return {sepp,rmd,total:sepp+rmd};
   }
+  probe(gross,cashFirst,conversionTax){
+    // The search only needs income and penalties. Avoid creating four draw
+    // callbacks per probe, and stop visiting pools when the draw is funded.
+    let remaining=Math.max(0,gross),taxableDraw=0,rothTaxableEarnings=0,penalties=0;
+    if(cashFirst&&!conversionTax)remaining-=Math.min(Math.max(0,this.b.cash),remaining);
+    const order=conversionTax?CONVERSION_ORDER:QUOTE_ORDERS[this.s.withdrawalStrategy.withdrawalOrder]??QUOTE_ORDERS.Standard;
+    for(let group=0;group<order.length&&remaining>0;group++){
+      const kind=order[group];
+      if(kind===0){
+        for(let i=0;i<this.people.length&&remaining>0;i++){const p=this.people[i];if(p.protected)continue;const d=Math.min(Math.max(0,p.pretax),remaining);remaining-=d;taxableDraw+=d;penalties+=d*p.pretaxPenalty;}
+      }else if(kind===1){
+        for(let i=0;i<this.people.length&&remaining>0;i++){const p=this.people[i],d=Math.min(Math.max(0,p.roth),remaining);if(d===0)continue;remaining-=d;if(p.qualified)continue;const r=p.ledger.distribution(d,p.roth,this.taxYear);rothTaxableEarnings+=r.taxableEarnings;penalties+=p.penalty*r.penaltyBase;}
+      }else if(kind===2){
+        for(let i=0;i<this.employer.length&&remaining>0;i++){const a=this.employer[i];if(!a.available)continue;const d=Math.min(Math.max(0,a.balance),remaining);if(d===0)continue;remaining-=d;if(a.qualified)continue;const r=a.ledger.distribution(d,a.balance,this.calendarYear);rothTaxableEarnings+=r.taxableEarnings;penalties+=a.penalty*r.penaltyBase;}
+      }else{const key=kind===3?'taxable':'cash';remaining-=Math.min(Math.max(0,this.b[key]),remaining);}
+    }
+    return {taxableDraw,rothTaxableEarnings,penalties};
+  }
   quote(gross,{cashFirst=false,conversionTax=false,capture=true}={}){
+    if(!capture)return this.probe(gross,cashFirst,conversionTax);
     // Probes need only income and penalties; account draw records are needed
     // only for the final plan passed to consume(). Neither form mutates pools.
     let remaining=Math.max(0,gross),taxableDraw=0,rothTaxableEarnings=0,penalties=0;const draws=capture?this.people.map(()=>({pretax:0,roth:0})):null,employerDraws=capture?this.employer.map(()=>0):null,shared=capture?{cash:0,taxable:0}:null;

@@ -1,0 +1,22 @@
+OpenAI Support submission receipt
+Date: October 5, 2026
+Destination: signed-in OpenAI Help Center support chat at https://help.openai.com/en
+Subject: Plugin upload blocked despite approved individual identity verification
+Initial message: publisher-identity-support-request.txt
+Authorization: publisher explicitly replied "yes, send it" after approving the listed account and organization/project information.
+
+Sent follow-up:
+I am uploading a Codex plugin ZIP for publication in the plugin directory, using OpenAI Platform at https://platform.openai.com/plugins and its "Upload new or existing plugin" button. This is the plugin submission flow documented at https://developers.openai.com/plugins/deploy/submission, not the legacy ChatGPT plugin flow or an Agents API tool registration.
+
+The ZIP contains .codex-plugin/plugin.json, .mcp.json, assets/icon.png and LICENSE. I am the organization Owner, and Individual verification is Approved. The gate occurs before file selection or developer-identity selection.
+
+Please escalate this conversation to a human support specialist who can investigate why this approved identity is missing or not recognized by the Codex plugin upload flow. The account email, selected organization/project IDs, exact error, reproduction steps and recent UTC timestamp window are in my initial message. Please confirm that the case has been routed for account-side investigation and provide any available reference number.
+
+Confirmed outcome after selecting Escalate (approximately 18:54 UTC):
+"Escalation requested"
+"Escalated to a support specialist; You can expect a response in the coming days. Replies will also be sent via email. You can add additional comments to this conversation if needed."
+
+Case ID: none displayed. The AI support assistant said it could not issue an official support case ID from the chat.
+Browser conversation: left open for the publisher.
+Status: request sent and human escalation confirmed; the identity mismatch and plugin upload remain unresolved.
+No ZIP, HAR, credentials, private retirement plans or prior provider CPU-verification material was sent with this request.

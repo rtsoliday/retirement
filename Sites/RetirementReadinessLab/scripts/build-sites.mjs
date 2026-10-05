@@ -2,6 +2,7 @@ import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { build } from 'esbuild';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, '.sites-build');
@@ -27,17 +28,20 @@ const index=await readFile(path.join(client,'index.html'),'utf8');
 await writeFile(path.join(client,'index.html'),index.replace(/src="\.\/app\.js(?:\?[^\"]*)?"/,`src="./assets/${release}/app.js"`));
 const workerSource = await readFile(path.join(root, 'worker/index.js'), 'utf8');
 const adminHtml = await readFile(path.join(root, 'dist/admin.html'), 'utf8');
+const verificationHtml = await readFile(path.join(root,'worker/mcp-verification.html'),'utf8');
 if (!workerSource.includes("'__ADMIN_HTML__'")) throw new Error('Missing admin page placeholder in worker/index.js');
 // A replacer function inserts the page literally. A replacement string would
 // expand $&, $' and $$ if the page ever contained them.
-await writeFile(path.join(dist, 'server/index.js'), workerSource.replace("'__ADMIN_HTML__'", () => JSON.stringify(adminHtml)));
-await cp(path.join(root, 'worker/billing.js'), path.join(dist, 'server/billing.js'));
-await cp(path.join(root, 'worker/auth.js'), path.join(dist, 'server/auth.js'));
+if (!workerSource.includes("'__MCP_VERIFICATION_HTML__'")) throw new Error('Missing owner verification placeholder');
+await build({ stdin: { contents: workerSource.replace("'__ADMIN_HTML__'", () => JSON.stringify(adminHtml)).replace("'__MCP_VERIFICATION_HTML__'",()=>JSON.stringify(verificationHtml)), resolveDir: path.join(root, 'worker'), sourcefile: 'index.js', loader: 'js' },
+  outfile: path.join(dist, 'server/index.js'), bundle: true, format: 'esm', platform: 'browser', conditions: ['workerd', 'browser'], target: 'es2022', minify: true });
+await cp(path.join(root, 'drizzle'), path.join(dist, '.openai/drizzle'), { recursive: true });
 await cp(path.join(root, '.openai/hosting.json'), path.join(output, '.openai/hosting.json'));
 await cp(path.join(root, '.openai/hosting.json'), path.join(dist, '.openai/hosting.json'));
 await writeFile(path.join(dist, 'server/wrangler.json'), JSON.stringify({
   main: 'index.js',
   compatibility_date: '2026-09-01',
+  limits: { cpu_ms: 30000 },
   assets: { directory: '../client', binding: 'ASSETS', run_worker_first: true },
 }, null, 2) + '\n');
 console.log(`Prepared Sites Worker build in ${output}`);

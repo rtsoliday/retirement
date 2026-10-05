@@ -1,4 +1,5 @@
 import {runSeparatePeople} from './person-engine.js';
+import {accountCalendar as createAccountCalendar} from './person-accounts.js';
 import {depositSavings,hasFutureSavings} from './savings.js';
 import {setAnnualPersonalSavings} from './savings-targets.js';
 import {buildPathPoints,buildBalanceBands,buildFundingSurvival,medianOfSorted} from './chart-data.js';
@@ -157,13 +158,13 @@ function withdrawalPlan(need,ss,status,other,b,cashFirst,taxInflation,seniors,ta
 const life=[84.6,83.7,82.8,81.8,80.8,79.8,78.8,77.9,76.9,75.9,74.9,73.9,72.9,71.9,70.9,69.9,69,68,67,66,65,64.1,63.1,62.1,61.1,60.2,59.2,58.2,57.3,56.3,55.3,54.4,53.4,52.5,51.5,50.5,49.6,48.6,47.7,46.7,45.7,44.8,43.8,42.9,41.9,41,40,39,38.1,37.1,36.2,35.3,34.3,33.4,32.5,31.6,30.6,29.8,28.9,28,27.1,26.2,25.4,24.5,23.7,22.9,22,21.2,20.4,19.6,18.8,18,17.2,16.4,15.6,14.8,14.1,13.3,12.6,11.9,11.2,10.5,9.9,9.3,8.7,8.1,7.6,7.1,6.6,6.1,5.7,5.3,4.9,4.6,4.3,4,3.7,3.4,3.2,3,2.8,2.6,2.5,2.3,2.2,2.1,2.1,2.1,2,2,2,2,2,1.9,1.9,1.8,1.8,1.6,1.4,1.1,1];
 export function seppPayment(balance,age){const years=life[Math.max(0,Math.floor(age))];if(!years||balance<=0)return 0;return balance/((1-Math.pow(1.05,-years))/.05);}
 
-export function runOne(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails=false,captureTaxDetails=false,captureTodayDollars=false,taxesEnabled=true,horizonReductionYears=0,fixedDeathAges=null,lifespanQuantiles=null,stress=null,captureMetrics=false}={}){
+export function runOne(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails=false,captureTaxDetails=false,captureTodayDollars=false,taxesEnabled=true,horizonReductionYears=0,fixedDeathAges=null,lifespanQuantiles=null,stress=null,captureMetrics=false,accountCalendar}={}){
   if(s.household.separatePeople||hasEmployerRoth(s)){
     // Existing pooled accounts remain primary-owned. Employer plans retain
     // their explicit owners without reinterpreting saved spouse drafts.
     let owned=s;
     if(!s.household.separatePeople){owned=prepareCalendarScenario(structuredClone(s),{today:s.household.asOfDate||localCalendarDate(),needsReview:false});const defaults=baseScenario();owned.household.separatePeople=true;owned.household.spouseRetirementDate=owned.household.retirementDate;owned.household.spouseAlreadyRetired=owned.household.alreadyRetired;for(const key of ['spouseAccounts','spouseRothHistory','spouseIncome','workingIncome','spouseWithdrawal'])owned[key]=defaults[key];}
-    return runSeparatePeople(owned,rng,{captureMonthlyBalances,captureMonthlyDetails,captureTaxDetails,captureTodayDollars,taxesEnabled,horizonReductionYears,fixedDeathAges,lifespanQuantiles,stress,captureMetrics});
+    return runSeparatePeople(owned,rng,{captureMonthlyBalances,captureMonthlyDetails,captureTaxDetails,captureTodayDollars,taxesEnabled,horizonReductionYears,fixedDeathAges,lifespanQuantiles,stress,captureMetrics,accountCalendar});
   }
   const timeline=scenarioTimeline(s),h={...s.household,currentAge:timeline.currentAge,retirementAge:timeline.retirementAge},b={...s.accounts},preMonths=timeline.preMonths;
   const events=planEvents(s,stress),metrics=captureMetrics?pathMetrics():null,order=s.withdrawalStrategy.withdrawalOrder??'Standard',orderOption=order==='Standard'?{}:{order};
@@ -418,13 +419,17 @@ export function planLabSummary(paths,startAge){
   for(let y=0;y<years;y++){const values=metrics.filter(m=>m.taxByYear.length>y).map(m=>m.taxByYear[y]);taxByAge.push({age:startAge+y,median:median(values),count:values.length});}
   return {lifetimeTax:median(metrics.map(m=>m.tax)),surchargeYears:median(metrics.map(m=>m.surchargeYears)),conversions:median(metrics.map(m=>m.conversions)),taxByAge,dollarBasis:'today'};
 }
-export function runSimulation(s,onProgress=()=>{},options={}){
+// Both browser and hosted callers consume the same calculation and summaries.
+// Async callers yield between batches to observe cancellation. Hosted callers
+// supply real I/O checkpoints so their runtime clock can advance as well.
+function* simulationSteps(s,onProgress,options){
   if(usesCalendarDates(s)){s=structuredClone(s);s.household.asOfDate ||= localCalendarDate();}
   const errors=validateScenario(s);if(errors.length)throw new Error(errors.join(' '));
   const n=s.numberOfSimulations,paths=[],endings=[],failures=[];let successes=0;
   const lifespanQuantiles=options.stratifyPreviewLifespans===false?null:previewLifespanQuantiles(n,s.seed);
-  const extra={...(options.stress?{stress:options.stress}:{}),...(options.captureMetrics?{captureMetrics:true}:{})};
-  for(let i=0;i<n;i++){const seed=BigInt(s.seed)+BigInt(i)*STRIDE,path=runOne(s,new JavaRandom(seed),{captureMonthlyBalances:true,captureTodayDollars:true,lifespanQuantiles:lifespanQuantiles?.[i]??null,...extra});paths.push(path);endings.push(Math.max(0,path.yearEnd[path.yearEnd.length-1]));if(path.success)successes++;else if(path.failureAge!==null)failures.push(path.failureAge);if(i%25===0)onProgress((i+1)/n);}
+  const extra={...(s.household.separatePeople?{accountCalendar:options.accountCalendar??createAccountCalendar(s)}:{}),...(options.stress?{stress:options.stress}:{}),...(options.captureMetrics?{captureMetrics:true}:{})};
+  for(let i=0;i<n;i++){options.checkExecution?.();const seed=BigInt(s.seed)+BigInt(i)*STRIDE,path=runOne(s,new JavaRandom(seed),{captureMonthlyBalances:true,captureTodayDollars:true,lifespanQuantiles:lifespanQuantiles?.[i]??null,...extra});paths.push(path);endings.push(Math.max(0,path.yearEnd[path.yearEnd.length-1]));if(path.success)successes++;else if(path.failureAge!==null)failures.push(path.failureAge);if(i%25===0)onProgress((i+1)/n);if((i+1)%25===0)yield;}
+  options.checkExecution?.();
   // Every path is done; the summaries and sensitivity checks follow.
   onProgress(1);
   const {priceIndexes:steadyPriceIndexes,...steadySimulation}=runSteadySimulation(s,{captureTodayDollars:true});
@@ -434,6 +439,19 @@ export function runSimulation(s,onProgress=()=>{},options={}){
   const notFailedByAge=buildFundingSurvival(paths,retirementAge(s));
   const meanPath=meanBalancePath(paths),includePathPoints=options.includePathPoints!==false;
   return {scenarioId:s.id,successProbability:p,medianEndingBalance:medianOfSorted(sorted),steadySimulation,pessimisticEndingBalance:percentile(sorted,.1),optimisticEndingBalance:percentile(sorted,.9),medianFailureAge:failures.length?medianOfSorted(failures):null,failureAgeBuckets,balanceBands:bands,notFailedByAge,meanPath,pathPoints:includePathPoints?buildPathPoints(paths):[],riskBreakdown:options.includeRiskAnalysis===false?null:riskBreakdown(s,paths,lifespanQuantiles),todayDollars:todayDollarSummary(paths,retirementAge(s),steadyPriceIndexes,includePathPoints),...(options.captureMetrics?{planLab:planLabSummary(paths,retirementAge(s))}:{}),...(options.stress?{stress:structuredClone(options.stress)}:{}),provenance:{engineVersion:scenarioEngineVersion(s),engineCadence:'Monthly cashflow model with annual result bands',taxTableVersion:'2026 federal brackets with senior-aware deductions',mortalityModelVersion:'SSA Trustees Alt2 2025 annual death probabilities',randomSeed:s.seed,simulationCount:n},generatedAtEpochMillis:Date.now()};
+}
+
+export function runSimulation(s,onProgress=()=>{},options={}){
+  const steps=simulationSteps(s,onProgress,options);let step;
+  do { step=steps.next(); } while(!step.done);
+  return step.value;
+}
+export async function runSimulationAsync(s,onProgress=()=>{},options={}){
+  const steps=simulationSteps(s,onProgress,options);
+  const yieldExecution=options.yieldExecution??(()=>new Promise(resolve=>setTimeout(resolve,0)));
+  try {
+    for(;;){const step=steps.next();await yieldExecution({done:step.done});options.checkExecution?.();if(step.done)return step.value;}
+  } finally { steps.return(); }
 }
 
 // The candidates a planning-target search examines, in search order.

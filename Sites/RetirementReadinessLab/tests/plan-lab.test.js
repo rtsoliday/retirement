@@ -40,6 +40,52 @@ test('presets skip changes the plan already has; Pro sets start with three and f
   for(const w of pro.sets[0].whatIfs)assert.deepEqual(validateScenario(applyWhatIf(plan(),w.changes)),[]);
 });
 
+test('Retire 2 years later follows the current retirement date after the plan changes',()=>{
+  const s=plan();s.household.retirementDate='2026-11-22';
+  const preset=LAB_PRESETS.find(p=>p.key==='later'),changes=preset.changes(s);
+  s.household.retirementDate='2030-11-22';
+  assert.equal(applyWhatIf(s,changes).household.retirementDate,'2032-11-22');
+  assert.match(labLeverDateDescription(changes,s),/Nov 22, 2032/);
+  assert.equal(s.household.retirementDate,'2030-11-22');
+});
+
+const labLeverDateDescription=(changes,s)=>LAB_LEVERS.find(l=>l.key==='retirementDate').describe(changes.retirementDate,s);
+
+test('saved later presets migrate while named custom dates remain fixed',()=>{
+  const s=plan();s.household.retirementDate='2030-11-22';
+  const raw={[s.id]:{activeSet:'set',sets:[{id:'set',name:'Set',whatIfs:[
+    {id:'later',name:'Retire 2 years later',changes:{retirementDate:'2028-11-22'}},
+    {id:'custom',name:'My chosen date',changes:{retirementDate:'2028-11-22'}}
+  ]}]}};
+  const normalized=normalizeLabSets(raw,[s]),[later,custom]=normalized[s.id].sets[0].whatIfs;
+  assert.equal(applyWhatIf(s,later.changes).household.retirementDate,'2032-11-22');
+  assert.equal(applyWhatIf(s,custom.changes).household.retirementDate,'2028-11-22');
+  const restored=normalizeLabSets(JSON.parse(JSON.stringify(normalized)),[s]);
+  assert.deepEqual(restored,normalized);
+  assert.equal(raw[s.id].sets[0].whatIfs[0].changes.retirementDate,'2028-11-22');
+});
+
+test('editing a relative preset keeps its offset until an explicit new date is chosen',()=>{
+  const s=plan();s.household.retirementDate='2030-11-22';
+  const lever=LAB_LEVERS.find(l=>l.key==='retirementDate'),relative={delayMonths:24};
+  assert.equal(lever.fields(s,relative)[0].value,'2032-11-22');
+  assert.deepEqual(lever.read({date:'2032-11-22'},s,relative),{value:relative});
+  const explicit=lever.read({date:'2028-11-22'},s,relative).value;
+  assert.equal(explicit,'2028-11-22');
+  assert.match(autoName({retirementDate:explicit},s),/^Retire Nov 22, 2028/);
+  assert.equal(autoName({retirementDate:relative},s),'Retire 2 years later');
+  s.household.retirementDate='2034-11-22';
+  assert.equal(applyWhatIf(s,{retirementDate:explicit}).household.retirementDate,'2028-11-22');
+  assert.equal(applyWhatIf(s,{retirementDate:relative}).household.retirementDate,'2036-11-22');
+});
+
+test('relative retirement presets clamp leap days and preserve spouse timing',()=>{
+  const s=plan();s.household.retirementDate='2032-02-29';s.household.spouseRetirementDate='2031-11-22';
+  const changes=LAB_PRESETS.find(p=>p.key==='later').changes(s),next=applyWhatIf(s,changes);
+  assert.equal(next.household.retirementDate,'2034-02-28');
+  assert.equal(next.household.spouseRetirementDate,'2031-11-22');
+});
+
 test('saved sets normalize, cap their sizes and copy with fresh IDs',()=>{
   const s=plan();s.id='p';const many={activeSet:'s3',sets:Array.from({length:12},(_,i)=>({id:'s'+i,name:'Set '+i,whatIfs:Array.from({length:6},(_,j)=>({id:`w${i}-${j}`,name:'W',changes:{claimAge:70,bogus:true}}))}))};
   const clean=normalizeLabSets({p:many,other:many},[s]).p;

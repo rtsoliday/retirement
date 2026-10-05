@@ -7,11 +7,11 @@ import {personSocialSecurity,personPensions} from './person-income.js';
 import {monthly,requireFinite,sum,drawLifetimes,ltcStart,allocation,spendingPath,medicarePremium,seppPayment} from './engine.js';
 import {planEvents,applyMonthlyEvents,pathMetrics} from './plan-events.js';
 
-export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails=false,captureTaxDetails=false,captureTodayDollars=false,taxesEnabled=true,horizonReductionYears=0,fixedDeathAges=null,lifespanQuantiles=null,stress=null,captureMetrics=false}={}){
+export function runSeparatePeople(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails=false,captureTaxDetails=false,captureTodayDollars=false,taxesEnabled=true,horizonReductionYears=0,fixedDeathAges=null,lifespanQuantiles=null,stress=null,captureMetrics=false,accountCalendar}={}){
   const timeline=scenarioTimeline(s),h={...s.household,currentAge:timeline.currentAge,retirementAge:timeline.retirementAge},b={...s.accounts},preMonths=timeline.preMonths;
   const events=planEvents(s,stress),metrics=captureMetrics?pathMetrics():null;
   const preReturns=monthlyRateDistribution(s.market.preRetirementMeanReturn,s.market.preRetirementStdDev),cashGrowth=monthly(.02),incomeTax=taxesEnabled?ordinaryIncomeTax:()=>0;
-  const pools=new PersonAccounts(s,b);
+  const pools=new PersonAccounts(s,b,accountCalendar);
   for(let i=0;i<preMonths;i++){pools.events(i,true);pools.grow(sampleMonthlyRate(preReturns,rng),cashGrowth);pools.deposits(i,true);sum(b);}
   const married=h.filingStatus==='Married',spouseAtRet=timeline.spouseAtRet;
   // The reporting cutoff must not determine death or move terminal care sooner.

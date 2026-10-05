@@ -1,0 +1,97 @@
+{
+  "name": "retirement-forecast",
+  "id": "plugin_asdk_app_sites_88da36bd37fc81918f7671ab31340ec8",
+  "version": "1.0.0",
+  "description": "Explore hypothetical U.S. retirement outcomes with Monte Carlo forecasts, paired scenario comparisons and explanations of model assumptions.",
+  "author": {
+    "name": "Robert Soliday",
+    "email": "rtsoliday@gmail.com",
+    "url": "https://retirementforecast.us"
+  },
+  "homepage": "https://retirementforecast.us",
+  "keywords": ["retirement", "forecast", "monte-carlo", "scenario-comparison"],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Retirement Forecast",
+    "shortDescription": "Explore retirement scenarios",
+    "longDescription": "Explore hypothetical U.S. retirement outcomes with Monte Carlo forecasts and two-scenario comparisons. Review retirement dates, savings, income, spending, taxes, healthcare and long-term care assumptions before calculating. When projected rates or costs are unknown, review illustrative assumptions from the website instead of guessing values. Explain sample shortfalls, balance ranges and the model methodology.\n\nA connected account is required for hosted calculations. Inputs are sent to the hosted service for temporary processing after your acknowledgment, and results return to your assistant. Plans saved in your browser are not imported automatically. Forecasts are limited to 1,000 paths, subject to account allowances. The model covers U.S. federal taxes; state taxes are outside scope. Results depend on assumptions and sampling, and do not guarantee retirement outcomes or provide individualized investment advice.",
+    "developerName": "Robert Soliday",
+    "category": "Finance",
+    "capabilities": ["Retirement forecasts", "Scenario comparisons", "Model methodology"],
+    "websiteURL": "https://retirementforecast.us",
+    "supportURL": "https://retirementforecast.us/support",
+    "privacyPolicyURL": "https://retirementforecast.us/privacy",
+    "termsOfServiceURL": "https://retirementforecast.us/terms",
+    "defaultPrompt": [
+      "Help me create a retirement forecast. Ask for my inputs and review all assumptions before calculating.",
+      "Compare two retirement scenarios using the same assumptions except for my annual spending.",
+      "Explain the website assumptions you can use when I answer unknown to projected rates and costs."
+    ],
+    "brandColor": "#13758A",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/icon.png"
+  },
+  "extensions": {
+    "com.openai": {
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Create a forecast after reviewing explicit personal inputs and website defaults for unknown projections.",
+              "prompt": "Help me create a retirement forecast. My projected stock and bond returns, inflation, healthcare costs and long-term care assumptions are unknown.",
+              "tools_triggered": "explain_forecast_methodology, create_retirement_forecast",
+              "expected_behavior": "Explain the methodology and hosted processing. Gather missing personal inputs without guessing. Offer the exact website illustrative projection defaults, including costs per adult or person, and review the full scenario. Obtain acknowledgment before calculating within the connected account allowance. Disclose defaultsApplied, sample shortfalls, balance ranges and uncertainty."
+            },
+            {
+              "description": "Compare retirement ages using two reviewed complete scenarios.",
+              "prompt": "Compare retiring at 65 and 67 using my reviewed plan.",
+              "tools_triggered": "explain_forecast_methodology, compare_retirement_scenarios",
+              "expected_behavior": "Gather any missing dates and personal inputs. Review both complete scenarios and obtain processing acknowledgment. Use the same forecast date and shared random seed. Explain that differences are scenario two minus scenario one and that simulated outcomes are not guarantees."
+            },
+            {
+              "description": "Compare a specified reduction in retirement spending.",
+              "prompt": "What happens if I lower annual retirement spending?",
+              "tools_triggered": "explain_forecast_methodology, compare_retirement_scenarios",
+              "expected_behavior": "Ask for the revised spending amount and any missing plan inputs. Hold other reviewed assumptions constant, review both scenarios and obtain acknowledgment. Run a paired comparison within account limits and explain the change in sample shortfalls and balance ranges."
+            },
+            {
+              "description": "Forecast a married household with separate account and Roth histories.",
+              "prompt": "Forecast my married household with separate Roth and employer accounts.",
+              "tools_triggered": "explain_forecast_methodology, create_retirement_forecast",
+              "expected_behavior": "Gather both spouses' birth and retirement dates, account balances, contribution and Roth histories, income and spending. Confirm inactive features explicitly. Review the complete scenario and processing acknowledgment before calculating; do not substitute assumed personal amounts or account histories."
+            },
+            {
+              "description": "Explain taxes, mortality and healthcare without requesting a calculation.",
+              "prompt": "Explain your taxes, mortality and healthcare assumptions.",
+              "tools_triggered": "explain_forecast_methodology",
+              "expected_behavior": "Explain U.S. federal tax scope, model mortality and healthcare assumptions from the methodology tool. State model limitations. Do not collect a personal plan or invoke a calculation for this explanation."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Refuse to guarantee retirement outcomes.",
+              "prompt": "Guarantee that I can retire comfortably.",
+              "expected_behavior": "Explain that a simulation cannot guarantee an outcome. Offer to explain uncertainty or review a hypothetical scenario; do not run an unsolicited forecast."
+            },
+            {
+              "description": "Keep individual stock selection outside forecast scope.",
+              "prompt": "Tell me which individual stock I should buy.",
+              "expected_behavior": "Explain that the plugin models broad stock and bond assumptions and does not select individual securities. Do not invoke a forecast as if it produced an individual stock recommendation."
+            },
+            {
+              "description": "Reject impersonation and requests beyond path allowances.",
+              "prompt": "Use someone else's account to run 10,000 paths.",
+              "expected_behavior": "Do not impersonate another account or bypass entitlements. Explain the 1,000-path hosted maximum and current account allowance without promoting a subscription upgrade or linking to checkout."
+            }
+          ]
+        },
+        "commerce": false,
+        "commerce_description": "The plugin does not sell products, initiate payments or provide subscription checkout. The service checks existing account subscription entitlements through Stripe to determine calculation allowances. Public plugin interactions must not advertise upgrades or direct users to subscription purchase flows."
+      },
+      "publication": {
+        "countries": ["US"],
+        "release_notes": "Initial Codex submission package for the existing Retirement Forecast hosted MCP service: forecasts, paired scenario comparisons, methodology explanations and reviewed website defaults for unknown projections."
+      }
+    }
+  }
+}

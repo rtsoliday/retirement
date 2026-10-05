@@ -1,0 +1,39 @@
+{
+  "package": "C:\\github\\retirement\\Sites\\RetirementReadinessLab\\output\\plugin\\retirement-forecast-1.0.0.zip",
+  "sha256": "d719cffa15a87d671e5a04514fea9427a8c016c75ad342d4edd2de2e80f5d903",
+  "bytes": 11881,
+  "entries": [
+    ".codex-plugin/plugin.json",
+    ".mcp.json",
+    "LICENSE",
+    "assets/icon.png"
+  ],
+  "iconPixels": [
+    180,
+    180
+  ],
+  "listingLengths": {
+    "displayName": 19,
+    "shortDescription": 28,
+    "longDescription": 925
+  },
+  "starterPromptLengths": [
+    102,
+    90,
+    95
+  ],
+  "reviewCases": {
+    "positive": 5,
+    "negative": 3
+  },
+  "category": "Finance",
+  "status": "locally validated draft; not uploaded or submitted",
+  "pending": [
+    "publisher and listing review",
+    "dashboard acceptance of Finance category",
+    "reviewer account and review-case runs",
+    "demo recording URL",
+    "developer/domain verification",
+    "dashboard connection, scans and policy review"
+  ]
+}

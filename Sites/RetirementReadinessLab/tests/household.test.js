@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {createHash} from 'node:crypto';
+import {runSimulation as referenceSimulation} from './reference/pre-household/engine.js';
+import {verifyReference,assertReference} from './reference-checks.js';
 import {baseScenario,normalizeScenario,validateScenario,scenarioTimeline,ruleOf55Applies} from '../dist/model.js';
 import {runOne,runSimulation,runSteadySimulation} from '../dist/engine.js';
 import {PersonAccounts} from '../dist/person-accounts.js';
@@ -146,10 +147,12 @@ test('unknown active amounts block, zero is distinct, and inactive spouse inputs
 // lifespans and the pooled pension correction's cache version. These scenarios
 // have no pre-start survivor pension, so their calculated results remain identical.
 test('pre-change complete seeded results remain identical after normalization of old backups',()=>{
+  verifyReference('pre-household');
   const fixtures=JSON.parse(readFileSync(new URL('./fixtures/pre-household-results.json',import.meta.url)));
   for(const f of fixtures){const s=normalizeScenario(f.scenario);assert.equal(s.household.separatePeople,false);const r=runSimulation(s,undefined,{stratifyPreviewLifespans:false});delete r.generatedAtEpochMillis;delete r.todayDollars;
     assert.match(r.provenance.engineVersion,/-survivor-pension-v2$/);
     r.provenance.engineVersion=r.provenance.engineVersion.replace(/-survivor-pension-v2$/,'');
-    assert.equal(createHash('sha256').update(JSON.stringify(r)).digest('hex'),f.sha256,f.name);
+    const reference=referenceSimulation(structuredClone(f.scenario));delete reference.generatedAtEpochMillis;
+    assertReference(r,reference,f.name);
   }
 });

@@ -1,0 +1,36 @@
+Subject: Plugin upload blocked despite approved individual identity verification
+
+Hello OpenAI Support,
+
+I cannot create or upload my Retirement Forecast plugin because OpenAI Platform asks me to complete identity verification even though my individual verification is already approved.
+
+Account email: rtsoliday@gmail.com
+Selected organization: Personal
+Organization ID: org-KUnO6AjtTff4JYpU6kQedNSf
+Selected project: Default project
+Project ID: proj_81UDCB3ZrO9y8bpP5CRybkaY
+Organization role: Owner
+Affected page: https://platform.openai.com/plugins
+Recent reproduction window: October 5, 2026, 18:41:37-18:42:34 UTC
+Browser / operating system: Brave on Windows
+Request ID: not exposed by the UI; the reproduction timestamp window is provided instead.
+
+Steps and observed results:
+1. In the selected Personal organization, Organization settings > General > Verifications shows "Verified" and "Individual - Approved."
+2. People & Permissions shows my signed-in account as Owner.
+3. On Plugins, I select "Upload new or existing plugin."
+4. The portal displays:
+   "Complete identity verification"
+   "You need a verified developer identity before you can create or upload a plugin."
+5. Selecting Continue returns to the same organization settings page, which still shows Individual - Approved.
+
+The failure persists after a fresh page load and after signing out and signing back in. It occurs before I can select a ZIP file or choose a developer identity. No plugin draft has been created or uploaded through this portal.
+
+Expected behavior: my approved individual developer identity should be available for selection so I can upload the plugin ZIP.
+
+Please investigate why the plugin-upload flow does not recognize my approved individual verification. Please check the identity's association with my account and selected organization/project and correct the missing or inconsistent developer-identity status. If another verification step is required, please identify the exact step, since the Individual verification entry is already marked Approved.
+
+Please provide a support case ID so I can reference this issue in follow-ups.
+
+Thank you,
+Robert Soliday

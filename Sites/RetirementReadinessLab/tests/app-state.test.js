@@ -331,6 +331,19 @@ async function completeCachedRun(a){
   await pending;await a.state.resultSavingPromise;return a.state.results.get(a.current().id);
 }
 
+test('usage counts worker starts once and excludes blocked or duplicate run requests',async()=>{
+  const events=[],a=app(null,{socialActions:{reportUsage:event=>events.push(event)}});
+  assert.deepEqual(events,['arrival']);
+  a.current().spending.annualBaseSpending=-1;
+  await a.run();assert.equal(a.workers.length,0);assert.deepEqual(events,['arrival']);
+  a.current().spending.annualBaseSpending=40000;
+  const pending=a.run();assert.equal(a.workers.length,1);
+  await a.run();assert.deepEqual(events,['arrival','simulation_start']);
+  const w=a.workers[0];w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});
+  await pending;
+  assert.deepEqual(events,['arrival','simulation_start']);
+});
+
 async function twoCachedPlans(){
   const resultRecords=new Map(),a=app(null,{resultRecords});
   await completeCachedRun(a);await a.click('new-scenario');await completeCachedRun(a);
@@ -720,7 +733,7 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
     sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value)},socialState:()=>({...identity}),
     navigator:{locks},localStorage:{getItem:key=>key==='retirement-readiness-lab-sites-v1'?readStored():preferences.get(key)||null,setItem(key,value){if(key!=='retirement-readiness-lab-sites-v1'){preferences.set(key,value);return;}if(storage.fail)throw new Error('QuotaExceededError');if(Object.hasOwn(storage,'raw'))storage.raw=value;else stored=value;},removeItem:key=>preferences.delete(key)},window:{addEventListener(name,handler){windowListeners[name]=handler;},scrollTo(){}},
     document,
-    chartCard:()=>'',mountCharts(){},disposeCharts(){},initializeSocialAuth:()=>new Promise(()=>{}),fetch,authHeaders:async()=>({}),...socialActions,
+    chartCard:()=>'',mountCharts(){},disposeCharts(){},reportUsage(){},initializeSocialAuth:()=>new Promise(()=>{}),fetch,authHeaders:async()=>({}),...socialActions,
     Worker:class{constructor(){workers.push(this);}postMessage(data){this.data=data;}terminate(){this.terminated=true;}},
   });
   const source=readFileSync(new URL('../dist/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replaceAll('import.meta.url',JSON.stringify(new URL('../dist/app.js',import.meta.url).href));
@@ -3035,6 +3048,27 @@ test('applying savings marks only the changed employer Roth deposit field Estima
   await a.click('apply-savings-frontier-target');assert.equal(s.employerRothAccounts[0].annualContribution,30000);assert.equal(s.employerRothAccounts[0].annualEmployerContribution,2000);assert.equal(s.employerRothAccounts[0].annualIncrease,.04);
   assert.equal(a.saved().inputSources[s.id]['employerRothAccounts.0.annualContribution'],'Estimated');assert.notEqual(a.saved().inputSources[s.id]['employerRothAccounts'],'Estimated');
   assert.equal(s.household.spouseRetirementDate,before.household.spouseRetirementDate);assert.deepEqual(structuredClone(s.spouseContributions),before.spouseContributions);assert.deepEqual(structuredClone(s.spending),before.spending);
+});
+
+test('saved later presets follow the current plan in cards, simulation, backups and date edits',async()=>{
+  const s=model.prepareCalendarScenario(model.baseScenario());s.household.retirementDate='2030-11-22';s.numberOfSimulations=4;s.simulationPathsCustomized=true;
+  const saved={scenarios:[s],selectedId:s.id,labSets:{[s.id]:{activeSet:'set',sets:[{id:'set',name:'Set',whatIfs:[{id:'later',name:'Retire 2 years later',changes:{retirementDate:'2028-11-22'}}]}]}}};
+  const a=app(saved);a.state.access.tier='pro';a.state.view='lab';
+  const w=a.labViewModel().set.whatIfs[0];
+  assert.deepEqual(structuredClone(w.changes.retirementDate),{delayMonths:24});
+  assert.match(a.lab(),/Retire Nov 22, 2032/);assert.doesNotMatch(a.lab(),/Retire Nov 22, 2028/);
+  const dates=[];await settle(a,a.runLab(),worker=>{dates.push(worker.data.scenario.household.retirementDate);return runSimulation(worker.data.scenario);});
+  assert.deepEqual(dates,['2030-11-22','2032-11-22']);
+  await a.change('#main',{dataset:{field:'household.retirementDate',type:'date'},value:'2034-11-22'});
+  assert.match(a.lab(),/Retire Nov 22, 2036/);assert.equal(a.state.labResults.bySet.size,0);
+  const restored=app(a.saved());restored.state.access.tier='pro';assert.match(restored.lab(),/Retire Nov 22, 2036/);
+  await a.click('lab-edit',{id:w.id});await setLever(a,'retirementDate',{date:'2036-11-22'});
+  assert.deepEqual(structuredClone(w.changes.retirementDate),{delayMonths:24});assert.equal(w.name,'Retire 2 years later');
+  await setLever(a,'retirementDate',{date:'2028-11-22'});
+  assert.equal(w.changes.retirementDate,'2028-11-22');assert.match(w.name,/^Retire Nov 22, 2028/);
+  const fixed=app(a.saved());fixed.state.access.tier='pro';assert.equal(fixed.labViewModel().set.whatIfs[0].changes.retirementDate,'2028-11-22');
+  await a.change('#main',{dataset:{labWhatifName:''},value:'My exact date'});await setLever(a,'retirementDate',{date:'2029-11-22'});
+  assert.equal(w.name,'My exact date');
 });
 
 test('comparison sets are Pro, persist with the plan, survive reload, copies and backups, and reject malformed entries',async()=>{

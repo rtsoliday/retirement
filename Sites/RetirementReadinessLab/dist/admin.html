@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <meta name="theme-color" content="#0e463c">
-  <title>Site traffic — Retirement Forecast - Monte Carlo Simulator</title>
+  <title>Site administration — Retirement Forecast</title>
   <link rel="icon" type="image/svg+xml" href="/forecast-fan.svg?v=33">
   <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=33">
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=33">
@@ -24,8 +24,8 @@
       <div class="admin-head">
         <div>
           <p class="kicker">Site administration</p>
-          <h1>Traffic over time</h1>
-          <p>Cloudflare traffic for retirementforecast.us and its www address. Only the site owner can view these figures.</p>
+          <h1>Site activity &amp; revenue</h1>
+          <p>Traffic, planner usage and Pro subscriptions. Only the site owner can view these figures.</p>
         </div>
         <a class="secondary admin-cloudflare-link" href="https://dash.cloudflare.com/a3c03e9b8c31326489c36e60ec3f3e47/retirementforecast.us/analytics/traffic" target="_blank" rel="noopener noreferrer">Open Cloudflare dashboard ↗</a>
       </div>
@@ -58,6 +58,39 @@
           <div class="table-wrap"><table><thead><tr><th scope="col">Date (UTC)</th><th scope="col">Page views</th><th scope="col">Unique visitor IPs</th></tr></thead><tbody id="daily-rows"></tbody></table></div>
         </section>
       </div>
+      <section class="card admin-section">
+        <h2>Planner usage</h2>
+        <p id="usage-status" class="admin-status" role="status">Loading planner usage…</p>
+        <div id="usage-data" hidden>
+          <div class="admin-metrics"><section class="admin-metric"><span>Simulations started</span><strong id="simulation-starts">—</strong><small>Run simulation and explicit Plan Lab runs; excludes automatic live estimates and target searches.</small></section></div>
+          <p id="usage-period" class="admin-period"></p>
+          <div id="starts-chart" class="admin-chart" role="img" aria-label="Daily simulation starts"></div>
+          <h3>Referral sources</h3>
+          <div class="table-wrap"><table><thead><tr><th scope="col">Source</th><th scope="col">Planner arrivals</th></tr></thead><tbody id="referral-rows"></tbody></table></div>
+          <p class="admin-definition">Counts start with this release. Each planner page load from an external source or without a referrer is an arrival, not a unique visitor. Internal navigation is excluded. Missing referrers appear as Direct / unknown. Browser blocking and offline use can reduce counts. ChatGPT-signed-in owner activity is excluded; other owner use and automated events may be counted. Only referral hostnames and event counts are stored; no plan inputs or results are uploaded.</p>
+        </div>
+      </section>
+      <section class="card admin-section">
+        <h2>Assistant forecast tools</h2>
+        <p id="mcp-status" class="admin-status" role="status">Loading assistant tool usage…</p>
+        <div id="mcp-data" hidden>
+          <div class="admin-metrics"><section class="admin-metric"><span>Calculation calls</span><strong id="mcp-calls">—</strong></section><section class="admin-metric"><span>Completed</span><strong id="mcp-completed">—</strong></section></div>
+          <div class="table-wrap"><table><thead><tr><th scope="col">Tool</th><th scope="col">Outcome</th><th scope="col">Duration</th><th scope="col">Calls</th></tr></thead><tbody id="mcp-rows"></tbody></table></div>
+          <p class="admin-definition">Hosted calculation attempts that reach execution, including owner tests. A comparison counts as one call. Discovery, methodology, authentication rejection and schema rejection are excluded. Aggregate counts contain no forecast inputs, results or account identifiers. Browser simulations are counted separately.</p>
+        </div>
+      </section>
+      <section class="card admin-section">
+        <h2>Pro subscriptions &amp; revenue</h2>
+        <p id="billing-status" class="admin-status" role="status">Loading Stripe figures…</p>
+        <div id="billing-data" hidden>
+          <div class="admin-metrics">
+            <section class="admin-metric"><span>Active paid Pro subscriptions</span><strong id="paid-subscriptions">—</strong><small>Current snapshot; excludes trials, zero-price plans and complimentary access.</small></section>
+            <section class="admin-metric"><span>Monthly recurring value</span><strong id="monthly-revenue">—</strong><small>Current recurring list prices before discounts or tax; yearly plans divided by 12.</small></section>
+            <section class="admin-metric"><span>Gross collected in range</span><strong id="collected-revenue">—</strong><small>Pro invoice payments by payment date, including tax; before refunds and fees. USD.</small></section>
+          </div>
+          <p class="admin-definition">Subscriptions are counted, not distinct people. Scheduled cancellations remain active until their paid access ends. Gross collected includes payments for subscriptions that have since ended. Test-mode figures are labeled and do not represent real revenue.</p>
+        </div>
+      </section>
       <p class="admin-definition">Cloudflare counts page views when it serves an HTML page through the custom domain. The planner's internal tabs do not each count as a new page view. Unique visitor IPs are an estimate of people, not a person-level count; bots, shared networks, and changing IP addresses can affect it. Visits to the separate chatgpt.site address are outside these figures. Today is partial, and Cloudflare may report data with a delay.</p>
     </main>
     <footer><span>© 2026 Robert Soliday. All rights reserved. <a href="/license.html" rel="license">License terms</a></span><span><a href="/index.html">Return to planner</a></span><nav class="footer-links" aria-label="Support and policies"><a href="/support.html">Support</a><a href="/privacy.html">Privacy</a><a href="/terms.html">Terms of use</a><a href="/license.html" rel="license">Code license</a><a href="/methodology.html">Model scope</a></nav></footer>

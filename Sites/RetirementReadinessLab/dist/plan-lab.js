@@ -11,6 +11,10 @@ const int=v=>{const n=Number(String(v??'').trim());return String(v??'').trim()!=
 const amount=v=>{const n=parseMoneyInput(String(v??''));return String(v??'').trim()!==''&&Number.isFinite(n)&&n>=0&&n<=MAX_DOLLAR_AMOUNT?n:null;};
 const choice=(options,v)=>options.find(([value])=>String(value)===String(v))?.[0];
 const retired=s=>s.household.alreadyRetired;
+// Presets follow the plan; dates explicitly selected in the editor stay fixed.
+const retirementDelay=v=>v!==null&&typeof v==='object'&&!Array.isArray(v)&&Number.isInteger(v.delayMonths)&&v.delayMonths>0&&v.delayMonths<=1200;
+const retirementDateValue=(s,v)=>retirementDelay(v)?addCalendarMonths(forecastRetirementDate(s),v.delayMonths):v;
+const retirementDelayLabel=v=>v.delayMonths%12===0?`Retire ${v.delayMonths/12} year${v.delayMonths===12?'':'s'} later`:`Retire ${v.delayMonths} month${v.delayMonths===1?'':'s'} later`;
 
 const ORDER_LABELS={Standard:'Pre-tax, then Roth, then taxable',TaxableFirst:'Taxable, then pre-tax, then Roth',RothLast:'Pre-tax, then taxable, Roth last'};
 const ROTH_OPTIONS=[['off','Off'],['0.12','Up to the 12% bracket'],['0.22','Up to the 22% bracket'],['0.24','Up to the 24% bracket']];
@@ -29,10 +33,10 @@ const schedulePercents=a=>ALLOCATION_KEYS.map(k=>stockPercent(a[k])).join('/')+'
 export const LAB_LEVERS=[
   {key:'retirementDate',group:'Timing',label:'Retirement date',available:s=>!retired(s),
     current:s=>`${dateLabel(forecastRetirementDate(s))} · age ${ageLabel(primaryRetirementAge(s))}`,
-    fields:(s,v)=>[{name:'date',label:'Retirement date to test',type:'date',value:v??forecastRetirementDate(s),min:localCalendarDate()}],
-    read:(d,s)=>{const date=d.date??'';return calendarDate(date)&&date>=localCalendarDate()?{value:date}:{error:'Choose a retirement date today or later.'};},
-    apply:(s,v)=>{s.household.retirementDate=v;s.household.alreadyRetired=false;syncCalendarAges(s);},
-    describe:(v,s)=>`Retire ${dateLabel(v)}${s.household.birthday?` · age ${ageLabel(calendarMonthsBetween(s.household.birthday,v)/12)}`:''}`},
+    fields:(s,v)=>[{name:'date',label:'Retirement date to test',type:'date',value:retirementDateValue(s,v??forecastRetirementDate(s)),min:localCalendarDate()}],
+    read:(d,s,v)=>{const date=d.date??'';return calendarDate(date)&&date>=localCalendarDate()?{value:retirementDelay(v)&&date===retirementDateValue(s,v)?structuredClone(v):date}:{error:'Choose a retirement date today or later.'};},
+    apply:(s,v)=>{s.household.retirementDate=retirementDateValue(s,v);s.household.alreadyRetired=false;syncCalendarAges(s);},
+    describe:(v,s)=>{const date=retirementDateValue(s,v);return `Retire ${dateLabel(date)}${s.household.birthday?` · age ${ageLabel(calendarMonthsBetween(s.household.birthday,date)/12)}`:''}`;}},
   {key:'claimAge',group:'Timing',label:'Social Security claiming age',available:()=>true,
     current:s=>`Age ${s.socialSecurity.claimAge}`,
     fields:(s,v)=>[{name:'age',label:'Claiming age',type:'select',value:String(v??s.socialSecurity.claimAge),options:[62,63,64,65,66,67,68,69,70].map(a=>[String(a),'Age '+a])}],
@@ -119,7 +123,7 @@ export const labLever=key=>leverMap.get(key);
 
 // One-click starting points; the first six match the earlier quick comparisons.
 export const LAB_PRESETS=[
-  {key:'later',label:'Retire 2 years later',changes:s=>retired(s)?null:{retirementDate:addCalendarMonths(forecastRetirementDate(s),24)}},
+  {key:'later',label:'Retire 2 years later',changes:s=>retired(s)?null:{retirementDate:{delayMonths:24}}},
   {key:'spend-less',label:'Spend 5% less',changes:s=>({annualBaseSpending:Math.round(s.spending.annualBaseSpending*.95)})},
   {key:'claim-70',label:'Claim Social Security at 70',changes:s=>s.socialSecurity.claimAge===70?null:{claimAge:70}},
   {key:'health',label:'Higher healthcare costs',changes:()=>({healthcareChange:.25})},
@@ -139,7 +143,7 @@ export function whatIfErrors(base,changes){
   return unavailable.length?unavailable:validateScenario(applyWhatIf(base,changes));
 }
 export const describeChanges=(changes,s)=>LAB_LEVERS.filter(l=>Object.hasOwn(changes,l.key)).map(l=>l.describe(changes[l.key],s));
-export function autoName(changes,s){const parts=describeChanges(changes,s);return parts.length?parts.join(' + ').slice(0,80):'New what-if';}
+export function autoName(changes,s){const parts=LAB_LEVERS.filter(l=>Object.hasOwn(changes,l.key)).map(l=>l.key==='retirementDate'&&retirementDelay(changes[l.key])?retirementDelayLabel(changes[l.key]):l.describe(changes[l.key],s));return parts.length?parts.join(' + ').slice(0,80):'New what-if';}
 
 let idCounter=0;
 export const labId=prefix=>`${prefix}-${Date.now().toString(36)}-${(++idCounter).toString(36)}${Math.random().toString(36).slice(2,6)}`;
@@ -161,7 +165,7 @@ const savedChoice=(options,v)=>options.some(([value])=>Number(value)===v);
 // Check storage shape and supported values independently of the current plan:
 // a valid older date or expense still needs to be available for editing.
 const CHANGE_VALIDATORS={
-  retirementDate:v=>typeof v==='string'&&Boolean(calendarDate(v)),
+  retirementDate:v=>typeof v==='string'&&Boolean(calendarDate(v))||retirementDelay(v),
   claimAge:v=>Number.isInteger(v)&&v>=62&&v<=70,
   partTimeIncome:v=>savedObject(v)&&savedAmount(v.annualNet)&&savedAge(v.endAge),
   annualBaseSpending:savedAmount,
@@ -182,6 +186,13 @@ function cleanChanges(raw){
   const out={};for(const [key,value] of Object.entries(raw))if(Object.hasOwn(CHANGE_VALIDATORS,key)&&CHANGE_VALIDATORS[key](value))out[key]=structuredClone(value);
   return out;
 }
+function savedWhatIf(w){
+  const name=typeof w.name==='string'&&w.name.trim()?w.name.trim().slice(0,80):'What-if',changes=cleanChanges(w.changes);
+  // Older built-in later comparisons stored an absolute date while retaining
+  // their relative name. Restore that preset's intended meaning on load.
+  if(name==='Retire 2 years later'&&typeof changes.retirementDate==='string')changes.retirementDate={delayMonths:24};
+  return {id:w.id,name,changes};
+}
 export function normalizeLabSets(raw,scenarios){
   return Object.fromEntries(scenarios.flatMap(s=>{
     const entry=raw&&typeof raw==='object'&&Object.hasOwn(raw,s.id)?raw[s.id]:null;
@@ -189,7 +200,7 @@ export function normalizeLabSets(raw,scenarios){
     const ids=new Set();
     const sets=entry.sets.filter(x=>x&&typeof x==='object'&&typeof x.id==='string'&&!ids.has(x.id)&&ids.add(x.id)).slice(0,LAB_MAX_SETS).map(x=>{
       const whatIds=new Set();
-      return {id:x.id,name:typeof x.name==='string'&&x.name.trim()?x.name.trim().slice(0,60):'Comparison set',whatIfs:(Array.isArray(x.whatIfs)?x.whatIfs:[]).filter(w=>w&&typeof w==='object'&&typeof w.id==='string'&&!whatIds.has(w.id)&&whatIds.add(w.id)).slice(0,LAB_MAX_WHAT_IFS).map(w=>({id:w.id,name:typeof w.name==='string'&&w.name.trim()?w.name.trim().slice(0,80):'What-if',changes:cleanChanges(w.changes)}))};
+      return {id:x.id,name:typeof x.name==='string'&&x.name.trim()?x.name.trim().slice(0,60):'Comparison set',whatIfs:(Array.isArray(x.whatIfs)?x.whatIfs:[]).filter(w=>w&&typeof w==='object'&&typeof w.id==='string'&&!whatIds.has(w.id)&&whatIds.add(w.id)).slice(0,LAB_MAX_WHAT_IFS).map(savedWhatIf)};
     });
     if(!sets.length)return [];
     return [[s.id,{activeSet:sets.some(x=>x.id===entry.activeSet)?entry.activeSet:sets[0].id,sets}]];
