@@ -93,7 +93,15 @@ export class PersonAccounts{
     const takePretax=()=>this.people.forEach((p,i)=>{if(p.protected)return;const d=Math.min(Math.max(0,p.pretax),remaining);if(capture)draws[i].pretax=d;remaining-=d;taxableDraw+=d;penalties+=d*p.pretaxPenalty;});
     const takeRoth=()=>this.people.forEach((p,i)=>{const d=Math.min(Math.max(0,p.roth),remaining);if(d===0)return;const r=p.ledger.distribution(d,p.roth,this.taxYear,{qualified:p.qualified});if(capture)draws[i].roth=d;remaining-=d;rothTaxableEarnings+=r.taxableEarnings;penalties+=p.penalty*r.penaltyBase;});
     const takeEmployer=()=>this.employer.forEach((a,i)=>{if(!a.available)return;const d=Math.min(Math.max(0,a.balance),remaining);if(d===0)return;const r=a.ledger.distribution(d,a.balance,this.calendarYear,{qualified:a.qualified});if(capture)employerDraws[i]=d;remaining-=d;rothTaxableEarnings+=r.taxableEarnings;penalties+=a.penalty*r.penaltyBase;});
-    if(conversionTax){takeShared('cash');takeShared('taxable');takeRoth();takeEmployer();takePretax();}else{if(cashFirst)takeShared('cash');takePretax();takeRoth();takeEmployer();takeShared('taxable');if(!cashFirst)takeShared('cash');}
+    const order=this.s.withdrawalStrategy.withdrawalOrder??'Standard';
+    if(conversionTax){takeShared('cash');takeShared('taxable');takeRoth();takeEmployer();takePretax();}
+    else{
+      if(cashFirst)takeShared('cash');
+      if(order==='TaxableFirst'){takeShared('taxable');takePretax();takeRoth();takeEmployer();}
+      else if(order==='RothLast'){takePretax();takeShared('taxable');takeRoth();takeEmployer();}
+      else{takePretax();takeRoth();takeEmployer();takeShared('taxable');}
+      if(!cashFirst)takeShared('cash');
+    }
     // An unresolved gap is recorded as negative cash and causes a shortfall.
     if(capture)shared.cash+=remaining;
     return capture?{gross,taxableDraw,rothTaxableEarnings,penalties,draws,employerDraws,shared}:{taxableDraw,rothTaxableEarnings,penalties};

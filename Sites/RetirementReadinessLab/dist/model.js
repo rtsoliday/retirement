@@ -5,8 +5,25 @@ export const ENGINE_VERSION = '2026.09-calendar-dates';
 export const scenarioEngineVersion=s=>{
   const version=s.household.alreadyRetired||s.household.separatePeople&&s.household.filingStatus==='Married'&&s.household.spouseAlreadyRetired?'2026.10-retired-forecast':s.household.separatePeople?'2026.10-separate-people':hasFutureSavings(s)?'2026.10-savings-contributions':ENGINE_VERSION;
   // Saved results predating these calculation corrections need a rerun.
-  return version+(s.household.separatePeople?'-medicare-rmd-v2':'-survivor-pension-v2')+(hasEmployerRoth(s)?'-employer-roth-v1':'');
+  return version+(s.household.separatePeople?'-medicare-rmd-v2':'-survivor-pension-v2')+(hasEmployerRoth(s)?'-employer-roth-v1':'')+(usesPlanLabInputs(s)?partTimeIncomeActive(s)?'-plan-lab-v2':'-plan-lab-v1':'');
 };
+export const WITHDRAWAL_ORDERS = ['Standard', 'TaxableFirst', 'RothLast'];
+export const HOME_PLAN_MODES = ['downsize', 'rent'];
+export const MAX_ONE_TIME_EXPENSES = 12;
+// Part-time work, one-time costs, a planned home sale and a withdrawal order
+// are off by default, so plans that leave them alone calculate exactly as before.
+export const partTimeIncomeActive = s => s.partTimeIncome?.annualNet > 0 && s.partTimeIncome.endAge > 0;
+export const homePlanActive = s => s.homePlan?.saleAge > 0;
+export const usesPlanLabInputs = s => partTimeIncomeActive(s) || (s.oneTimeExpenses?.length ?? 0) > 0 || homePlanActive(s) || (s.withdrawalStrategy?.withdrawalOrder ?? 'Standard') !== 'Standard';
+// Result fingerprints omit these inputs while they are unused, so results saved
+// before the fields existed still match.
+export function omitUnusedPlanLabInputs(s) {
+  if (!partTimeIncomeActive(s)) delete s.partTimeIncome;
+  if (!s.oneTimeExpenses?.length) delete s.oneTimeExpenses;
+  if (!homePlanActive(s)) delete s.homePlan;
+  if ((s.withdrawalStrategy?.withdrawalOrder ?? 'Standard') === 'Standard') delete s.withdrawalStrategy?.withdrawalOrder;
+  return s;
+}
 export const ROTH_CONVERSION_RATES = [.10,.12,.22,.24,.32,.35,.37];
 // Retained across engine revisions for repeatable scenario comparisons.
 // Android still uses 20260429.
@@ -138,8 +155,11 @@ export function baseScenario() {
     market: {preRetirementMeanReturn: .133, preRetirementStdDev: .162, stockMeanReturn: .133, stockStdDev: .162, bondMeanReturn: .03, bondStdDev: .06},
     postRetirementAllocation: {stockUnder30x: 1, stock30xTo35x: .9, stock35xTo40x: .8, stock40xTo45x: .7, stock45xTo50x: .6, stock50xOrMore: .5},
     rothConversion: {enabled: false, marginalRateCap: .22},
-    withdrawalStrategy: {useCashReserveDuringDrawdowns: false, drawdownTrigger: -.01, applyEarlyWithdrawalPenalty: true, ruleOf55Eligible: false, seppEligible: false},
+    withdrawalStrategy: {useCashReserveDuringDrawdowns: false, drawdownTrigger: -.01, applyEarlyWithdrawalPenalty: true, ruleOf55Eligible: false, seppEligible: false, withdrawalOrder: 'Standard'},
     longTermCare: {enabled: true, annualCost: 100000, averageDurationYears: 3, averageDurationMonths: 0},
+    partTimeIncome: {annualNet: 0, endAge: 0},
+    oneTimeExpenses: [],
+    homePlan: {saleAge: 0, mode: 'downsize', downsizeShare: .5, monthlyRent: 0},
     numberOfSimulations: FREE_SIMULATION_PATHS, simulationPathsCustomized: false, seed: DEFAULT_SEED
   };
 }
@@ -254,7 +274,13 @@ export function validateScenarioStructure(s) {
   const wrongTypes=[];
   (function compare(expected,actual,path){for(const [key,value] of Object.entries(expected)){if(value===null)continue;const next=path?`${path}.${key}`:key;if(Array.isArray(value)){if(!Array.isArray(actual?.[key]))wrongTypes.push(next);}else if(typeof value==='object'){if(actual?.[key]&&typeof actual[key]==='object'&&!Array.isArray(actual[key]))compare(value,actual[key],next);else wrongTypes.push(next);}else if(typeof actual?.[key]!==typeof value)wrongTypes.push(next);}})(TYPE_TEMPLATE,s,'');
   if (wrongTypes.length) return [`These assumptions have the wrong type: ${wrongTypes.join(', ')}.`];
-  return [...validateBudgetStructure(s.budget),...validateRothHistoryStructure(s.rothHistory),...validateRothHistoryStructure(s.spouseRothHistory),...validateEmployerRoth(s.employerRothAccounts)];
+  return [...validateBudgetStructure(s.budget),...validateRothHistoryStructure(s.rothHistory),...validateRothHistoryStructure(s.spouseRothHistory),...validateEmployerRoth(s.employerRothAccounts),...validateOneTimeExpensesStructure(s.oneTimeExpenses)];
+}
+
+export function validateOneTimeExpensesStructure(list) {
+  if(!Array.isArray(list))return ['One-time expenses must be an array.'];
+  if(list.length>MAX_ONE_TIME_EXPENSES)return [`Use at most ${MAX_ONE_TIME_EXPENSES} one-time expenses.`];
+  return list.some(item=>!item||typeof item!=='object'||Array.isArray(item)||typeof item.age!=='number'||typeof item.amount!=='number'||typeof (item.label??'')!=='string')?['Each one-time expense needs a numeric age and amount.']:[];
 }
 
 export function validateRothHistoryStructure(history) {
@@ -347,6 +373,12 @@ export function validateScenario(s) {
   if (s.rothConversion.enabled && !ROTH_CONVERSION_RATES.some(x=>Math.abs(x-s.rothConversion.marginalRateCap)<.0001)) errors.push('Roth conversion cap must be 10%, 12%, 22%, 24%, 32%, 35%, or 37%.');
   if (s.longTermCare.enabled && (s.longTermCare.annualCost < 0 || s.longTermCare.averageDurationYears < 1 || s.longTermCare.averageDurationYears + s.longTermCare.averageDurationMonths/12 > 10)) errors.push('Long-term care cost or duration is invalid.');
   if (s.withdrawalStrategy.drawdownTrigger < -.50 || s.withdrawalStrategy.drawdownTrigger > .25) errors.push('Cash drawdown trigger is outside the supported range.');
+  if (!WITHDRAWAL_ORDERS.includes(s.withdrawalStrategy.withdrawalOrder)) errors.push('Withdrawal order must be Standard, TaxableFirst, or RothLast.');
+  const work=s.partTimeIncome;
+  if (work.annualNet < 0 || work.annualNet > MAX_DOLLAR_AMOUNT || !Number.isInteger(work.endAge) || work.endAge < 0 || work.endAge > 119 || (work.annualNet > 0 && work.endAge > 0 && work.endAge <= primaryRetirementAge(s))) errors.push('Part-time income needs a nonnegative take-home amount and a whole-year end age after your retirement.');
+  for (const item of s.oneTimeExpenses) if (!Number.isInteger(item.age) || item.age <= primaryRetirementAge(s) || item.age >= h.targetEndAge || item.amount < 0 || item.amount > MAX_DOLLAR_AMOUNT) errors.push(`One-time expense${item.label?` “${item.label}”`:''} needs a whole-year age after your retirement, before the maximum modeling age, and a supported amount of 0 or more.`);
+  const home=s.homePlan;
+  if (!HOME_PLAN_MODES.includes(home.mode) || !Number.isInteger(home.saleAge) || home.saleAge < 0 || (home.saleAge > 0 && (home.saleAge <= primaryRetirementAge(s) || home.saleAge >= h.targetEndAge)) || home.downsizeShare < 0 || home.downsizeShare > .95 || home.monthlyRent < 0 || home.monthlyRent > MAX_DOLLAR_AMOUNT) errors.push('A planned home sale needs a whole-year age after your retirement, a smaller home worth 0–95% of the sale price, or a nonnegative rent.');
   // Keep inactive drafts, but validate only owners whose deposits are modeled.
   // Pooled couples share the primary retirement status.
   for(const [name,c,active] of [['You',s.contributions,!h.alreadyRetired],['Spouse',s.spouseContributions,h.filingStatus==='Married'&&!(h.separatePeople?h.spouseAlreadyRetired:h.alreadyRetired)]]){

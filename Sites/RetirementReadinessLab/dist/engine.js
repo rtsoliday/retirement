@@ -11,6 +11,7 @@ import {retirementBenefitFactor,spousalBenefitFactor,combinedSurvivorBenefitFact
 import {monthlyRateDistribution,sampleMonthlyRate} from './annual-rates.js';
 import {requiredMinimumDistribution} from './distributions.js';
 import {hasEmployerRoth,prepareCalendarScenario,baseScenario} from './model.js';
+import {planEvents,applyMonthlyEvents,pathMetrics} from './plan-events.js';
 
 const STRIDE=-7046029254386353131n, MASK=(1n<<48n)-1n;
 export const monthly=r=>Math.pow(Math.max(.0001,1+r),1/12)-1;
@@ -85,7 +86,7 @@ export function drawLifetimes(h,spouseAtRet,married,rng,fixedDeathAges,lifespanQ
   const banded=deathAgeAtQuantile(h.gender,h.retirementAge,120,lifespanQuantiles.primary);
   return [banded,married?deathAgeAtQuantile(h.spouseGender,spouseAtRet,120,lifespanQuantiles.spouse):banded];
 }
-export function ltcStart(s,start,death,rng){const draw=rng.nextDouble();if(!s.longTermCare.enabled||death<65)return null;const p=death<75?.25:death<85?.45:death<95?.60:.70;return draw>p?null:Math.max(start,death-s.longTermCare.averageDurationYears-(s.longTermCare.averageDurationMonths??0)/12);}
+export function ltcStart(s,start,death,rng,force=false){const draw=rng.nextDouble();if(!(s.longTermCare.enabled||force)||death<65)return null;const p=force?1:death<75?.25:death<85?.45:death<95?.60:.70;return draw>p?null:Math.max(start,death-s.longTermCare.averageDurationYears-(s.longTermCare.averageDurationMonths??0)/12);}
 export function allocation(s,b,annualSpending){if(annualSpending<=0)return s.postRetirementAllocation.stock50xOrMore;const ratio=invested(b)/annualSpending,a=s.postRetirementAllocation;return ratio<30?a.stockUnder30x:ratio<35?a.stock30xTo35x:ratio<40?a.stock35xTo40x:ratio<45?a.stock40xTo45x:ratio<50?a.stock45xTo50x:a.stock50xOrMore;}
 export function spendingPath(s,offset,timeline=scenarioTimeline(s)){if(s.spending.spendingPathModel==='Flat')return 1;const h=s.household,months=Math.max(0,Math.min(Math.round(timeline.retirementAge*12)+offset,85*12)-Math.max(65,timeline.currentAge)*12),married=h.filingStatus==='Married';return Math.max(married?.60:.65,Math.pow(1-(married?.024:.017),months/12));}
 export function medicarePremium(income,status,people,healthInflation,taxInflation,taxYear=2026,priorYearTaxInflation=1){
@@ -115,11 +116,28 @@ function withdrawConversionTax(b,amount,ledger,taxYear,rothPenalty){
 }
 // Charge the increase in the actual year-to-date liability, using one set of
 // brackets for the entire year. Never annualize a draw that can exhaust pretax.
-function withdrawalPlan(need,ss,status,other,b,cashFirst,taxInflation,seniors,taxYear,penalty,ytd={ordinary:0,social:0,tax:0},ledger=null,rothPenalty=0,{pretaxAvailable=b.pretax,incomeTax=ordinaryIncomeTax,rothQualified=false}={}){
+// The account order for ordinary withdrawals. Standard keeps the original order.
+export function withdrawalOrder(order,seppProtected){
+  if(order==='TaxableFirst')return seppProtected?['taxable','roth']:['taxable','pretax','roth'];
+  if(order==='RothLast')return seppProtected?['taxable','roth']:['pretax','taxable','roth'];
+  return seppProtected?['roth','taxable']:['pretax','roth','taxable'];
+}
+function withdrawalPlan(need,ss,status,other,b,cashFirst,taxInflation,seniors,taxYear,penalty,ytd={ordinary:0,social:0,tax:0},ledger=null,rothPenalty=0,{pretaxAvailable=b.pretax,incomeTax=ordinaryIncomeTax,rothQualified=false,order='Standard'}={}){
   requireFinite(need,ss,other,sum(b),pretaxAvailable,taxInflation,ytd.ordinary,ytd.social,ytd.tax);
+  // Taxable-account withdrawals add no ordinary income; with another order,
+  // only the pre-tax and Roth portions of a draw change the tax estimate.
+  const draws=gross=>{
+    let rest=Math.max(0,gross-(cashFirst?Math.max(0,b.cash):0)),taxableDraw=0;
+    for(const key of withdrawalOrder(order,false)){
+      if(key==='roth')break;
+      const take=Math.min(Math.max(0,key==='pretax'?pretaxAvailable:b.taxable),rest);rest-=take;if(key==='pretax')taxableDraw=take;
+    }
+    return {taxableDraw,rothDraw:rest};
+  };
   function estimate(gross,capture=false){
-    const taxableDraw=Math.min(Math.max(0,pretaxAvailable),Math.max(0,gross-(cashFirst?Math.max(0,b.cash):0)));
-    const rothDraw=Math.max(0,gross-(cashFirst?Math.max(0,b.cash):0)-taxableDraw);
+    const custom=order!=='Standard'?draws(gross):null;
+    const taxableDraw=custom?custom.taxableDraw:Math.min(Math.max(0,pretaxAvailable),Math.max(0,gross-(cashFirst?Math.max(0,b.cash):0)));
+    const rothDraw=custom?custom.rothDraw:Math.max(0,gross-(cashFirst?Math.max(0,b.cash):0)-taxableDraw);
     const roth=rothDraw>0?ledger?.distribution(rothDraw,b.roth,taxYear,{qualified:rothQualified}):null;
     const rothTaxableEarnings=roth?.taxableEarnings??0,rothPenaltyBase=roth?.penaltyBase??0;
     const ordinary=ytd.ordinary+other+taxableDraw+rothTaxableEarnings,social=ytd.social+ss;
@@ -139,32 +157,36 @@ function withdrawalPlan(need,ss,status,other,b,cashFirst,taxInflation,seniors,ta
 const life=[84.6,83.7,82.8,81.8,80.8,79.8,78.8,77.9,76.9,75.9,74.9,73.9,72.9,71.9,70.9,69.9,69,68,67,66,65,64.1,63.1,62.1,61.1,60.2,59.2,58.2,57.3,56.3,55.3,54.4,53.4,52.5,51.5,50.5,49.6,48.6,47.7,46.7,45.7,44.8,43.8,42.9,41.9,41,40,39,38.1,37.1,36.2,35.3,34.3,33.4,32.5,31.6,30.6,29.8,28.9,28,27.1,26.2,25.4,24.5,23.7,22.9,22,21.2,20.4,19.6,18.8,18,17.2,16.4,15.6,14.8,14.1,13.3,12.6,11.9,11.2,10.5,9.9,9.3,8.7,8.1,7.6,7.1,6.6,6.1,5.7,5.3,4.9,4.6,4.3,4,3.7,3.4,3.2,3,2.8,2.6,2.5,2.3,2.2,2.1,2.1,2.1,2,2,2,2,2,1.9,1.9,1.8,1.8,1.6,1.4,1.1,1];
 export function seppPayment(balance,age){const years=life[Math.max(0,Math.floor(age))];if(!years||balance<=0)return 0;return balance/((1-Math.pow(1.05,-years))/.05);}
 
-export function runOne(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails=false,captureTaxDetails=false,captureTodayDollars=false,taxesEnabled=true,horizonReductionYears=0,fixedDeathAges=null,lifespanQuantiles=null}={}){
+export function runOne(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails=false,captureTaxDetails=false,captureTodayDollars=false,taxesEnabled=true,horizonReductionYears=0,fixedDeathAges=null,lifespanQuantiles=null,stress=null,captureMetrics=false}={}){
   if(s.household.separatePeople||hasEmployerRoth(s)){
     // Existing pooled accounts remain primary-owned. Employer plans retain
     // their explicit owners without reinterpreting saved spouse drafts.
     let owned=s;
     if(!s.household.separatePeople){owned=prepareCalendarScenario(structuredClone(s),{today:s.household.asOfDate||localCalendarDate(),needsReview:false});const defaults=baseScenario();owned.household.separatePeople=true;owned.household.spouseRetirementDate=owned.household.retirementDate;owned.household.spouseAlreadyRetired=owned.household.alreadyRetired;for(const key of ['spouseAccounts','spouseRothHistory','spouseIncome','workingIncome','spouseWithdrawal'])owned[key]=defaults[key];}
-    return runSeparatePeople(owned,rng,{captureMonthlyBalances,captureMonthlyDetails,captureTaxDetails,captureTodayDollars,taxesEnabled,horizonReductionYears,fixedDeathAges,lifespanQuantiles});
+    return runSeparatePeople(owned,rng,{captureMonthlyBalances,captureMonthlyDetails,captureTaxDetails,captureTodayDollars,taxesEnabled,horizonReductionYears,fixedDeathAges,lifespanQuantiles,stress,captureMetrics});
   }
   const timeline=scenarioTimeline(s),h={...s.household,currentAge:timeline.currentAge,retirementAge:timeline.retirementAge},b={...s.accounts},preMonths=timeline.preMonths;
+  const events=planEvents(s,stress),metrics=captureMetrics?pathMetrics():null,order=s.withdrawalStrategy.withdrawalOrder??'Standard',orderOption=order==='Standard'?{}:{order};
   const preReturns=monthlyRateDistribution(s.market.preRetirementMeanReturn,s.market.preRetirementStdDev),cashGrowth=monthly(.02),incomeTax=taxesEnabled?ordinaryIncomeTax:()=>0;
   const rh=s.rothHistory,rothLedger=new RothConversionLedger(rh.contributionBasis,rh.firstContributionYear,rh.conversions),ruleOf55=ruleOf55Applies(s);
   for(let i=0;i<preMonths;i++){const growth=sampleMonthlyRate(preReturns,rng);b.pretax*=1+growth;b.roth*=1+growth;b.taxable*=1+growth;b.cash*=1+cashGrowth;if(hasFutureSavings(s)){const year=usesCalendarDates(s)?Number(addCalendarMonths(s.household.asOfDate||localCalendarDate(),i+1).slice(0,4)):2026+Math.floor(i/12);depositSavings(b,rothLedger,s.contributions,i,year);if(s.household.filingStatus==='Married')depositSavings(b,rothLedger,s.spouseContributions,i,year);}sum(b);}
   const married=h.filingStatus==='Married',spouseAtRet=timeline.spouseAtRet;
   // The reporting cutoff must not determine death or move terminal care sooner.
   // Draw the full lifetime from the table, then truncate cash flows separately.
-  const [death,spouseDeath]=drawLifetimes(h,spouseAtRet,married,rng,fixedDeathAges,lifespanQuantiles);
+  let [death,spouseDeath]=drawLifetimes(h,spouseAtRet,married,rng,fixedDeathAges,lifespanQuantiles);
+  if(events?.minDeathAge){death=Math.max(death,events.minDeathAge);spouseDeath=married?Math.max(spouseDeath,events.minDeathAge):death;}
   const spouseDeathPrimary=h.retirementAge+spouseDeath-spouseAtRet,houseDeath=married?Math.max(death,spouseDeathPrimary):death;
   const primaryDeathYear=Math.floor((Math.round(death*12)-Math.round(h.retirementAge*12))/12),spouseDeathYear=Math.floor((Math.round(spouseDeath*12)-Math.round(spouseAtRet*12))/12);
   const firstDeathYear=Math.min(primaryDeathYear,spouseDeathYear);
-  const ltc=ltcStart(s,h.retirementAge,death,rng),spouseLtc=married?ltcStart(s,spouseAtRet,spouseDeath,rng):null,spouseLtcPrimary=spouseLtc===null?null:h.retirementAge+spouseLtc-spouseAtRet;
+  const ltc=ltcStart(s,h.retirementAge,death,rng,events?.forceCare),spouseLtc=married?ltcStart(s,spouseAtRet,spouseDeath,rng,events?.forceCare):null,spouseLtcPrimary=spouseLtc===null?null:h.retirementAge+spouseLtc-spouseAtRet;
   const birth=timeline.birthYear,spouseBirth=timeline.spouseBirthYear,primaryFactor=retirementBenefitFactor(birth,s.socialSecurity.claimAge*12),age67Factor=retirementBenefitFactor(birth,67*12);
   const spousalClaim=Math.max(744,s.socialSecurity.spouseClaimAge*12,Math.round(spouseAtRet*12)+s.socialSecurity.claimAge*12-Math.round(h.retirementAge*12)),survivorClaim=Math.max(720,s.socialSecurity.spouseClaimAge*12,Math.round(spouseAtRet*12)+Math.round(death*12)-Math.round(h.retirementAge*12));
   const spouseFactor=spousalBenefitFactor(spouseBirth,spousalClaim),survivorFactor=combinedSurvivorBenefitFactor(birth,s.socialSecurity.claimAge*12,death*12,spouseBirth,survivorClaim);
   const infMean=monthly(s.spending.generalInflationMean),healthMean=monthly(s.healthcare.healthcareInflationMean),incomeGrowth=s.guaranteedIncome.annualIncome>0?monthly(s.guaranteedIncome.annualIncrease):0,inflation=monthlyRateDistribution(s.spending.generalInflationMean,s.spending.generalInflationStdDev),healthInflation=monthlyRateDistribution(s.healthcare.healthcareInflationMean,s.healthcare.healthcareInflationStdDev);
   const retireBalance=sum(b),lowThreshold=retireBalance*.5;let pathFactor=spendingPath(s,0,timeline),spending=s.spending.annualBaseSpending/12*Math.pow(1+infMean,preMonths)*pathFactor;
   let rent=s.rent.monthlyRent*Math.pow(1+infMean,preMonths),home=s.home.currentValue*Math.pow(1+infMean,preMonths),seniorRent=3000*Math.pow(1+infMean,preMonths);
+  // Rent after a planned sale is entered in today's dollars.
+  let saleRent=events?.home?.mode==='rent'?events.home.monthlyRent*Math.pow(1+infMean,preMonths):0,plannedSale=false,keptHomeShare=1;
   const mortgage=mortgageAtRetirement(s.mortgage,preMonths);let mortgageMonths=mortgage.months,mortgageBalance=mortgage.balance;
   // Property tax and home insurance are part of base spending and stop after a sale.
   let otherMonthly=s.guaranteedIncome.annualIncome/12*Math.pow(1+incomeGrowth,preMonths),homeCosts=s.home.annualTaxesAndInsurance/12*Math.pow(1+infMean,preMonths)*pathFactor;
@@ -196,6 +218,14 @@ export function runOne(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails
     sum(b);
     home=0;mortgageBalance=0;mortgageMonths=0;homeSold=true;
   }
+  // Selling to rent works like any sale. Downsizing keeps a smaller home with
+  // proportionally lower property costs; an underwater payoff is funded this month.
+  function plannedHomeSale(){
+    if(events.home.mode==='rent'){sellHome();plannedSale=true;return 0;}
+    const share=events.home.downsizeShare;b.cash+=home*(1-share)-mortgageBalance;home*=share;keptHomeShare=share;mortgageBalance=0;mortgageMonths=0;
+    const shortfall=Math.max(0,-b.cash);if(shortfall)b.cash=0;sum(b);return shortfall;
+  }
+  function closeMetrics(){metrics?.close(annualTaxPaid,annualConversions,taxIndex);}
   let completedMonths=0;
   for(let m=0;m<Math.round(horizon*12);m++){
     const ageMonths=Math.round(h.retirementAge*12)+m,spouseMonths=Math.round(spouseAtRet*12)+m,monthInYear=m%12;
@@ -217,14 +247,15 @@ export function runOne(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails
     if(monthInYear===0)annualRmd=requiredMinimumDistribution(b.pretax,Math.floor(ownerAge),spouseOwns?spouseBirth:birth);
     const seppProtected=annualSepp>0&&ageMonths<seppEnd&&primaryAlive;
     const inLtc=primaryAlive&&ltc!==null&&ageMonths>=Math.round(ltc*12),spouseInLtc=spouseAlive&&spouseLtcPrimary!==null&&ageMonths>=Math.round(spouseLtcPrimary*12),ltcPeople=Number(inLtc)+Number(spouseInLtc),outside=alive-ltcPeople,replaceSpending=alive>0&&outside===0;
+    const downsizeShortfall=events?.homeSaleDue(ageMonths)&&alive>0&&!homeSold&&home>0?plannedHomeSale():0;
     // Sell as soon as nobody alive remains at home, before this month's costs.
     if(replaceSpending)sellHome();
     // An underwater sale first uses cash; any remaining payoff needs a funded,
     // taxed withdrawal this month instead of silently cancelling the debt.
     const saleShortfall=homeSold?Math.max(0,-b.cash):0;
     if(saleShortfall)b.cash=0;
-    const mortgageCost=!homeSold&&mortgageMonths>0?s.mortgage.monthlyPayment:0,rentCost=outside<=0?0:homeSold?seniorRent:rent;
-    const reduction=retireBalance>0&&sum(b)<lowThreshold?s.spending.lowPortfolioSpendingReduction:0,baseSpending=Math.max(0,spending-(homeSold?homeCosts:0))*(1-reduction)*(married&&!both?.84:1),ltcCost=ltcPeople>0?Math.max(0,s.longTermCare.annualCost)/12*Math.max(0,healthIndex)*ltcPeople:0;
+    const mortgageCost=!homeSold&&mortgageMonths>0?s.mortgage.monthlyPayment:0,rentCost=outside<=0?0:homeSold?(plannedSale?saleRent:seniorRent):rent;
+    const reduction=retireBalance>0&&sum(b)<lowThreshold?s.spending.lowPortfolioSpendingReduction:0,baseSpending=Math.max(0,spending-(homeSold?homeCosts:keptHomeShare<1?homeCosts*(1-keptHomeShare):0))*(1-reduction)*(married&&!both?.84:1),ltcCost=ltcPeople>0?Math.max(0,s.longTermCare.annualCost)/12*Math.max(0,healthIndex)*ltcPeople:0;
     const pia=s.socialSecurity.annualBenefitAt67/age67Factor/12*ssIndex,primaryClaim=s.socialSecurity.claimAge*12;
     let social=primaryAlive&&ageMonths>=primaryClaim?pia*primaryFactor:0;
     if(married&&spouseAlive){if(primaryAlive){if(ageMonths>=primaryClaim&&spouseMonths>=spousalClaim)social+=pia*spouseFactor;}else if(spouseMonths>=survivorClaim)social+=pia*survivorFactor;}
@@ -237,6 +268,7 @@ export function runOne(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails
     // estimate can use the cash strategy that applies to this modeled month.
     const stock=sampleMonthlyRate(stockReturns,rng),bond=sampleMonthlyRate(bondReturns,rng);
     requireFinite(stock,bond);
+    const partTimeWork=events?events.work(ageMonths,primaryAlive,taxIndex):0;
     let medCost=0;
     if(s.healthcare.includeMedicarePremiums&&medPeople){
       const history=incomeHistory.length>=2?incomeHistory[incomeHistory.length-2]:null;
@@ -244,22 +276,26 @@ export function runOne(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails
       if(history===null){
         // Before a lookback exists, estimate annual income with the available
         // pretax balance and Roth history; nonqualified earnings create income.
+        // Take-home work pay covers costs before estimating taxable withdrawals.
         const annualSS=social*12,estimatedDistribution=seppProtected?Math.min(b.pretax,annualSepp):Math.min(b.pretax,annualRmd),annualOther=guaranteed*12+estimatedDistribution,estimatedInterest=Math.max(0,b.cash)*.02;
         const available={...b,pretax:Math.max(0,b.pretax-estimatedDistribution)};
         for(let tier=0;tier<6;tier++){
-          const annualNeed=((replaceSpending?0:baseSpending)+mortgageCost+rentCost+ltcCost+preCost+medCost+saleShortfall)*12;
+          const annualNeed=Math.max(0,(replaceSpending?0:baseSpending)+mortgageCost+rentCost+ltcCost+preCost+medCost+saleShortfall-partTimeWork)*12;
           const stockPart=allocation(s,b,annualNeed),portReturn=stockPart*stock+(1-stockPart)*bond;
           const cashFirst=s.withdrawalStrategy.useCashReserveDuringDrawdowns&&portReturn<s.withdrawalStrategy.drawdownTrigger&&b.cash>0;
-          const estimate=withdrawalPlan(annualNeed,annualSS,status,annualOther,available,cashFirst,yearTaxIndex,seniors,taxYear,0,{ordinary:estimatedInterest,social:0,tax:0},rothLedger,0,{pretaxAvailable:seppProtected?0:available.pretax,incomeTax,rothQualified});
+          const estimate=withdrawalPlan(annualNeed,annualSS,status,annualOther,available,cashFirst,yearTaxIndex,seniors,taxYear,0,{ordinary:estimatedInterest,social:0,tax:0},rothLedger,0,{pretaxAvailable:seppProtected?0:available.pretax,incomeTax,rothQualified,...orderOption});
           const other=estimate.taxableDraw+estimate.rothTaxableEarnings+annualOther+estimatedInterest,income=other+taxableSocialSecurity(other,annualSS,status);
           const premium=medicarePremium(income,status,medPeople,healthIndex,yearTaxIndex,taxYear,priorYearTaxIndex);
           if(premium===medCost)break;
           medCost=premium;
         }
       }
+      metrics?.markSurcharge(medCost,healthIndex,medPeople);
     }
-    const need=(replaceSpending?0:baseSpending)+mortgageCost+rentCost+preCost+medCost+ltcCost+saleShortfall;
-    const annualNeed=need*12,stockPart=allocation(s,b,annualNeed),portReturn=stockPart*stock+(1-stockPart)*bond;
+    let need=(replaceSpending?0:baseSpending)+mortgageCost+rentCost+preCost+medCost+ltcCost+saleShortfall,allocationNeed=need,workSurplus=0;
+    if(events){const e=applyMonthlyEvents(need,partTimeWork,events.oneTime(ageMonths,alive>0,taxIndex)+downsizeShortfall);need=e.need;allocationNeed=e.allocationNeed;workSurplus=e.surplus;}
+    const annualNeed=allocationNeed*12,stockPart=allocation(s,b,annualNeed);let portReturn=stockPart*stock+(1-stockPart)*bond;
+    if(events)portReturn=events.marketReturn(m,portReturn,stockPart);
     const cashInterest=Math.max(0,b.cash)*cashGrowth;
     requireFinite(need,annualNeed,portReturn,cashInterest);
     b.pretax*=1+portReturn;b.roth*=1+portReturn;b.taxable*=1+portReturn;b.cash+=cashInterest;
@@ -277,26 +313,29 @@ export function runOne(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails
     // but never for a retirement before 54.
     const penalty=taxesEnabled&&s.withdrawalStrategy.applyEarlyWithdrawalPenalty&&ownerAge<59.5&&!(ruleOf55&&!spouseOwns)&&(primaryAlive||spouseOwns)?.10:0;
     const rothPenalty=taxesEnabled&&s.withdrawalStrategy.applyEarlyWithdrawalPenalty&&ownerAge<59.5&&(primaryAlive||spouseOwns)?.10:0;
-    const plan=withdrawalPlan(need,social,status,guaranteed+scheduledDistribution,b,cashFirst,yearTaxIndex,seniors,taxYear,penalty,{ordinary:annualOrdinaryIncome+cashInterest,social:annualSocialSecurity,tax:annualTaxPaid},rothLedger,rothPenalty,{pretaxAvailable:seppProtected?0:b.pretax,incomeTax,rothQualified});
-    let portfolioWithdrawal=plan.gross;if(cashFirst){const cashDraw=Math.min(b.cash,portfolioWithdrawal);b.cash-=cashDraw;portfolioWithdrawal-=cashDraw;}withdrawAccounts(b,portfolioWithdrawal,seppProtected?['roth','taxable']:['pretax','roth','taxable'],rothLedger,taxYear);
+    const plan=withdrawalPlan(need,social,status,guaranteed+scheduledDistribution,b,cashFirst,yearTaxIndex,seniors,taxYear,penalty,{ordinary:annualOrdinaryIncome+cashInterest,social:annualSocialSecurity,tax:annualTaxPaid},rothLedger,rothPenalty,{pretaxAvailable:seppProtected?0:b.pretax,incomeTax,rothQualified,...orderOption});
+    let portfolioWithdrawal=plan.gross;if(cashFirst){const cashDraw=Math.min(b.cash,portfolioWithdrawal);b.cash-=cashDraw;portfolioWithdrawal-=cashDraw;}withdrawAccounts(b,portfolioWithdrawal,withdrawalOrder(order,seppProtected),rothLedger,taxYear);
     if(monthlyDetails){
       // Capture the existing calculations without changing their timing or draws.
       monthlyCashFlow={expenses:need,socialSecurity:social,guaranteedIncome:guaranteed,seppDistribution,rmdDistribution,additionalWithdrawal:plan.gross,incomeTax:plan.totalTax-annualTaxPaid,earlyPenalty:Math.max(0,social+guaranteed+scheduledDistribution+plan.gross-plan.totalTax+annualTaxPaid-plan.net),surplus:Math.max(0,plan.net-need),cashFirst,seppProtected,conversionAmount:0,conversionTax:0,accountWithdrawals:Object.fromEntries(Object.keys(beforeWithdrawals).map(key=>[key,Math.max(0,Math.min(beforeWithdrawals[key],beforeWithdrawals[key]-b[key]))]))};
     }
     const surplus=Math.max(0,plan.net-need);if(surplus>.01)b.cash+=surplus;
+    if(workSurplus>0)b.cash+=workSurplus;
     annualOrdinaryIncome+=plan.taxableDraw+plan.rothTaxableEarnings+scheduledDistribution+guaranteed+cashInterest;annualPretaxDistributions+=plan.taxableDraw+scheduledDistribution;annualSocialSecurity+=social;annualTaxPaid=plan.totalTax;
     if(taxesEnabled&&s.rothConversion.enabled&&!seppProtected&&monthInYear===11){const conversion=rothConversionPlan(b.pretax,annualOrdinaryIncome,s.rothConversion.marginalRateCap,status,yearTaxIndex,seniors,taxYear,annualSocialSecurity);if(conversion.amount>0){if(monthlyDetails){monthlyCashFlow.conversionAmount=conversion.amount;monthlyCashFlow.conversionTax=conversion.tax;}b.pretax-=conversion.amount;b.roth+=conversion.amount;rothLedger.add(conversion.amount,taxYear);withdrawConversionTax(b,conversion.tax,rothLedger,taxYear,rothPenalty);annualOrdinaryIncome+=conversion.amount;annualConversions+=conversion.amount;annualTaxPaid+=conversion.tax;}}
     if(!homeSold&&mortgageMonths>0){mortgageBalance=payMortgage(mortgageBalance,mortgageCost,mortgage.rate);mortgageMonths--;}
     sum(b);requireFinite(annualOrdinaryIncome,annualSocialSecurity,annualTaxPaid,annualPretaxDistributions,annualConversions,mortgageBalance);
     if(b.cash<0&&b.cash>-.01)b.cash=0;
-    if(b.cash<0&&failureAge===null){sellHome();if(b.cash<0){failureAge=ageMonths/12;if(monthlyBalances){monthlyBalances[m]=0;if(today)today.monthlyBalances[m]=0;}yearEnd.push(0);today?.yearEnd.push(0);recordTaxYear(taxYear,status);recordMonth(m+1);break;}}
+    if(b.cash<0&&failureAge===null){sellHome();if(b.cash<0){failureAge=ageMonths/12;if(monthlyBalances){monthlyBalances[m]=0;if(today)today.monthlyBalances[m]=0;}yearEnd.push(0);today?.yearEnd.push(0);recordTaxYear(taxYear,status);closeMetrics();recordMonth(m+1);break;}}
     completedMonths=m+1;
     if(monthInYear===11){yearEnd.push(sum(b));chart.push(sum(b));if(today){today.yearEnd.push(sum(b)/taxIndex);today.chart.push(sum(b)/taxIndex);}}
-    const inf=sampleMonthlyRate(inflation,rng),healthInf=sampleMonthlyRate(healthInflation,rng),nextFactor=spendingPath(s,m+1,timeline),change=nextFactor/Math.max(.0001,pathFactor);
+    let inf=sampleMonthlyRate(inflation,rng);const healthInf=sampleMonthlyRate(healthInflation,rng),nextFactor=spendingPath(s,m+1,timeline),change=nextFactor/Math.max(.0001,pathFactor);
+    if(events){inf=events.inflation(m,inf,monthly);saleRent*=1+inf;}
     spending*=(1+inf)*change;rent*=1+inf;if(!homeSold)home*=1+inf;seniorRent*=1+inf;otherMonthly*=1+incomeGrowth;homeCosts*=(1+inf)*change;preMedicare*=1+healthInf;healthIndex*=1+healthInf;taxIndex*=1+inf;pathFactor=nextFactor;
     checkCosts();
     recordMonth(m+1);
     if(monthInYear===11){
+      closeMetrics();
       // Keep the price level at the last COLA. A rebound following deflation
       // does not raise benefits until it exceeds that reference level.
       ssIndex=Math.max(ssIndex,taxIndex);
@@ -306,9 +345,9 @@ export function runOne(s,rng,{captureMonthlyBalances=false,captureMonthlyDetails
     }
   }
   // A retirement with extra months can end between annual observations.
-  if(failureAge===null&&completedMonths%12!==0){yearEnd.push(sum(b));today?.yearEnd.push(sum(b)/taxIndex);const modelYear=Math.floor((completedMonths-1)/12);recordTaxYear(timeline.retirementYear+modelYear,married?(modelYear<=firstDeathYear?'Married':'Single'):h.filingStatus);}
+  if(failureAge===null&&completedMonths%12!==0){yearEnd.push(sum(b));today?.yearEnd.push(sum(b)/taxIndex);const modelYear=Math.floor((completedMonths-1)/12);recordTaxYear(timeline.retirementYear+modelYear,married?(modelYear<=firstDeathYear?'Married':'Single'):h.filingStatus);closeMetrics();}
   const censored=stopAge<houseDeath,survivedThroughAge=censored?stopAge:h.retirementAge+Math.max(0,Math.ceil(houseDeath-h.retirementAge)-1);
-  return {success:failureAge===null,failureAge,yearEnd,chart,survivedThroughAge,deathAge:houseDeath,observationEndAge:stopAge,censored,...(monthlyBalances?{monthlyBalances}:{}),...(monthlyDetails?{monthlyDetails}:{}),...(taxYears?{taxYears}:{}),...(today?{today}:{})};
+  return {success:failureAge===null,failureAge,yearEnd,chart,survivedThroughAge,deathAge:houseDeath,observationEndAge:stopAge,censored,...(monthlyBalances?{monthlyBalances}:{}),...(monthlyDetails?{monthlyDetails}:{}),...(taxYears?{taxYears}:{}),...(today?{today}:{}),...(metrics?{metrics:metrics.result()}:{})};
 }
 
 function riskBreakdown(s,paths,lifespanQuantiles=null){
@@ -370,12 +409,22 @@ function todayDollarSummary(paths,age,steadyPriceIndexes,includePathPoints){
   return {medianEndingBalance:medianOfSorted(endings),pessimisticEndingBalance:percentile(endings,.1),optimisticEndingBalance:percentile(endings,.9),balanceBands:buildBalanceBands(real,age),meanPath:meanBalancePath(real),pathPoints:includePathPoints?buildPathPoints(real):[],steadyPriceIndexes};
 }
 
+// Medians of each path's lifetime taxes, Medicare surcharge years and Roth
+// conversions, plus the median yearly tax among paths still running that year.
+// All amounts are in each path's own today's dollars.
+export function planLabSummary(paths,startAge){
+  const median=values=>medianOfSorted([...values].sort((a,b)=>a-b));
+  const metrics=paths.map(p=>p.metrics).filter(Boolean),years=Math.max(0,...metrics.map(m=>m.taxByYear.length)),taxByAge=[];
+  for(let y=0;y<years;y++){const values=metrics.filter(m=>m.taxByYear.length>y).map(m=>m.taxByYear[y]);taxByAge.push({age:startAge+y,median:median(values),count:values.length});}
+  return {lifetimeTax:median(metrics.map(m=>m.tax)),surchargeYears:median(metrics.map(m=>m.surchargeYears)),conversions:median(metrics.map(m=>m.conversions)),taxByAge,dollarBasis:'today'};
+}
 export function runSimulation(s,onProgress=()=>{},options={}){
   if(usesCalendarDates(s)){s=structuredClone(s);s.household.asOfDate ||= localCalendarDate();}
   const errors=validateScenario(s);if(errors.length)throw new Error(errors.join(' '));
   const n=s.numberOfSimulations,paths=[],endings=[],failures=[];let successes=0;
   const lifespanQuantiles=options.stratifyPreviewLifespans===false?null:previewLifespanQuantiles(n,s.seed);
-  for(let i=0;i<n;i++){const seed=BigInt(s.seed)+BigInt(i)*STRIDE,path=runOne(s,new JavaRandom(seed),{captureMonthlyBalances:true,captureTodayDollars:true,lifespanQuantiles:lifespanQuantiles?.[i]??null});paths.push(path);endings.push(Math.max(0,path.yearEnd[path.yearEnd.length-1]));if(path.success)successes++;else if(path.failureAge!==null)failures.push(path.failureAge);if(i%25===0)onProgress((i+1)/n);}
+  const extra={...(options.stress?{stress:options.stress}:{}),...(options.captureMetrics?{captureMetrics:true}:{})};
+  for(let i=0;i<n;i++){const seed=BigInt(s.seed)+BigInt(i)*STRIDE,path=runOne(s,new JavaRandom(seed),{captureMonthlyBalances:true,captureTodayDollars:true,lifespanQuantiles:lifespanQuantiles?.[i]??null,...extra});paths.push(path);endings.push(Math.max(0,path.yearEnd[path.yearEnd.length-1]));if(path.success)successes++;else if(path.failureAge!==null)failures.push(path.failureAge);if(i%25===0)onProgress((i+1)/n);}
   // Every path is done; the summaries and sensitivity checks follow.
   onProgress(1);
   const {priceIndexes:steadyPriceIndexes,...steadySimulation}=runSteadySimulation(s,{captureTodayDollars:true});
@@ -384,7 +433,7 @@ export function runSimulation(s,onProgress=()=>{},options={}){
   const failureAgeBuckets=[...buckets].map(([start,count])=>({label:`${start}-${start+4}`,count,shareOfFailures:count/failures.length}));
   const notFailedByAge=buildFundingSurvival(paths,retirementAge(s));
   const meanPath=meanBalancePath(paths),includePathPoints=options.includePathPoints!==false;
-  return {scenarioId:s.id,successProbability:p,medianEndingBalance:medianOfSorted(sorted),steadySimulation,pessimisticEndingBalance:percentile(sorted,.1),optimisticEndingBalance:percentile(sorted,.9),medianFailureAge:failures.length?medianOfSorted(failures):null,failureAgeBuckets,balanceBands:bands,notFailedByAge,meanPath,pathPoints:includePathPoints?buildPathPoints(paths):[],riskBreakdown:options.includeRiskAnalysis===false?null:riskBreakdown(s,paths,lifespanQuantiles),todayDollars:todayDollarSummary(paths,retirementAge(s),steadyPriceIndexes,includePathPoints),provenance:{engineVersion:scenarioEngineVersion(s),engineCadence:'Monthly cashflow model with annual result bands',taxTableVersion:'2026 federal brackets with senior-aware deductions',mortalityModelVersion:'SSA Trustees Alt2 2025 annual death probabilities',randomSeed:s.seed,simulationCount:n},generatedAtEpochMillis:Date.now()};
+  return {scenarioId:s.id,successProbability:p,medianEndingBalance:medianOfSorted(sorted),steadySimulation,pessimisticEndingBalance:percentile(sorted,.1),optimisticEndingBalance:percentile(sorted,.9),medianFailureAge:failures.length?medianOfSorted(failures):null,failureAgeBuckets,balanceBands:bands,notFailedByAge,meanPath,pathPoints:includePathPoints?buildPathPoints(paths):[],riskBreakdown:options.includeRiskAnalysis===false?null:riskBreakdown(s,paths,lifespanQuantiles),todayDollars:todayDollarSummary(paths,retirementAge(s),steadyPriceIndexes,includePathPoints),...(options.captureMetrics?{planLab:planLabSummary(paths,retirementAge(s))}:{}),...(options.stress?{stress:structuredClone(options.stress)}:{}),provenance:{engineVersion:scenarioEngineVersion(s),engineCadence:'Monthly cashflow model with annual result bands',taxTableVersion:'2026 federal brackets with senior-aware deductions',mortalityModelVersion:'SSA Trustees Alt2 2025 annual death probabilities',randomSeed:s.seed,simulationCount:n},generatedAtEpochMillis:Date.now()};
 }
 
 // The candidates a planning-target search examines, in search order.

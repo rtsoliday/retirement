@@ -12,6 +12,8 @@ import * as planReview from '../dist/plan-review.js';
 import * as resultCaching from '../dist/result-cache.js';
 import * as frontierView from '../dist/frontier-view.js';
 import * as savingsTargets from '../dist/savings-targets.js';
+import * as planLab from '../dist/plan-lab.js';
+import * as planLabView from '../dist/plan-lab-view.js';
 import {runSimulation} from '../dist/engine.js';
 
 test('employer Roth editor preserves records, monthly deposits and history through copies and backups',async()=>{
@@ -518,21 +520,24 @@ test('optional questions require an answer for new plans, preserve Not sure, and
   await a.click('new-scenario');assert.equal(a.saved().optionalAnswers[a.current().id]['rent-inputs'],'unsure');
 });
 
-test('one-click lower-return screening uses paired scenarios, retains results and never raises a lower rate',async()=>{
+test('one-click lower-return screening adds a paired what-if, retains results and never raises a lower rate',async()=>{
   const a=app(),s=a.current();s.market.preRetirementMeanReturn=.04;s.market.stockMeanReturn=.133;
   const before=structuredClone(s),completed=runSimulation(s);completed.uxAssumptions=before;a.state.results.set(s.id,completed);
   assert.match(a.results(),/Compare with lower returns/);
   const pending=a.click('compare-lower-returns');
   for(let i=0;i<2;i++){
-    const w=a.workers[i];assert.ok(w);
+    const w=await nextWorker(a,i);assert.ok(w);
     assert.equal(w.data.scenario.market.preRetirementMeanReturn,.04);
     assert.equal(w.data.scenario.market.stockMeanReturn,i?.07:before.market.stockMeanReturn);
     assert.equal(w.data.scenario.market.stockStdDev,before.market.stockStdDev);
-    w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});await Promise.resolve();
+    assert.equal(w.data.options.captureMetrics,true);
+    w.answered=true;w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});
   }
-  await pending;assert.equal(a.state.view,'lab');assert.equal(a.state.labResults.length,2);
+  await pending;assert.equal(a.state.view,'lab');
+  const rows=labRows(a);assert.equal(rows.filter(r=>r.result).length,2);assert.equal(rows[1].label,'Lower returns · up to 7%');
   assert.deepEqual(structuredClone(a.current()),before);assert.equal(a.state.results.get(s.id),completed);
-  await a.click('copy-comparison',{index:'1'});assert.equal(a.current().market.stockMeanReturn,.07);
+  assert.deepEqual(a.saved().labSets[s.id].sets[0].whatIfs[0].changes,{returnCap:.07});
+  await a.click('lab-copy',{id:rows[1].id});assert.equal(a.current().market.stockMeanReturn,.07);assert.equal(a.current().market.preRetirementMeanReturn,.04);
   assert.equal(a.saved().scenarios.find(x=>x.id===before.id).market.stockMeanReturn,before.market.stockMeanReturn);
 });
 
@@ -583,33 +588,40 @@ test('applied budget deductions remain visible at the housing handoff until the 
   assert.equal(a.saved().inputSources[s.id]['mortgage.monthlyPayment'],'Entered');
 });
 
-test('custom comparisons run independent date and spending changes without changing the base plan',async()=>{
-  const a=app(),s=a.current(),before=structuredClone(s),date=model.addCalendarMonths(s.household.retirementDate,12);
-  assert.match(a.lab(),/id="lab-monthly-spending"[^>]*value="6,250"/);assert.doesNotMatch(a.lab(),/value="NaN"/);
-  const input=(key,value)=>a.element('#main').listeners.input({target:{dataset:{labInput:key},value}});
-  input('retirementDate',date);input('monthlySpending','4000');
-  const pending=a.runLab(true);
-  for(let i=0;i<3;i++){
-    const w=a.workers[i];assert.ok(w);
-    if(i===1){assert.equal(w.data.scenario.household.retirementDate,date);assert.equal(w.data.scenario.spending.annualBaseSpending,before.spending.annualBaseSpending);}
-    if(i===2){assert.equal(w.data.scenario.spending.annualBaseSpending,48000);assert.equal(w.data.scenario.household.retirementDate,before.household.retirementDate);}
-    w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});await Promise.resolve();
-  }
-  await pending;assert.equal(a.state.labResults.length,3);assert.deepEqual(structuredClone(a.current()),before);
-  await a.click('copy-comparison',{index:'2'});assert.equal(a.current().spending.annualBaseSpending,48000);
+test('the what-if builder stacks date and spending changes without changing the base plan',async()=>{
+  const a=app(),s=a.current(),before=structuredClone(s),date=model.addCalendarMonths(s.household.retirementDate,12);a.state.view='lab';
+  assert.match(a.lab(),/Plan Lab/);assert.match(a.lab(),/data-action="lab-add"/);assert.doesNotMatch(a.lab(),/value="NaN"/);
+  await a.click('lab-add');const w=a.labViewModel().editing;assert.ok(w);assert.match(a.lab(),/id="lab-builder"/);
+  await setLever(a,'retirementDate',{date});await setLever(a,'annualBaseSpending',{annual:'48k'});
+  assert.deepEqual(structuredClone(w.changes),{retirementDate:date,annualBaseSpending:48000});
+  assert.equal(w.name,`Retire ${model.dateLabel(date)} · age ${model.ageLabel(model.calendarMonthsBetween(s.household.birthday,date)/12)} + Spend $48,000 a year`);
+  assert.deepEqual(structuredClone(a.current()),before);
+  const pending=a.runLab(),seen=[];await settle(a,pending,worker=>{seen.push(worker.data.scenario);return runSimulation(worker.data.scenario);});
+  assert.equal(seen.length,2);assert.equal(seen[0].spending.annualBaseSpending,before.spending.annualBaseSpending);
+  assert.equal(seen[1].household.retirementDate,date);assert.equal(seen[1].spending.annualBaseSpending,48000);assert.equal(seen[1].household.spouseRetirementDate,before.household.spouseRetirementDate);
+  assert.deepEqual(structuredClone(a.current()),before);assert.equal(labRows(a)[1].result.provenance.simulationCount,100);
+  await a.click('lab-copy',{id:w.id});
+  assert.equal(a.current().spending.annualBaseSpending,48000);assert.equal(a.current().household.retirementDate,date);
+  assert.equal(a.current().numberOfSimulations,before.numberOfSimulations);assert.equal(a.saved().inputSources[a.current().id]['spending.annualBaseSpending'],'Entered');
   assert.equal(a.saved().scenarios.find(x=>x.id===before.id).spending.annualBaseSpending,before.spending.annualBaseSpending);
 });
 
-test('custom comparisons reject incomplete or excessive amounts and edited drafts discard pending results',async()=>{
-  for(const value of ['', '-1', '1e400', String(model.MAX_DOLLAR_AMOUNT)]){
-    const a=app();a.element('#main').listeners.input({target:{dataset:{labInput:'monthlySpending'},value}});
-    await a.runLab(true);assert.equal(a.workers.length,0,value);assert.match(a.state.message,/Error:/);
+test('lever editors reject incomplete or excessive amounts and keep the previous change',async()=>{
+  const a=app();await a.click('lab-add');const w=a.labViewModel().editing;
+  await setLever(a,'annualBaseSpending',{annual:'60000'});assert.equal(w.changes.annualBaseSpending,60000);
+  for(const value of ['', '-1', '1e400', String(model.MAX_DOLLAR_AMOUNT+2)]){
+    await setLever(a,'annualBaseSpending',{annual:value});
+    assert.equal(w.changes.annualBaseSpending,60000,value);assert.ok(a.state.labUi.leverError,value);assert.match(a.lab(),/class="field-error"/);
+    assert.match(a.lab(),new RegExp(`id="lab-annualBaseSpending-annual"[^>]*value="${value}"`),'the invalid value stays visible for correction');
+    await a.click('lab-lever-cancel');
   }
-  const a=app();a.element('#main').listeners.input({target:{dataset:{labInput:'monthlySpending'},value:'4000'}});
-  const pending=a.runLab(true),w=a.workers[0];
-  a.element('#main').listeners.input({target:{dataset:{labInput:'monthlySpending'},value:'5000'}});
-  w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});await pending;
-  assert.equal(a.state.labResults,null);assert.equal(a.state.busy,false);
+  await setLever(a,'oneTimeExpenses',{label0:'Roof',age0:'2.5',amount0:'1000'});assert.equal(w.changes.oneTimeExpenses,undefined);assert.match(a.state.labUi.leverError,/Expense 1/);
+  await a.click('lab-lever-cancel');assert.equal(a.workers.length,0);
+  const pending=a.runLab(),first=await nextWorker(a,0);
+  await setLever(a,'annualBaseSpending',{annual:'50000'});
+  await settle(a,pending);
+  const row=labRows(a)[1];assert.equal(row.stale,true,'An edited what-if no longer matches its completed run');assert.equal(a.state.busy,false);
+  assert.ok(first);assert.equal(a.labViewModel().summary,null);
 });
 
 test('guided savings tasks and review links reveal the right fields without changing assumptions',async()=>{
@@ -646,21 +658,22 @@ test('unknown Roth records save a draft and preserve retained values and all inv
   assert.equal(a.saved().inputSources[before.id]['rothHistory.firstContributionYear'],'Entered','A zero account never needs history');
 });
 
-test('combined comparisons apply both changes, retain ownership and copies preserve source paths',async()=>{
-  const a=app(),before=structuredClone(a.current()),date=model.addCalendarMonths(before.household.retirementDate,12);
-  a.element('#main').listeners.input({target:{dataset:{labInput:'retirementDate'},value:date}});
-  a.element('#main').listeners.input({target:{dataset:{labInput:'monthlySpending'},value:'4000'}});
-  const pending=a.runLab(true,true);
-  for(let i=0;i<4;i++){
-    const w=a.workers[i];assert.ok(w);
-    if(i===3){assert.equal(w.data.scenario.household.retirementDate,date);assert.equal(w.data.scenario.spending.annualBaseSpending,48000);assert.equal(w.data.scenario.household.spouseRetirementDate,before.household.spouseRetirementDate);}
-    w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});await Promise.resolve();
-  }
-  await pending;assert.equal(a.state.labResults.length,4);assert.deepEqual(structuredClone(a.current()),before);
-  await a.click('copy-comparison',{index:'3'});
-  assert.equal(a.current().spending.annualBaseSpending,48000);assert.equal(a.current().household.retirementDate,date);
-  assert.equal(a.current().numberOfSimulations,before.numberOfSimulations);
-  assert.equal(a.saved().inputSources[a.current().id]['spending.annualBaseSpending'],'Entered');
+test('Pro sets compare up to four stacked what-ifs, and Make this my plan updates the saved plan',async()=>{
+  const a=app();a.state.access.tier='pro';const s=a.current(),before=structuredClone(s),date=model.addCalendarMonths(before.household.retirementDate,12);
+  const set=a.labViewModel().set;assert.deepEqual(set.whatIfs.map(w=>w.name),['Retire 2 years later','Spend 5% less','Claim Social Security at 70']);
+  await a.click('lab-add');const w=a.labViewModel().editing;
+  await setLever(a,'retirementDate',{date});await setLever(a,'annualBaseSpending',{annual:'48000'});await setLever(a,'rothConversion',{cap:'0.24'});
+  assert.match(a.lab(),/4 of 4 what-ifs/);await a.click('lab-add');assert.match(a.state.message,/up to 4 what-ifs/);
+  const pending=a.runLab(),seen=[];await settle(a,pending,worker=>{if(worker.data.options?.captureMetrics)seen.push(worker.data.scenario);return runSimulation({...worker.data.scenario,numberOfSimulations:20});});
+  assert.equal(seen.length,5);assert.ok(seen.every(x=>x.numberOfSimulations===100));
+  const combined=seen[4];assert.equal(combined.household.retirementDate,date);assert.equal(combined.spending.annualBaseSpending,48000);assert.deepEqual(combined.rothConversion,{enabled:true,marginalRateCap:.24});
+  assert.equal(combined.household.spouseRetirementDate,before.household.spouseRetirementDate);assert.deepEqual(structuredClone(a.current()),before);
+  const html=a.lab();assert.match(html,/In short/);assert.match(html,/Every number, side by side/);assert.match(html,/Lifetime federal income tax/);
+  await a.click('lab-apply',{id:w.id});
+  assert.equal(a.current().id,before.id);assert.equal(a.current().spending.annualBaseSpending,48000);assert.equal(a.current().household.retirementDate,date);assert.equal(a.current().rothConversion.marginalRateCap,.24);
+  assert.equal(a.saved().inputSources[before.id]['spending.annualBaseSpending'],'Entered');assert.equal(a.state.results.has(before.id),false);
+  assert.equal(a.state.view,'setup');assert.equal(a.state.setupSection,5);assert.equal(a.state.labResults,null);
+  assert.equal(a.saved().labSets[before.id].sets[0].whatIfs.length,4,'The what-if stays in the set');
 });
 
 test('recurring budget deductions copy only housing and health amounts and require fresh review',async()=>{
@@ -697,7 +710,7 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
     return elements.get(selector);
   }
   const document={activeElement:null,querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement(){return {click(){downloads.push({name:this.download,blob:downloadBlobs.get(this.href)});}};}};
-  const context=vm.createContext({...model,...format,...guidance,...withdrawalsView,...growthHelper,...moneyInput,...planReview,...resultCaching,...frontierView,...savingsTargets,createResultCache:()=>({
+  const context=vm.createContext({...model,...format,...guidance,...withdrawalsView,...growthHelper,...moneyInput,...planReview,...resultCaching,...frontierView,...savingsTargets,...planLab,...planLabView,createResultCache:()=>({
       async load(id){const record=resultStorage.fail?null:structuredClone(resultRecords.get(id)||null);await resultStorage.beforeLoad?.(id);return record;},
       async save(s,r,today){if(resultStorage.fail)return null;await resultStorage.beforeSave?.(s,r);resultRecords.set(s.id,{id:s.id,version:1,fingerprint:resultCaching.resultFingerprint(s,today),result:structuredClone(r)});return s.id;},
       async remove(id){resultRecords.delete(id);},async clear(){resultRecords.clear();}
@@ -712,11 +725,26 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
   });
   const source=readFileSync(new URL('../dist/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replaceAll('import.meta.url',JSON.stringify(new URL('../dist/app.js',import.meta.url).href));
   vm.runInContext(source.replace('function render({preserveEditor=false}={}){','let renderCount=0;function render({preserveEditor=false}={}){renderCount++;'),context);
-  const api=vm.runInContext('({state,resultRestoreReady,setup,run,runLab,runDecision,results,withdrawals,dashboard,lab,budget,budgetView,budgetSummary,budgetCostCheck,budgetCostsReviewed,enterBudget,scenarios,render,billingView,accountCheck,reports,reportText,reportSummaryText,reportDetailsText,current,persist,loadAccess,isPro,effectivePaths,syncAuthState,linkAccounts,renders:()=>renderCount})',context);
+  const api=vm.runInContext('({state,resultRestoreReady,setup,run,runLab,runLabStress,runLabSensitivity,labViewModel,runDecision,results,withdrawals,dashboard,lab,budget,budgetView,budgetSummary,budgetCostCheck,budgetCostsReviewed,enterBudget,scenarios,render,billingView,accountCheck,reports,reportText,reportSummaryText,reportDetailsText,current,persist,loadAccess,isPro,effectivePaths,syncAuthState,linkAccounts,renders:()=>renderCount})',context);
   return {...api,workers,element,timers,document,downloads,stored:readStored,storageChanged:()=>windowListeners.storage({key:'retirement-readiness-lab-sites-v1'}),beforeUnload:event=>windowListeners.beforeunload(event),advanceTime(ms){clock.now+=ms;for(const [id,timer] of [...timers])if(timer.at<=clock.now){timers.delete(id);timer.fn();}},saved:()=>JSON.parse(readStored()),change:(selector,target)=>element(selector).listeners.change({target}),
     click:(action,extra={})=>{const el={dataset:{action,...extra}};return element('#main').listeners.click({target:{closest:selector=>selector==='[data-action]'?el:null}});}};
 }
 function seedExploration(a){a.state.labResults=[{label:'Old plan',result:null}];a.state.decision={targetReadiness:.8,simulationCount:200};}
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+// Answers workers in creation order until the calculation settles. Plan Lab
+// starts each comparison only after the previous one finishes.
+async function settle(a,pending,respond=w=>runSimulation(w.data.scenario)){
+  let done=false;pending.then(()=>{done=true;},()=>{done=true;});
+  for(let i=0;i<400&&!done;i++){
+    await tick();
+    for(const w of a.workers)if(!w.answered&&!w.terminated&&w.data&&w.onmessage){w.answered=true;w.onmessage({data:{type:'result',result:respond(w)}});}
+  }
+  return pending;
+}
+async function nextWorker(a,index){for(let i=0;i<50&&!a.workers[index]?.data;i++)await tick();return a.workers[index];}
+const labRows=a=>a.labViewModel().rows;
+const leverInput=(a,lever,field,value)=>a.element('#main').listeners.input({target:{dataset:{labLever:lever,labField:field},value}});
+async function setLever(a,lever,values){await a.click('lab-lever-edit',{lever});for(const [field,value] of Object.entries(values))leverInput(a,lever,field,value);await a.click('lab-lever-save',{lever});}
 function assertCleared(a){assert.equal(a.state.labResults,null);assert.equal(a.state.decision,null);assert.equal(a.state.claimDecision,null);assert.equal(a.state.savingsDecision,null);}
 
 test('applying an age target saves its birthday date and preserves spouse timing and full-run paths',async()=>{
@@ -1439,7 +1467,7 @@ test('calculation updates preserve focused drafts through success and failure un
     const replacement=a.element('#live-editor');replacement.type='number';
     let retained;replacement.replaceWith=node=>{retained=node;};
     const pending=a[task]();a.document.activeElement=editor;
-    const workerCount=task==='runLab'?7:1;
+    const workerCount=task==='runLab'?4:1;
     for(let i=0;i<workerCount;i++){
       const worker=a.workers[i];assert.ok(worker);
       worker.onmessage({data:outcome==='error'?{type:'error',message:'Test calculation failure'}:{type:'result',result:task==='runDecision'?{targetReadiness:.8,simulationCount:200}:runSimulation(worker.data.scenario)}});
@@ -1645,31 +1673,27 @@ test('resetting a plan while target search runs discards its old targets',async(
 });
 test('unchanged runs still publish results and complete all comparison rows',async()=>{
   const a=app(),pending=a.run();a.workers[0].onmessage({data:{type:'result',result:runSimulation(a.workers[0].data.scenario)}});await pending;assert.equal(a.state.results.size,1);
-  const lab=a.runLab();for(let i=1;i<=7;i++){const w=a.workers[i];assert.ok(w);w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});await Promise.resolve();}
-  await lab;assert.equal(a.state.labResults.length,7);assert.equal(a.state.busy,false);
+  await a.click('lab-add',{preset:'spend-less'});const lab=a.runLab();await settle(a,lab);
+  assert.equal(labRows(a).filter(r=>r.result).length,2);assert.equal(a.workers.length,3);assert.equal(a.state.busy,false);assert.equal(a.state.results.size,1);
 });
 test('lower-spending comparisons use the same home-sale assumptions as an editor change',async()=>{
   const s=model.baseScenario();s.home.currentValue=300000;
   s.budget.annualPropertyTaxes=20000;s.budget.monthlyBudgets=[{month:'2026-01',checkingSavingsBills:[{monthlyAmount:2500}]}];
   model.applyBudgetEstimate(s);
-  const a=app({scenarios:[s],selectedId:s.id}),pending=a.runLab();let spendingVariant;
-  for(let i=0;i<7;i++){
-    const worker=a.workers[i];assert.ok(worker);
-    if(i===2)spendingVariant=structuredClone(worker.data.scenario);
-    if(i===0||i===1)assert.equal(worker.data.scenario.budget.isAppliedToAnnualBaseSpending,true);
-    worker.onmessage({data:{type:'result',result:runSimulation(worker.data.scenario)}});await Promise.resolve();
-  }
-  await pending;
+  const a=app({scenarios:[s],selectedId:s.id});await a.click('lab-add',{preset:'spend-less'});
+  const pending=a.runLab();let spendingVariant;
+  await settle(a,pending,worker=>{if(a.workers.indexOf(worker)===1)spendingVariant=structuredClone(worker.data.scenario);else assert.equal(worker.data.scenario.budget.isAppliedToAnnualBaseSpending,true);return runSimulation(worker.data.scenario);});
   assert.equal(a.current().budget.isAppliedToAnnualBaseSpending,true,'Comparison must preserve the original budget');
-  const comparisonReadiness=a.state.labResults[2].result.successProbability;
+  const comparisonReadiness=labRows(a)[1].result.successProbability;
   await a.change('#main',{dataset:{field:'spending.annualBaseSpending',type:'money'},value:String(s.spending.annualBaseSpending*.95)});
   assert.deepEqual(spendingVariant.budget,structuredClone(a.current().budget));
   const entered=structuredClone(a.current());entered.numberOfSimulations=spendingVariant.numberOfSimulations;
   assert.equal(runSimulation(entered).successProbability,comparisonReadiness);
 });
-test('100-path outcomes use counts and a visible warning in free and Pro views and reports',()=>{
+test('100-path outcomes use counts and a visible warning in free and Pro views and reports',async()=>{
   for(const tier of ['free','pro']){
-    const a=app();a.state.access.tier=tier;const r=runSimulation(a.current());a.state.results.set(a.current().id,r);a.state.labResults=[{label:'Current plan',result:r}];
+    const a=app();a.state.access.tier=tier;const r=runSimulation(a.current());a.state.results.set(a.current().id,r);
+    await settle(a,a.runLab(),w=>w===a.workers[0]?structuredClone(r):runSimulation(w.data.scenario));
     const label=format.readinessLabel(r),percent=`${(100*r.successProbability).toFixed(1)}%`;assert.match(label,/^\d+ of 100$/);
     for(const html of [a.results(),a.dashboard(),a.lab()]){assert.ok(html.includes(label),label);assert.match(html,/Sample preview only/);assert.ok(!html.includes(percent),percent);}
     const report=a.reportText(a.current(),r);assert.ok(report.includes(`Lifetimes without a portfolio shortfall: ${label}`));assert.match(report,/SAMPLE PREVIEW ONLY/);assert.doesNotMatch(report,/Modeled readiness.*100\.0%/);
@@ -1687,15 +1711,16 @@ test('retained reports and comparisons keep their actual counts across upgrades 
     a.state.access.tier=completedCount>100?'pro':'free';
     a.current().numberOfSimulations=completedCount;
     const r=runSimulation(a.current());a.state.results.set(a.current().id,r);
-    a.state.labResults=[{label:'Current plan',result:r}];
+    await settle(a,a.runLab(),w=>runSimulation({...w.data.scenario,numberOfSimulations:completedCount}));
+    const completedLab=labRows(a).find(row=>row.result);completedLab.result;
     await a.loadAccess();
     const report=a.reportText(a.current(),r);
     assert.ok(report.includes(`Simulation paths: ${completedCount}; fixed comparison sequence`));
     assert.ok(report.includes(`  Simulation paths: ${completedCount}\n`));
     assert.ok(report.includes(`Paths for next run: ${nextCount}`));
-    const html=a.lab();
-    assert.ok(html.includes(`Each comparison runs ${completedCount} Monte Carlo paths`));
-    assert.ok(html.includes(completedCount<=100?'Samples without shortfall':'Modeled readiness'));
+    const html=a.lab(),lab=labRows(a)[0];
+    assert.equal(lab.result.provenance.simulationCount,completedCount,'A completed comparison keeps its actual count');
+    assert.ok(html.includes(completedCount<=100?'Sample lifetimes without a shortfall':'Readiness'));
     assert.equal(html.includes('Sample preview only'),completedCount<=100);
     assert.equal(a.state.results.get(a.current().id),r);
   }
@@ -1951,11 +1976,12 @@ test('worker progress updates the running status without finishing the calculati
 
 test('a comparison that already matches the plan is reported instead of rerun',async()=>{
   const s=model.baseScenario();Object.assign(s.withdrawalStrategy,{useCashReserveDuringDrawdowns:true,drawdownTrigger:-.01});
-  const a=app({scenarios:[s],selectedId:s.id}),pending=a.runLab();
-  for(let i=0;i<6;i++){const w=a.workers[i];assert.ok(w);w.onmessage({data:{type:'result',result:runSimulation(w.data.scenario)}});await Promise.resolve();}
-  await pending;assert.equal(a.workers.length,6);assert.equal(a.state.labResults.length,7);
-  const row=a.state.labResults.at(-1);assert.equal(row.label,'Use cash first in months below −1%');assert.equal(row.result,null);
-  assert.match(a.lab(),/Already matches the current plan/);assert.doesNotMatch(a.lab(),/Larger cash reserve/);
+  const a=app({scenarios:[s],selectedId:s.id});a.state.view='lab';
+  assert.doesNotMatch(a.lab(),/data-preset="cash"/,'A preset the plan already uses is not offered');
+  await a.click('lab-add');await setLever(a,'cashFirst',{trigger:'-0.01'});
+  const pending=a.runLab();await settle(a,pending);
+  assert.equal(a.workers.length,1);const row=labRows(a)[1];assert.equal(row.label,'Cash first in months below −1%');assert.equal(row.result,null);
+  assert.match(a.lab(),/Already matches your current plan/);
 });
 
 test('warnings and progress use the neutral notice style; completed actions use success styling',()=>{
@@ -2500,20 +2526,14 @@ test('all comparison modes allow 1000 Pro paths, keep free at 100 and respect sm
     // Mock successful worker completion; this test verifies dispatch limits,
     // displayed counts and preservation of saved choices, not engine math.
     completed.provenance.simulationCount=expectedCount;
-    for(const [args,rowCount] of [[[],7],[[true],3],[[true,true],4],[[false,false,true],2]]){
+    for(const [mode,rowCount] of [['run',tier==='pro'?4:1],['lower',tier==='pro'?5:2],['stress',tier==='pro'?10:0]]){
       const s=model.baseScenario();s.numberOfSimulations=selectedCount;s.simulationPathsCustomized=true;
       const a=app({scenarios:[s],selectedId:s.id});a.state.access.tier=tier;
-      a.element('#main').listeners.input({target:{dataset:{labInput:'retirementDate'},value:model.addCalendarMonths(a.current().household.retirementDate,12)}});
-      a.element('#main').listeners.input({target:{dataset:{labInput:'monthlySpending'},value:'4000'}});
-      const before=JSON.stringify(a.current()),pending=a.runLab(...args);
-      for(let i=0;i<rowCount;i++){
-        const worker=a.workers[i];assert.ok(worker);
-        assert.equal(worker.data.scenario.numberOfSimulations,expectedCount,`${tier}: ${JSON.stringify(args)}`);
-        worker.onmessage({data:{type:'result',result:structuredClone(completed)}});await Promise.resolve();
-      }
-      await pending;assert.equal(a.workers.length,rowCount);
+      const before=JSON.stringify(a.current()),counts=[];
+      await settle(a,mode==='run'?a.runLab():mode==='lower'?a.click('compare-lower-returns'):a.runLabStress(),worker=>{counts.push(worker.data.scenario.numberOfSimulations);return structuredClone(completed);});
+      assert.equal(counts.length,rowCount,`${tier}: ${mode}`);assert.ok(counts.every(n=>n===expectedCount),`${tier}: ${mode}`);
       assert.equal(JSON.stringify(a.current()),before);
-      assert.match(a.lab(),new RegExp(`Each comparison runs ${expectedCount} Monte Carlo paths`));
+      if(mode!=='stress')assert.ok(a.lab().includes(`${expectedCount.toLocaleString('en-US')} paths each`));
       assert.match(a.billingView(),/Comparisons use up to 1,000 paths per scenario/);
     }
   }
@@ -2525,16 +2545,13 @@ test('comparison copies retain personal balances, full-run count and all unchang
   const a=app({scenarios:[s],selectedId:s.id});a.state.access.tier='pro';
   a.state.entryPeriods[s.id]={'spending.annualBaseSpending':'month'};
   a.state.inputSources[s.id]['accounts.cash']='Entered';const parent=structuredClone(a.current()),pending=a.runLab();
-  for(let i=0;i<7;i++){
-    const worker=a.workers[i];assert.ok(worker);assert.equal(worker.data.scenario.numberOfSimulations,380);
-    worker.onmessage({data:{type:'result',result:runSimulation(worker.data.scenario)}});await Promise.resolve();
-  }
-  await pending;assert.match(a.lab(),/Create a plan with this change/);
-  const candidate=structuredClone(a.state.labResults[2].scenario);
-  await a.click('copy-comparison',{index:'2'});const copy=structuredClone(a.current());
+  await settle(a,pending,worker=>{assert.equal(worker.data.scenario.numberOfSimulations,380);return runSimulation({...worker.data.scenario,numberOfSimulations:40});});
+  const row=labRows(a)[2];assert.equal(row.label,'Spend 5% less');assert.match(a.lab(),/data-action="lab-copy"/);
+  const candidate=planLab.applyWhatIf(parent,row.changes);
+  await a.click('lab-copy',{id:row.id});const copy=structuredClone(a.current());
   assert.notEqual(copy.id,parent.id);assert.equal(copy.numberOfSimulations,380);
   assert.equal(copy.spending.annualBaseSpending,parent.spending.annualBaseSpending*.95);
-  candidate.id=copy.id;candidate.name=copy.name;candidate.numberOfSimulations=380;candidate.household.asOfDate='';
+  candidate.id=copy.id;candidate.name=copy.name;
   assert.deepEqual(copy,candidate);
   assert.deepEqual(structuredClone(a.state.scenarios.find(x=>x.id===parent.id)),parent);
   assert.equal(a.state.inputSources[copy.id]['accounts.cash'],'Entered');
@@ -2547,11 +2564,11 @@ test('comparison copies retain personal balances, full-run count and all unchang
 test('a comparison copied from an earlier date uses today after saving and reopening',async()=>{
   const today=model.localCalendarDate(),s=model.baseScenario();
   Object.assign(s.household,{separatePeople:true,alreadyRetired:true,birthday:model.addCalendarMonths(today,-60*12),retirementDate:''});
-  const a=app({scenarios:[s],selectedId:s.id}),candidate=structuredClone(a.current());
-  candidate.household.asOfDate=model.addCalendarMonths(today,-1);candidate.spending.annualBaseSpending*=.95;
-  a.state.labResults=[{label:'Less spending',scenario:candidate,result:{},changedPaths:['spending.annualBaseSpending']}];
-  await a.click('copy-comparison',{index:'0'});
-  const copy=a.current();assert.equal(copy.household.asOfDate,'');assert.equal(candidate.household.asOfDate,model.addCalendarMonths(today,-1));
+  const a=app({scenarios:[s],selectedId:s.id}),source=a.current();
+  await a.click('lab-add',{preset:'spend-less'});const w=a.labViewModel().set.whatIfs[0];
+  source.household.asOfDate=model.addCalendarMonths(today,-1);
+  await a.click('lab-copy',{id:w.id});
+  const copy=a.current();assert.notEqual(copy.id,source.id);assert.equal(copy.household.asOfDate,'');assert.equal(source.household.asOfDate,model.addCalendarMonths(today,-1));
   const reopened=app(a.saved()),timeline=model.scenarioTimeline(reopened.current());
   assert.equal(timeline.startDate,today);assert.equal(timeline.currentAge,60);
   assert.match(reopened.dashboard(),/Current age 60/);assert.ok(reopened.dashboard().includes(model.dateLabel(today)));
@@ -2948,8 +2965,8 @@ test('claiming target search uses its own worker and slider, then applies and sa
   const records=new Map(),a=app(null,{resultRecords:records});a.state.access.tier='pro';const s=a.current();s.numberOfSimulations=500;s.simulationPathsCustomized=true;
   s.household.filingStatus='Married';s.household.separatePeople=true;s.household.spouseRetirementDate=model.addCalendarMonths(s.household.spouseBirthday,68*12);s.socialSecurity.spouseClaimAge=69;
   const before=structuredClone(s);seedExploration(a);
-  assert.match(a.lab(),/Find Social Security claiming age &amp; spending targets/);
-  const pending=a.runDecision(true),worker=a.workers.at(-1);assert.equal(worker.data.task,'claim-decision');
+  assert.match(a.lab(),/Goal finder/);assert.match(a.lab(),/<option value="claiming" >Social Security claiming age &amp; spending/);
+  const pending=a.runDecision(true),worker=a.workers.at(-1);assert.equal(worker.data.task,'claim-decision');assert.equal(worker.data.options,undefined,'The original 80% target is the default');
   worker.onmessage({data:{type:'result',result:claimingTargets()}});await pending;
   assert.ok(a.state.decision);assert.ok(a.state.claimDecision);assert.equal(a.state.claimFrontierSelection,5);
   assert.deepEqual(structuredClone(s),before);const stored=a.stored();
@@ -2966,7 +2983,7 @@ test('claiming target search uses its own worker and slider, then applies and sa
 });
 
 test('claiming searches require Pro and ignore results for plans edited during the calculation',async()=>{
-  const a=app();assert.match(a.lab(),/data-action="run-claim-decision" disabled/);await a.runDecision(true);assert.equal(a.workers.length,0);
+  const a=app();assert.doesNotMatch(a.lab(),/data-action="run-lab-goal"/);await a.runDecision(true);assert.equal(a.workers.length,0);
   a.state.access.tier='pro';a.state.claimDecision=claimingTargets();seedExploration(a);
   const pending=a.runDecision(true),worker=a.workers.at(-1);
   await a.change('#main',{dataset:{field:'accounts.pretax',type:'money'},value:'900000'});assertCleared(a);
@@ -2975,7 +2992,7 @@ test('claiming searches require Pro and ignore results for plans edited during t
 });
 
 test('claiming apply rejects untested points and ignores actions while another calculation is running',async()=>{
-  const a=app(),before=structuredClone(a.current());a.state.access.tier='pro';a.state.claimDecision=claimingTargets();
+  const a=app(),before=structuredClone(a.current());a.state.access.tier='pro';a.state.claimDecision=claimingTargets();a.state.labUi.goal.kind='claiming';
   for(const point of a.state.claimDecision.frontier.points)point.tested=false;
   assert.doesNotMatch(a.lab(),/data-action="apply-claim-frontier-target"/);await a.click('apply-claim-frontier-target');
   a.state.claimDecision=claimingTargets();a.state.busy=true;assert.match(a.lab(),/data-action="apply-claim-frontier-target" disabled/);
@@ -2987,7 +3004,7 @@ test('savings targets use a separate worker and slider, apply savings plus age a
   const records=new Map(),a=app(null,{resultRecords:records});a.state.access.tier='pro';const s=a.current();s.numberOfSimulations=500;s.simulationPathsCustomized=true;
   s.contributions.pretax=12000;s.contributions.roth=6000;s.contributions.employerPretax=3000;s.contributions.annualIncrease=.03;s.spouseContributions.cash=5000;
   const before=structuredClone(s);seedExploration(a);a.state.claimDecision=claimingTargets();
-  assert.match(a.lab(),/Find age &amp; annual savings/);
+  assert.match(a.lab(),/Retirement age &amp; annual savings/);
   const pending=a.runDecision('savings'),worker=a.workers.at(-1);assert.equal(worker.data.task,'savings-decision');
   worker.onmessage({data:{type:'result',result:savingsTargetsResult()}});await pending;
   assert.ok(a.state.decision);assert.ok(a.state.claimDecision);assert.ok(a.state.savingsDecision);assert.deepEqual(structuredClone(s),before);
@@ -3002,7 +3019,7 @@ test('savings targets use a separate worker and slider, apply savings plus age a
   const restored=app(a.saved());assert.equal(model.primaryRetirementAge(restored.current()),62);assert.equal(restored.current().contributions.pretax,20000);assert.equal(restored.current().spending.annualBaseSpending,before.spending.annualBaseSpending);
 });
 test('savings targets require Pro, ignore edited-plan results and refuse untested or busy apply',async()=>{
-  const a=app();assert.match(a.lab(),/data-action="run-savings-decision" disabled/);await a.runDecision('savings');assert.equal(a.workers.length,0);
+  const a=app();assert.doesNotMatch(a.lab(),/data-action="run-lab-goal"/);await a.runDecision('savings');assert.equal(a.workers.length,0);
   a.state.access.tier='pro';const pending=a.runDecision('savings'),worker=a.workers.at(-1);
   await a.change('#main',{dataset:{field:'accounts.pretax',type:'money'},value:'900000'});
   worker.onmessage({data:{type:'result',result:savingsTargetsResult()}});await pending;assertCleared(a);
@@ -3018,4 +3035,128 @@ test('applying savings marks only the changed employer Roth deposit field Estima
   await a.click('apply-savings-frontier-target');assert.equal(s.employerRothAccounts[0].annualContribution,30000);assert.equal(s.employerRothAccounts[0].annualEmployerContribution,2000);assert.equal(s.employerRothAccounts[0].annualIncrease,.04);
   assert.equal(a.saved().inputSources[s.id]['employerRothAccounts.0.annualContribution'],'Estimated');assert.notEqual(a.saved().inputSources[s.id]['employerRothAccounts'],'Estimated');
   assert.equal(s.household.spouseRetirementDate,before.household.spouseRetirementDate);assert.deepEqual(structuredClone(s.spouseContributions),before.spouseContributions);assert.deepEqual(structuredClone(s.spending),before.spending);
+});
+
+test('comparison sets are Pro, persist with the plan, survive reload, copies and backups, and reject malformed entries',async()=>{
+  const free=app();free.state.view='lab';assert.match(free.lab(),/\+ New comparison set · Pro/);await free.click('lab-new-set');assert.match(free.state.message,/part of Pro/);
+  await free.click('lab-add',{preset:'claim-70'});await free.click('lab-add',{preset:'spend-less'});assert.match(free.state.message,/Free accounts compare one what-if/);
+  assert.equal(free.labViewModel().set.whatIfs.length,1);
+  const a=app();a.state.access.tier='pro';const s=a.current();a.state.view='lab';
+  await a.click('lab-new-set');const second=a.labViewModel().set;assert.equal(second.name,'Comparison set 2');assert.equal(second.whatIfs.length,0);
+  await a.change('#main',{dataset:{labSetName:''},value:'  Tax strategy  '});assert.equal(second.name,'Tax strategy');
+  await a.click('lab-add',{preset:'roth'});await a.change('#main',{dataset:{labWhatifName:''},value:'Convert to 22%'});
+  const saved=a.saved().labSets[s.id];assert.equal(saved.sets.length,2);assert.equal(saved.activeSet,second.id);assert.equal(saved.sets[1].whatIfs[0].name,'Convert to 22%');
+  const reloaded=app(a.saved());reloaded.state.access.tier='pro';assert.equal(reloaded.labViewModel().set.name,'Tax strategy');
+  await a.click('export-backup');const backup=JSON.parse(await a.downloads.at(-1).blob.text());assert.deepEqual(backup.labSets[s.id],saved);
+  const imported=app();await imported.change('#import-file',{files:[{text:async()=>JSON.stringify(backup)}],value:'backup.json'});assert.deepEqual(structuredClone(imported.state.labSets[s.id]),saved);
+  await a.click('new-scenario');const copied=a.saved().labSets[a.current().id];assert.equal(copied.sets.length,2);assert.notEqual(copied.sets[0].id,saved.sets[0].id);assert.deepEqual(copied.sets[1].whatIfs[0].changes,saved.sets[1].whatIfs[0].changes);
+  await a.click('select-scenario',{id:s.id});a.state.view='lab';await a.click('lab-select-set',{set:saved.sets[1].id});
+  await a.click('lab-delete-set');assert.equal(a.saved().labSets[s.id].sets.length,1);
+  const bad=app({scenarios:[model.baseScenario()],labSets:{'base-plan':{activeSet:'x',sets:[{id:'a',name:5,whatIfs:[{id:'w',name:'',changes:{annualBaseSpending:1000,unknownLever:1}},'bad']},'bad',{id:'a'}]},missing:{sets:[]}}});
+  const clean=bad.state.labSets['base-plan'];assert.equal(clean.sets.length,1);assert.equal(clean.activeSet,'a');assert.deepEqual(structuredClone(clean.sets[0].whatIfs[0].changes),{annualBaseSpending:1000});assert.equal(clean.sets[0].name,'Comparison set');assert.equal(bad.state.labSets.missing,undefined);
+});
+
+test('stress tests and the sensitivity ranking run Pro comparisons on the same paths and report each result',async()=>{
+  const a=app();a.state.access.tier='pro';a.current().numberOfSimulations=40;a.current().simulationPathsCustomized=true;a.state.view='lab';
+  assert.match(a.lab(),/data-action="run-lab-stress"/);assert.match(a.lab(),/data-action="run-lab-sensitivity"/);
+  await settle(a,a.runLab());const target=labRows(a).filter(r=>!r.baseline).sort((x,y)=>y.result.successProbability-x.result.successProbability)[0];
+  const stressed=[];await settle(a,a.runLabStress(),w=>{stressed.push(w.data);return runSimulation(w.data.scenario,()=>{},w.data.options);});
+  assert.equal(stressed.length,10);assert.deepEqual(stressed[0].options.stress,{marketDrop:.3});assert.equal(stressed[4].scenario.market.stockMeanReturn,.07);assert.equal(stressed[6].options.stress.forceCare,true);
+  assert.deepEqual(stressed.filter((x,i)=>i%2===1).map(x=>x.scenario.socialSecurity.claimAge===70||x.scenario.household.retirementDate!==a.current().household.retirementDate||x.scenario.spending.annualBaseSpending!==a.current().spending.annualBaseSpending),[true,true,true,true,true]);
+  const vm=a.labViewModel();assert.equal(vm.stress.target,target.id);assert.equal(vm.stress.stale,false);assert.ok(vm.stress.rows.every(r=>r.results.baseline&&r.results[target.id]));
+  assert.match(a.lab(),/Stocks fall 30% when you retire/);
+  const runs=[];await settle(a,a.runLabSensitivity(),w=>{runs.push(w.data.scenario);return runSimulation(w.data.scenario,()=>{},w.data.options);});
+  assert.equal(runs.length,15);assert.ok(runs.every(x=>x.numberOfSimulations===40));
+  const t=a.labViewModel().sensitivity;assert.equal(t.rows.length,7);assert.ok(t.rows.every(r=>r.low===null||Number.isFinite(r.low)));
+  const spending=t.rows.find(r=>r.key==='spending');assert.ok(spending.high>=spending.low);
+  const before=a.labViewModel().set.whatIfs.length;await a.click('lab-remove',{id:a.labViewModel().set.whatIfs[0].id});
+  await a.click('lab-sensitivity-whatif',{input:'claim',side:'high'});assert.equal(a.labViewModel().set.whatIfs.length,before);assert.deepEqual(structuredClone(a.labViewModel().set.whatIfs.at(-1).changes),{claimAge:70});
+  await a.change('#main',{dataset:{field:'spending.annualBaseSpending',type:'money'},value:'90000'});assert.equal(a.state.labResults,null,'Plan edits clear Plan Lab results');
+});
+
+test('free accounts see locked Pro tools; the goal finder passes its readiness target and adds a tested pair as a what-if',async()=>{
+  const free=app();free.state.view='lab';const html=free.lab();
+  for(const text of ['Rank which inputs change your readiness','Test a market crash','Find the retirement age, spending'])assert.ok(html.includes(text),text);
+  await free.runLabStress();await free.runLabSensitivity();assert.equal(free.workers.length,0);
+  const a=app();a.state.access.tier='pro';a.state.view='lab';
+  a.element('#main').listeners.input({target:{dataset:{labGoal:'target'},value:'90'}});await a.change('#main',{dataset:{labGoal:'kind'},value:'claiming'});
+  const pending=a.click('run-lab-goal'),worker=await nextWorker(a,0);assert.equal(worker.data.task,'claim-decision');assert.equal(worker.data.options.targetReadiness,.9);
+  worker.onmessage({data:{type:'result',result:claimingTargets()}});await pending;
+  assert.match(a.lab(),/data-action="lab-frontier-whatif" data-kind="claiming"/);
+  const count=a.labViewModel().set.whatIfs.length;await a.click('lab-remove',{id:a.labViewModel().set.whatIfs[0].id});
+  await a.click('lab-frontier-whatif',{kind:'claiming'});const w=a.labViewModel().set.whatIfs.at(-1);
+  assert.equal(a.labViewModel().set.whatIfs.length,count);assert.equal(w.changes.claimAge,67);assert.equal(w.changes.annualBaseSpending,105000);
+});
+
+test('the live estimate runs separately for Pro edits and CSV and report downloads include every compared plan',async()=>{
+  const a=app();a.state.access.tier='pro';a.current().numberOfSimulations=30;a.current().simulationPathsCustomized=true;a.state.view='lab';
+  const id=a.labViewModel().set.whatIfs[1].id;await a.click('lab-edit',{id});
+  const live=await nextWorker(a,0);assert.equal(live.data.scenario.numberOfSimulations,200);assert.equal(live.data.options.captureMetrics,undefined);assert.equal(a.state.busy,false);
+  await settle(a,(async()=>{for(let i=0;i<50&&a.state.labLive.status!=='done';i++)await tick();})());
+  assert.equal(a.labViewModel().live.status,'done');assert.match(a.lab(),/≈ /);
+  await setLever(a,'claimAge',{age:'68'});assert.equal(a.labViewModel().live.status,'running','A new edit replaces the finished estimate');
+  await settle(a,a.runLab(),w=>runSimulation(w.data.scenario,()=>{},w.data.options||{}));await a.click('lab-download-csv');
+  const csv=await a.downloads.at(-1).blob.text();assert.equal(a.downloads.at(-1).name,'plan-lab-comparison.csv');
+  assert.match(csv,/^Plan,Changes,Paths,Readiness/);assert.match(csv,/Current plan/);assert.match(csv,/Spend 5% less/);assert.match(csv,/\nAge,Current plan median balance/);
+  await a.click('lab-download-report');const report=await a.downloads.at(-1).blob.text();assert.match(report,/PLAN LAB COMPARISON/);assert.match(report,/Median lifetime federal income tax/);
+  const free=app();await free.click('lab-download-csv');assert.equal(free.downloads.length,0);
+});
+test('inputs added through Plan Lab appear in review and reports and can be removed there',async()=>{
+  const a=app(),s=a.current(),end=Math.floor(model.primaryRetirementAge(s))+3;await a.click('lab-add');
+  await setLever(a,'partTimeIncome',{annualNet:'24,000',endAge:String(end)});await setLever(a,'withdrawalOrder',{order:'TaxableFirst'});
+  const w=a.labViewModel().editing;await a.click('lab-apply',{id:w.id});
+  assert.deepEqual(structuredClone(s.partTimeIncome),{annualNet:24000,endAge:end});assert.equal(s.withdrawalStrategy.withdrawalOrder,'TaxableFirst');
+  assert.match(a.setup(),/Added in Plan Lab/);assert.match(a.setup(),/Work part-time for \$24,000 a year until/);
+  assert.match(a.reportSummaryText(s),/Added in Plan Lab/);assert.match(model.scenarioEngineVersion(s),/plan-lab-v2/);
+  await a.click('remove-lab-input',{key:'partTimeIncome'});assert.deepEqual(structuredClone(s.partTimeIncome),{annualNet:0,endAge:0});
+  await a.click('remove-lab-input',{key:'withdrawalOrder'});assert.equal(s.withdrawalStrategy.withdrawalOrder,'Standard');
+  assert.doesNotMatch(a.setup(),/Added in Plan Lab/);assert.equal(model.usesPlanLabInputs(s),false);assert.equal(app(a.saved()).current().withdrawalStrategy.withdrawalOrder,'Standard');
+});
+
+test('all lever draft fields survive a validation error and live estimate completion',async()=>{
+  const a=app();a.state.access.tier='pro';a.state.view='lab';
+  await a.click('lab-edit',{id:a.labViewModel().set.whatIfs[1].id});
+  const live=await nextWorker(a,0);assert.ok(live);
+  await a.click('lab-lever-edit',{lever:'oneTimeExpenses'});
+  const draft={label0:'Roof & gutters',age0:'2.5',amount0:'30,000',label1:'Car',age1:'80',amount1:'0',label2:'',age2:'',amount2:''};
+  for(const [field,value] of Object.entries(draft))leverInput(a,'oneTimeExpenses',field,value);
+  await a.click('lab-lever-save',{lever:'oneTimeExpenses'});assert.match(a.state.labUi.leverError,/Expense 1/);
+  const assertDraft=()=>{
+    const html=a.element('#main').innerHTML;
+    for(const [field,value] of Object.entries(draft))assert.ok(html.includes(`id="lab-oneTimeExpenses-${field}"`)&&new RegExp(`id="lab-oneTimeExpenses-${field}"[^>]*value="${value.replace('&','&amp;')}"`).test(html),field);
+  };
+  assertDraft();
+  await settle(a,(async()=>{for(let i=0;i<50&&a.state.labLive.status!=='done';i++)await tick();})(),w=>runSimulation({...w.data.scenario,numberOfSimulations:20}));
+  assert.equal(a.state.labLive.status,'done');assertDraft();
+  leverInput(a,'oneTimeExpenses','age0','75');await a.click('lab-lever-save',{lever:'oneTimeExpenses'});
+  assert.deepEqual(structuredClone(a.labViewModel().editing.changes.oneTimeExpenses),[{label:'Roof & gutters',age:75,amount:30000},{label:'Car',age:80,amount:0}]);
+});
+
+test('malformed saved lever values do not block loading or importing plans and comparisons',async()=>{
+  const s=model.prepareCalendarScenario(model.baseScenario(),{needsReview:false});
+  const saved={scenarios:[s],selectedId:s.id,labSets:{[s.id]:{activeSet:'set',sets:[{id:'set',name:'Imported',whatIfs:[{id:'w',name:'Expenses',changes:{oneTimeExpenses:null,partTimeIncome:null,rothConversion:null,cashFirst:[],homePlan:'bad',annualBaseSpending:60000}}]}]}}};
+  const restored=app(saved),imported=app();
+  await imported.change('#import-file',{files:[{text:async()=>JSON.stringify(saved)}],value:'backup.json'});
+  for(const a of [restored,imported]){
+    a.state.view='lab';assert.match(a.lab(),/Imported/);assert.match(a.lab(),/Spend \$60,000 a year/);
+    const w=a.labViewModel().set.whatIfs[0];assert.deepEqual(structuredClone(w.changes),{annualBaseSpending:60000});
+    await a.click('lab-edit',{id:w.id});await a.click('lab-lever-edit',{lever:'oneTimeExpenses'});assert.match(a.lab(),/Expense 1 name/);
+  }
+});
+
+test('hiding all chart plans keeps the legend usable for every measure and reselecting restores the chart',async()=>{
+  const a=app();a.state.view='lab';await a.click('lab-add',{preset:'spend-less'});
+  await settle(a,a.runLab(),w=>runSimulation({...w.data.scenario,numberOfSimulations:20},()=>{},w.data.options));
+  const rows=labRows(a),chart=()=>a.lab().match(/<section class="card lab-chart"[\s\S]*?<\/section>/)[0];
+  for(const row of rows)await a.change('#main',{dataset:{labSeries:row.id},checked:false});
+  for(const measure of ['funded','median','tough','tax']){
+    await a.click('lab-measure',{measure});const html=chart();
+    assert.match(html,/Select at least one plan to show the chart/);assert.equal((html.match(/data-lab-series=/g)||[]).length,rows.length);
+    assert.doesNotMatch(html,/NaN|Infinity|<svg|id="lab-chart-age"/);
+    await a.change('#main',{dataset:{labSeries:'baseline'},checked:true});assert.match(chart(),/<svg/);assert.match(chart(),/id="lab-chart-age"/);
+    await a.change('#main',{dataset:{labSeries:'baseline'},checked:false});
+  }
+  const vm=a.labViewModel();vm.hidden=new Set();vm.rows=vm.rows.map(row=>({...row,result:{...row.result,notFailedByAge:[]}}));vm.measure='funded';
+  const noData=planLabView.labPage(vm,{head:'',notices:'',goal:''}).match(/<section class="card lab-chart"[\s\S]*?<\/section>/)[0];
+  assert.match(noData,/No data is available for this measure/);assert.doesNotMatch(noData,/NaN|Infinity|<svg|id="lab-chart-age"/);
 });

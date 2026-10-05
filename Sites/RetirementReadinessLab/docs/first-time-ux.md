@@ -191,3 +191,7 @@ Screenshots use illustrative local data: [desktop monthly picture](ux-evidence/r
 ## Employer Roth support follow-up
 
 The unsupported-account findings above describe the earlier release. The account check now directs Roth 401(k)/403(b) balances into separate employer Roth records in Account balances. Missing plans and uncertain account types remain flagged. See [the implemented behavior and remaining limits](employer-roth.md).
+
+## Plan Lab (formerly Compare changes)
+
+The comparison page is renamed Plan Lab and becomes the main Pro feature. Plans keep named comparison sets with up to four stacked what-ifs (one in the free preview), and the builder adds part-time take-home pay, one-time expenses, a planned home sale or downsizing and a withdrawal order alongside the existing timing, spending, savings, investment, tax and healthcare changes. Results open with a plain-language summary, cards, one overlay chart, a full numbers table with lifetime taxes and Medicare surcharge years, and CSV and report downloads. Pro adds a live estimate, stress tests on the same paths, a ranking of what moves the result and a goal finder with an adjustable readiness target that replaces the three separate target buttons. The free preview keeps its single 100-path what-if and shows each Pro tool with a short locked note. The earlier custom date/spending tests and quick comparisons became builder levers and one-click presets. Plans that never use the new inputs calculate exactly as before.

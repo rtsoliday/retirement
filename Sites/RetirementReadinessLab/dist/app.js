@@ -7,9 +7,11 @@ import {createResultCache,matchingCachedResult,resultFingerprint} from './result
 import {oneYearGrowth} from './growth-helper.js';
 import {withdrawalContent} from './withdrawals-view.js';
 import {isPreviewResult,readinessLabel,shareLabel,ageYearRows,balanceDisplayRows,PREVIEW_WARNING} from './result-format.js';
+import {LAB_LEVERS,LAB_PRESETS,LAB_MAX_WHAT_IFS,LAB_FREE_WHAT_IFS,LAB_MAX_SETS,LIVE_ESTIMATE_PATHS,SENSITIVITY_PATHS,STRESS_TESTS,SENSITIVITY_INPUTS,labLever,applyWhatIf,whatIfErrors,describeChanges,autoName,newWhatIf,labId,defaultLabSets,normalizeLabSets,copyLabSets,readinessDelta,labMetrics,labSummary,labCsv} from './plan-lab.js';
+import {labPage} from './plan-lab-view.js';
 import {chartCard,mountCharts,disposeCharts} from './charts.js';
 import {initializeSocialAuth,socialState,authHeaders,signInSocial,linkSocialProvider,signOutSocial} from './auth.js';
-import {baseScenario,employerRothDefaults,employerRothTotal,hasEmployerRoth,retirementAge,primaryRetirementAge,ageLabel,calendarDate,calendarMonthsBetween,localCalendarDate,prepareCalendarScenario,scenarioTimeline,forecastRetirementDate,dateLabel,syncCalendarAges,setRetirementAge,delayRetirement,sampleScenarios,normalizeScenarios,applyProSimulationDefault,validateScenario,validateScenarioDraft,validateScenarioStructure,budgetBreakdown,budgetMonthTotals,validateBudget,markBudgetEdited,applyBudgetEstimate,setAnnualBaseSpending,ruleOf55Applies,earlyWithdrawalContext,ANNUAL_BILLS,SEPARATE_COSTS,ROTH_CONVERSION_RATES,scenarioWarnings,ENGINE_VERSION,scenarioEngineVersion,DEFAULT_SEED,FREE_SIMULATION_PATHS,SMALL_SAMPLE_PATHS,MIN_SIMULATION_PATHS,MAX_SIMULATION_PATHS,MAX_DOLLAR_AMOUNT} from './model.js';
+import {baseScenario,employerRothDefaults,employerRothTotal,hasEmployerRoth,retirementAge,primaryRetirementAge,ageLabel,calendarDate,calendarMonthsBetween,addCalendarMonths,partTimeIncomeActive,homePlanActive,localCalendarDate,prepareCalendarScenario,scenarioTimeline,forecastRetirementDate,dateLabel,syncCalendarAges,setRetirementAge,delayRetirement,sampleScenarios,normalizeScenarios,applyProSimulationDefault,validateScenario,validateScenarioDraft,validateScenarioStructure,budgetBreakdown,budgetMonthTotals,validateBudget,markBudgetEdited,applyBudgetEstimate,setAnnualBaseSpending,ruleOf55Applies,earlyWithdrawalContext,ANNUAL_BILLS,SEPARATE_COSTS,ROTH_CONVERSION_RATES,scenarioWarnings,ENGINE_VERSION,scenarioEngineVersion,DEFAULT_SEED,FREE_SIMULATION_PATHS,SMALL_SAMPLE_PATHS,MIN_SIMULATION_PATHS,MAX_SIMULATION_PATHS,MAX_DOLLAR_AMOUNT} from './model.js';
 
 const $=s=>document.querySelector(s),escapeHTML=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=(v,d=0)=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:d}).format(v||0);
@@ -32,7 +34,7 @@ const TARGETS_CANCELED='Target search canceled.';
 const COMPARISONS_CANCELED='Comparisons canceled. Completed rows are kept.';
 const SAVED_RERUN='Saved. Run the simulation to refresh results.';
 // Warnings and neutral information use the plain notice style, not success styling.
-const NEUTRAL_MESSAGES=new Set([ACCESS_UNAVAILABLE,ACCESS_RETRY,PAYMENT_PENDING,SIGN_IN_AGAIN,GOOGLE_UNAVAILABLE,TARGETS_NEED_PRO,FREE_PATHS_ONLY,LINK_HINT,CHECKOUT_CANCELED,CALCULATION_CANCELED,TARGETS_CANCELED,COMPARISONS_CANCELED,'Comparison inputs changed. Choose Compare my changes to update the rows.']);
+const NEUTRAL_MESSAGES=new Set([ACCESS_UNAVAILABLE,ACCESS_RETRY,PAYMENT_PENDING,SIGN_IN_AGAIN,GOOGLE_UNAVAILABLE,TARGETS_NEED_PRO,FREE_PATHS_ONLY,LINK_HINT,CHECKOUT_CANCELED,CALCULATION_CANCELED,TARGETS_CANCELED,COMPARISONS_CANCELED]);
 function noticeClass(message){return 'notice'+(message.startsWith('Error')?' error':NEUTRAL_MESSAGES.has(message)||state.busy&&message===state.busyMessage?'':' good');}
 let lastSavedRaw=null,saveQueue=Promise.resolve(),pendingSaves=0,unsavedRecoveryDraft=false,recoveryDraftRevision=0;
 let saved,savedScenarios,savedStoredRaw=null,savedLoadError='';
@@ -55,6 +57,7 @@ state.inputSources=normalizeInputSources(saved?.inputSources,state.scenarios,has
 state.optionalAnswers=normalizeOptionalAnswers(saved?.optionalAnswers,state.scenarios);
 function normalizeAccountChecks(raw,scenarios){return Object.fromEntries(scenarios.filter(s=>raw&&Object.hasOwn(raw,s.id)&&['yes','no','unsure'].includes(raw[s.id])).map(s=>[s.id,raw[s.id]]));}
 state.accountChecks=normalizeAccountChecks(saved?.accountChecks,state.scenarios);
+state.labSets=normalizeLabSets(saved?.labSets,state.scenarios);
 for(const s of state.scenarios)if(s.household.datesNeedReview)for(const path of ['household.birthday','household.retirementDate','household.spouseBirthday'])if(!state.inputSources[s.id][path])state.inputSources[s.id][path]='Estimated';
 // Newly introduced zero defaults have no historical user source. Existing
 // values and explicitly saved notes remain unchanged.
@@ -164,7 +167,7 @@ function persist(markStarted=true,replaceUnreadable=false){
   // Capture each edit before waiting for the lock. The queue preserves this
   // tab's save order; the origin-wide lock makes the revision check and write
   // indivisible with respect to other tabs running this app.
-  const payload=JSON.stringify({scenarios:state.scenarios,selectedId:state.selectedId,hasStartedPlan:state.hasStartedPlan,inputSources:state.inputSources,optionalAnswers:state.optionalAnswers,accountChecks:state.accountChecks,exampleIds:[...state.exampleIds],entryPeriods:state.entryPeriods,basicSetup:state.basicSetup});
+  const payload=JSON.stringify({scenarios:state.scenarios,selectedId:state.selectedId,hasStartedPlan:state.hasStartedPlan,inputSources:state.inputSources,optionalAnswers:state.optionalAnswers,accountChecks:state.accountChecks,exampleIds:[...state.exampleIds],entryPeriods:state.entryPeriods,basicSetup:state.basicSetup,labSets:state.labSets});
   // Edits made while an explicit recovery save waits for its lock must remain
   // marked unsaved if they were not included in this snapshot.
   const draftRevision=recoveryDraftRevision;
@@ -188,12 +191,12 @@ function persist(markStarted=true,replaceUnreadable=false){
   pendingSaves++;
   saveQueue=saveQueue.then(save,save).finally(()=>{pendingSaves--;});return saveQueue;
 }
-let calculationRevision=0;
-function invalidateExploration(){calculationRevision++;state.labResults=null;state.decision=null;state.claimDecision=null;state.savingsDecision=null;state.savingsFrontierSelection=0;state.frontierSelection=0;state.claimFrontierSelection=0;state.message='';}
+let calculationRevision=0,liveWorker=null;
+function invalidateExploration(){calculationRevision++;state.labResults=null;stopLiveEstimate();state.labLive={status:'idle'};state.decision=null;state.claimDecision=null;state.savingsDecision=null;state.savingsFrontierSelection=0;state.frontierSelection=0;state.claimFrontierSelection=0;state.message='';}
 function selectScenario(id){invalidateExploration();state.selectedId=id;state.guided=rememberedSetupMode(id);state.budgetReturn=null;}
 function result(){return state.results.get(current().id);}
 function setMessage(message,options){state.message=state.storageError||message;render(options);}
-function currentViewLabel(){return {dashboard:'Overview','account-check':'Account check',setup:'My plan',budget:'Budget',withdrawals:'How withdrawals work',scenarios:'Saved plans',lab:'Compare changes',results:'Results',reports:'Reports & backup',billing:'Plans & billing'}[state.view];}
+function currentViewLabel(){return {dashboard:'Overview','account-check':'Account check',setup:'My plan',budget:'Budget',withdrawals:'How withdrawals work',scenarios:'Saved plans',lab:'Plan Lab',results:'Results',reports:'Reports & backup',billing:'Plans & billing'}[state.view];}
 function pageHead(title,detail='',actions=''){return `<div class="page-head"><div><p class="kicker">${escapeHTML(currentViewLabel())}</p><h1>${escapeHTML(title)}</h1><p>${escapeHTML(detail)}</p></div>${actions?`<div class="actions">${actions}</div>`:''}</div>`;}
 function card(title,content,extra=''){return `<section class="card ${extra}"><h2>${escapeHTML(title)}</h2>${content}</section>`;}
 function disclosure(title,content,id=''){return `<details class="card result-detail"${id?` id="${id}"`:''}><summary>${escapeHTML(title)}</summary><div class="detail-body stack">${content}</div></details>`;}
@@ -265,7 +268,7 @@ function resultNextTest(r){
     // With no shortfalls, point at the assumption most likely to be flattering this plan.
     const s=r.uxAssumptions||current(),growth=Math.max(s.market.preRetirementMeanReturn,s.market.stockMeanReturn),spending=s.spending.annualBaseSpending,left=r.todayDollars?.medianEndingBalance??r.medianEndingBalance;
     if(growth>=.1)return `This plan assumes stocks grow ${pct(growth)} a year before inflation, a strong historical average. Try a lower return, such as 7%, using Compare with lower returns to see how much the result depends on it.`;
-    if(spending>0&&left>=20*spending)return `The typical lifetime still had about ${Math.floor(left/spending)} years of base spending left in today’s dollars. Try higher spending or an earlier retirement date with Compare changes to see how much room you have.`;
+    if(spending>0&&left>=20*spending)return `The typical lifetime still had about ${Math.floor(left/spending)} years of base spending left in today’s dollars. Try higher spending or an earlier retirement date in Plan Lab to see how much room you have.`;
     return 'Try higher healthcare costs or a different retirement date to see whether savings still cover the modeled lifetimes.';
   }
   if(r.riskBreakdown?.primaryRisk&&r.riskBreakdown.primaryRisk!=='none')return r.riskBreakdown.recommendedNextTest;
@@ -310,7 +313,7 @@ function accountCheckWarning(s,plain=false){
 function dashboard(){
   const s=current(),r=result(),notes=scenarioWarnings(simulationScenario(s)),assets=totalSavings(s);
   const steps=`<div class="workflow"><button data-view="setup"><span class="step-number">1</span><span><strong>Review your plan</strong><small>Household, savings, income & costs</small></span><span aria-hidden="true">↗</span></button><button data-view="budget"><span class="step-number">2</span><span><strong>Check your spending</strong><small>Build a budget from monthly costs</small></span><span aria-hidden="true">↗</span></button><button data-view="${r?'lab':'results'}" ${r?'':'data-action="run-plan"'}><span class="step-number">3</span><span><strong>${r?'Explore a different outcome':'Run your plan'}</strong><small>${r?'Compare dates, spending and other choices':'See readiness and the range of outcomes'}</small></span><span aria-hidden="true">↗</span></button></div>`;
-  return `${r?pageHead('Your retirement forecast','Explore your results, then test what could change them.'):''}${notice()}<div class="stack">${r?'':welcomePanel()}${steps}<div class="plan-summary-heading"><h2>${state.hasStartedPlan?'Current plan':'Sample plan'} at a glance</h2><span>${escapeHTML(s.name)}</span></div><section class="plan-strip" aria-label="Current plan summary"><div><span>Retirement date</span><strong>${dateLabel(scenarioTimeline(s).startDate||forecastRetirementDate(s))}</strong><small>Household starts · Age ${ageLabel(retirementAge(s))} · Current age ${Math.floor(scenarioTimeline(s).currentAge)}</small></div><div><span>Starting savings</span><strong>${savingsLabel(s)}</strong><small>${hasEmployerRoth(s)?'Includes employer Roth plans':'Across all four account types'}</small></div><div><span>Annual base spending</span><strong>${amountLabel(s,'spending.annualBaseSpending')}</strong><small>Before separate housing & health costs</small></div><div><span>Social Security claim age</span><strong>${s.socialSecurity.claimAge}</strong><small>${amountLabel(s,'socialSecurity.annualBenefitAt67')} / year estimate at 67</small></div></section>${r?`<div class="split"><section class="card feature-card"><div><div class="label">${isPreviewResult(r)?'Sample outcomes':'Monte Carlo readiness estimate'}</div><div class="huge">${readinessLabel(r)}</div><p>${isPreviewResult(r)?'Sample lifetimes without a shortfall.':'Share of modeled lifetimes without a portfolio shortfall.'}</p>${previewNotice(r)}${sampleResultBadge()}<button class="secondary" data-view="results">View full results →</button></div>${isPreviewResult(r)?'':`<div class="ring" style="--value:${Math.round(r.successProbability*100)}%"><span>Simulated lifetimes</span></div>`}</section>${card('Next useful test',`<p>${escapeHTML(resultNextTest(r))}</p><button class="secondary" data-view="lab">Compare changes →</button>`)}</div><div class="split">${chartCard('survival')}${card('Assumption sensitivity',sensitivityBreakdown(r))}</div>`:''}${r?chartCard('paths'):''}${monteCarloBanner()}${isPro()?planNotice():overviewUpgradeCard()}${notes.length?`<details class="card planning-notes"><summary>Planning notes <span class="tag">${notes.length}</span></summary><ul class="warning-list">${notes.map(n=>`<li>${escapeHTML(n)}</li>`).join('')}</ul></details>`:''}${planningDisclosure()}</div>`;
+  return `${r?pageHead('Your retirement forecast','Explore your results, then test what could change them.'):''}${notice()}<div class="stack">${r?'':welcomePanel()}${steps}<div class="plan-summary-heading"><h2>${state.hasStartedPlan?'Current plan':'Sample plan'} at a glance</h2><span>${escapeHTML(s.name)}</span></div><section class="plan-strip" aria-label="Current plan summary"><div><span>Retirement date</span><strong>${dateLabel(scenarioTimeline(s).startDate||forecastRetirementDate(s))}</strong><small>Household starts · Age ${ageLabel(retirementAge(s))} · Current age ${Math.floor(scenarioTimeline(s).currentAge)}</small></div><div><span>Starting savings</span><strong>${savingsLabel(s)}</strong><small>${hasEmployerRoth(s)?'Includes employer Roth plans':'Across all four account types'}</small></div><div><span>Annual base spending</span><strong>${amountLabel(s,'spending.annualBaseSpending')}</strong><small>Before separate housing & health costs</small></div><div><span>Social Security claim age</span><strong>${s.socialSecurity.claimAge}</strong><small>${amountLabel(s,'socialSecurity.annualBenefitAt67')} / year estimate at 67</small></div></section>${r?`<div class="split"><section class="card feature-card"><div><div class="label">${isPreviewResult(r)?'Sample outcomes':'Monte Carlo readiness estimate'}</div><div class="huge">${readinessLabel(r)}</div><p>${isPreviewResult(r)?'Sample lifetimes without a shortfall.':'Share of modeled lifetimes without a portfolio shortfall.'}</p>${previewNotice(r)}${sampleResultBadge()}<button class="secondary" data-view="results">View full results →</button></div>${isPreviewResult(r)?'':`<div class="ring" style="--value:${Math.round(r.successProbability*100)}%"><span>Simulated lifetimes</span></div>`}</section>${card('Next useful test',`<p>${escapeHTML(resultNextTest(r))}</p><button class="secondary" data-view="lab">Open Plan Lab →</button>`)}</div><div class="split">${chartCard('survival')}${card('Assumption sensitivity',sensitivityBreakdown(r))}</div>`:''}${r?chartCard('paths'):''}${monteCarloBanner()}${isPro()?planNotice():overviewUpgradeCard()}${notes.length?`<details class="card planning-notes"><summary>Planning notes <span class="tag">${notes.length}</span></summary><ul class="warning-list">${notes.map(n=>`<li>${escapeHTML(n)}</li>`).join('')}</ul></details>`:''}${planningDisclosure()}</div>`;
 }
 const monthFields={'guaranteedIncome.startAge':'guaranteedIncome.startAgeMonths','longTermCare.averageDurationYears':'longTermCare.averageDurationMonths','spouseIncome.pensionStartAge':'spouseIncome.pensionStartAgeMonths'};
 const schema=[
@@ -857,7 +860,6 @@ function refreshBudget(){
   if(!ui.pending)$('#budget-new-month-note')?.remove();
 }
 function scenarios(){return `${pageHead('Saved plans','Keep each set of assumptions so you can compare its Monte Carlo results.',`<button class="primary" data-action="new-scenario">Duplicate current plan</button><button class="danger" data-action="reset-plans" ${state.busy?'disabled':''}>Reset all plans</button>`)}${notice()}<p class="form-note">Examples use illustrative numbers and do not follow edits to your plan. Duplicate your current plan or create a copy while comparing changes to explore your own changes. Reset all plans removes your saved plans and results and restores the 3 original examples.</p>${card('Plans',state.scenarios.map(s=>`<div class="scenario-row"><div><h3>${escapeHTML(s.name)} ${state.exampleIds.has(s.id)?'<span class="tag">Example</span>':''} ${s.id===state.selectedId?'<span class="tag">Selected</span>':''}</h3><p>${s.household.alreadyRetired?'Already retired · forecast starts today':'Retire '+dateLabel(s.household.retirementDate)} · Your age ${ageLabel(primaryRetirementAge(s))} · ${amountLabel(s,'spending.annualBaseSpending')} annual spending · ${savingsLabel(s)} assets</p></div><div class="actions"><button class="secondary" data-action="select-scenario" data-id="${escapeHTML(s.id)}">Open</button><button class="subtle" data-action="rename-scenario" data-id="${escapeHTML(s.id)}">Rename</button><button class="danger" data-action="delete-scenario" data-id="${escapeHTML(s.id)}" ${state.scenarios.length===1?'disabled':''}>Delete</button></div></div>`).join(''))}`;}
-const labVariants=[['Your retirement 2 years later',s=>delayRetirement(s,2)],['Spend 5% less',s=>setAnnualBaseSpending(s,s.spending.annualBaseSpending*.95)],['Claim Social Security at 70',s=>s.socialSecurity.claimAge=70],['Higher healthcare costs',s=>{s.healthcare.preMedicareMonthlyPremium*=1.25;s.healthcare.healthcareInflationMean=Math.min(.20,s.healthcare.healthcareInflationMean+.01);}],['Use Roth conversions',s=>{s.rothConversion.enabled=true;s.rothConversion.marginalRateCap=.22;}],['Use cash first in months below −1%',s=>{s.withdrawalStrategy.useCashReserveDuringDrawdowns=true;s.withdrawalStrategy.drawdownTrigger=-.01;}]];
 function newPlanId(){let id;do{id='plan-'+Date.now()+'-'+Math.random().toString(36).slice(2,9);}while(state.scenarios.some(s=>s.id===id));return id;}
 function comparisonChangedPaths(before,after,prefix=''){return Object.keys(after).flatMap(key=>{const path=prefix?prefix+'.'+key:key,a=after[key],b=before[key];return a&&typeof a==='object'&&!Array.isArray(a)?comparisonChangedPaths(b||{},a,path):JSON.stringify(a)!==JSON.stringify(b)?[path]:[];});}
 function ageSearchNote(d){
@@ -955,7 +957,7 @@ function conversionReview(s){
 function setupReview(s){
   const unknown=blockingUnknowns(s);
   const groups=reviewSchema(s).map(([title,fields],index)=>visibleFields(s,fields).length===0?'':`<section class="card"><div class="section-heading"><h2>${escapeHTML(title)}</h2><button class="secondary" data-action="setup-section" data-index="${setupStepForSchema(index)}" data-path="${visibleFields(s,fields)[0][1]}" data-review-edit="true">Edit ${escapeHTML(title)}</button></div><dl class="assumption-summary">${visibleFields(s,fields).map(([label,path,type])=>{const value=path==='numberOfSimulations'?effectivePaths(s):getPath(s,path),source=path==='household.filingStatus'?'Selected':inputSource(s,state.inputSources,path);const owner=s.household.separatePeople?(path.startsWith('accounts.pretax')||path.startsWith('accounts.roth')?'You · ':path.startsWith('accounts.')?'Household · ':''):'';return `<div><dt>${escapeHTML(owner+label)}</dt><dd>${path==='healthcare.preMedicareMonthlyPremium'&&preMedicareNotNeeded(s)?'Not needed for this plan':source==='Unknown'?'Unknown · number needed':escapeHTML(type==='money'?money(value,2):type==='percent'?pct(value):type==='date'?dateLabel(value):type==='select'?(value==='HeadOfHousehold'?'Head of household':value==='EmpiricalAgeDecline'?'Age-based spending decline':value):type==='checkbox'?(value?'On':'Off'):monthFields[path]?`${value} years ${getPath(s,monthFields[path])} extra months`:value)}<small>${escapeHTML(path==='healthcare.preMedicareMonthlyPremium'&&preMedicareNotNeeded(s)?'Saved value kept for earlier retirement dates':source)}</small></dd></div>`;}).join('')}</dl></section>`).join('');
-  return `<div class="setup-heading">${pageHead('Review before running','All assumptions remain editable. Inputs are amounts today; results can show modeled balances in future or today’s dollars.',state.guided?'':`<button class="secondary" data-action="toggle-guided">Back to detailed editor</button>`)}</div>${setupProgress(5)}${setupModeControl()}${notice()}${sampleInputNotice(s,false)}<h2 id="section-title" tabindex="-1">Your assumptions summary</h2><p class="form-note">${s.household.filingStatus==='Married'?s.household.separatePeople?'Couple: separate retirement dates, owned pre-tax and Roth accounts, each person’s own benefit and pension, and monthly savings until their retirement. Household costs start at the first retirement.':'Couple: one retirement date, combined balances, primary-owned retirement-account rules, one pension stream, and spousal/survivor Social Security based on your record.':'Individual: only your timeline and benefits are used.'} <a target="_blank" rel="noopener" href="./methodology.html#household-model">Household model limits</a></p>${unknown.length?unknownInputList(s,unknown):''}<div class="review-actions"><button class="primary" data-action="run-plan" ${unknown.length||state.busy?'disabled':''}>Run ${effectivePaths()} simulated paths →</button><button class="secondary" data-action="setup-section" data-index="0">Edit household</button></div><div class="stack">${estimatedRothNotice(s)}${reviewGlance(s)}${optionalReview(s)}${spendingReview(s)}${budgetPlanReview(s)}${earningsExplanation(s)}<details class="card review-all"><summary>All assumptions by section</summary><div class="stack">${groups}${conversionReview(s)}</div></details></div><div class="section-footer review-mobile-footer"><button class="secondary" data-action="setup-section" data-index="4">← Previous</button><button class="primary" data-action="run-plan" ${unknown.length||state.busy?'disabled':''}>Run ${effectivePaths()} simulated paths →</button></div><p class="form-note">Simulation math and privacy are the same in guided setup and the detailed editor.</p>`;
+  return `<div class="setup-heading">${pageHead('Review before running','All assumptions remain editable. Inputs are amounts today; results can show modeled balances in future or today’s dollars.',state.guided?'':`<button class="secondary" data-action="toggle-guided">Back to detailed editor</button>`)}</div>${setupProgress(5)}${setupModeControl()}${notice()}${sampleInputNotice(s,false)}<h2 id="section-title" tabindex="-1">Your assumptions summary</h2><p class="form-note">${s.household.filingStatus==='Married'?s.household.separatePeople?'Couple: separate retirement dates, owned pre-tax and Roth accounts, each person’s own benefit and pension, and monthly savings until their retirement. Household costs start at the first retirement.':'Couple: one retirement date, combined balances, primary-owned retirement-account rules, one pension stream, and spousal/survivor Social Security based on your record.':'Individual: only your timeline and benefits are used.'} <a target="_blank" rel="noopener" href="./methodology.html#household-model">Household model limits</a></p>${unknown.length?unknownInputList(s,unknown):''}<div class="review-actions"><button class="primary" data-action="run-plan" ${unknown.length||state.busy?'disabled':''}>Run ${effectivePaths()} simulated paths →</button><button class="secondary" data-action="setup-section" data-index="0">Edit household</button></div><div class="stack">${estimatedRothNotice(s)}${reviewGlance(s)}${optionalReview(s)}${planLabReview(s)}${spendingReview(s)}${budgetPlanReview(s)}${earningsExplanation(s)}<details class="card review-all"><summary>All assumptions by section</summary><div class="stack">${groups}${conversionReview(s)}</div></details></div><div class="section-footer review-mobile-footer"><button class="secondary" data-action="setup-section" data-index="4">← Previous</button><button class="primary" data-action="run-plan" ${unknown.length||state.busy?'disabled':''}>Run ${effectivePaths()} simulated paths →</button></div><p class="form-note">Simulation math and privacy are the same in guided setup and the detailed editor.</p>`;
 }
 function resultsExplanation(r){
   const n=r.provenance.simulationCount,successes=Math.round(r.successProbability*n),last=r.notFailedByAge.at(-1),alive=Math.round((last?.aliveShare??0)*n);
@@ -986,18 +988,77 @@ function steadySimulationTable(r){
   const rows=path.monthlyDetails.map((p,i)=>({p,index:today?indexes[i]:1})).filter(({p},i,all)=>p.month%12===0||i===all.length-1);
   return section(`<div class="steady-explanation" id="steady-monthly-note">${assumptions}</div>${ownerNote}<p class="form-note">The first row is the retirement starting balance after pre-retirement growth, selected savings deposits and mortgage payments. Later rows show balances at each retirement anniversary, including returns, cash flows, conversions, and home sales; the last row is the final modeled month. ${ending} Net assets = portfolio + home value − mortgage debt.${hasGap?' The unfunded amount is the final unmet cost, separate from mortgage debt.':''}</p><div class="table-wrap monthly-balances" role="region" aria-label="Steady-growth simulation yearly balances" aria-describedby="steady-monthly-note" tabindex="0"><table><thead><tr><th scope="col">Year</th><th scope="col">Age</th>${columns.map(([label])=>`<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${rows.map(({p,index})=>`<tr><th scope="row">${p.month===0?'Retirement start':p.month%12?'Final month':`Year ${p.month/12}`}${p.date?`<small>${dateLabel(p.date)}</small>`:''}</th><td>${ageLabel(p.age)}</td>${columns.map(([,key])=>`<td>${money((typeof key==='function'?key(p):p[key])/index)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
 }
-const labDrafts=new Map();
-function labDraft(s=current()){
-  let d=labDrafts.get(s.id);if(!d){d={retirementDate:forecastRetirementDate(s),monthlySpending:inputSource(s,state.inputSources,'spending.annualBaseSpending')==='Unknown'?'':moneyInputValue(s.spending.annualBaseSpending/12)};labDrafts.set(s.id,d);}return d;
+// Plan Lab: saved what-if sets per plan, with in-memory comparison results.
+// Results are keyed by set and checked against the inputs they were run with.
+state.labUi={editing:null,editingLever:null,leverDraft:{},leverError:'',measure:'funded',hidden:new Set(),chartAge:null,stressTarget:null,goal:{kind:'retirement',target:.8}};
+state.labLive={status:'idle'};
+const labPaths=()=>isPro()?Math.min(effectivePaths(),MAX_COMPARISON_PATHS):FREE_SIMULATION_PATHS;
+const labMaxWhatIfs=()=>isPro()?LAB_MAX_WHAT_IFS:LAB_FREE_WHAT_IFS;
+function labEntry(s=current()){
+  if(!state.labSets[s.id])state.labSets[s.id]=defaultLabSets(s,isPro());
+  const entry=state.labSets[s.id];if(!entry.sets.some(x=>x.id===entry.activeSet))entry.activeSet=entry.sets[0].id;
+  return entry;
 }
-function customComparisons(){
-  const d=labDraft();return card('Try your own spending or retirement date',`<p>Compare each change separately with your current plan. Your saved plan stays as it is until you create a copy.</p><div class="fields"><div class="field"><label for="lab-retirement-date">Your retirement date to test</label><input id="lab-retirement-date" type="date" min="${localCalendarDate()}" data-lab-input="retirementDate" value="${escapeHTML(d.retirementDate)}"></div><div class="field"><label for="lab-monthly-spending">Monthly base spending to test</label>${moneyInput('lab-monthly-spending',d.monthlySpending,'data-lab-input="monthlySpending"',true)}<p class="form-note">Everyday spending; excludes mortgage, rent and health premiums entered separately.</p></div></div><div class="actions"><button class="primary" data-action="run-custom-lab" ${state.busy?'disabled':''}>Compare my changes</button><button class="secondary" data-action="run-combined-lab" ${state.busy?'disabled':''}>Test both changes together</button></div><p class="form-note">Compare my changes tests the date and spending separately. Test both also adds a plan with both changes applied.</p><p class="form-note" id="lab-draft-status" aria-live="polite">${current().household.filingStatus==='Married'?(current().household.separatePeople?'Your spouse’s retirement date stays fixed.':'A shared-date plan moves both people’s retirement date.'):'The retirement-date test changes your date; the spending test changes base spending.'}</p>`);
+function activeLabSet(s=current()){const entry=labEntry(s);return entry.sets.find(x=>x.id===entry.activeSet);}
+function labStore(){if(!(state.labResults?.bySet instanceof Map))state.labResults={bySet:new Map(),stress:new Map(),sensitivity:null};return state.labResults;}
+function labScenario(changes={},count=labPaths()){const s=applyWhatIf(simulationScenario(),changes);s.numberOfSimulations=count;return s;}
+const labFingerprint=s=>JSON.stringify(s);
+function labRows(set=activeLabSet()){
+  const base=current(),runs=labStore().bySet.get(set.id)?.rows||new Map(),max=labMaxWhatIfs();
+  const rows=[{id:'baseline',baseline:true,label:'Current plan',changes:{}},...set.whatIfs.map((w,i)=>({id:w.id,label:w.name,changes:w.changes,locked:i>=max}))];
+  const baseRun=runs.get('baseline');
+  return rows.map(row=>{
+    const run=runs.get(row.id),text=row.baseline?[base.household.alreadyRetired?'Already retired':`Retire ${dateLabel(forecastRetirementDate(base))}`,`${money(base.spending.annualBaseSpending)} a year`,`Social Security at ${base.socialSecurity.claimAge}`]:describeChanges(row.changes,base);
+    if(!run||row.locked)return {...row,changesText:text};
+    // Access changes alter the next run's path count, not a completed comparison.
+    const stale=run.fingerprint!==labFingerprint(labScenario(row.changes,run.count));
+    const shown=run.result?shownResult(run.result):null,base0=baseRun?.result;
+    return {...row,changesText:text,result:run.result,shown,metrics:run.result?labMetrics(run.result,shown):null,stale,error:run.error,note:run.note,scenario:run.scenario,changedPaths:run.changedPaths,
+      delta:run.result&&base0?readinessDelta(run.result,base0):'',deltaTone:run.result&&base0?(run.result.successProbability>base0.successProbability?'up':run.result.successProbability<base0.successProbability?'down':''):''};
+  });
 }
-function lab(){const completed=state.labResults?.find(row=>row.result)?.result,comparisonCount=completed?.provenance.simulationCount??Math.min(effectivePaths(),MAX_COMPARISON_PATHS);return `${pageHead('Compare changes','Explore changes to your plan, then compare modeled lifetimes against the same starting plan.',`<button class="primary" data-action="run-lab" ${state.busy?'disabled':''}>Run comparisons</button><button class="secondary" data-action="run-decision" ${state.busy||!isPro()?'disabled':''}>Find age & spending targets${isPro()?'':' · Pro'}</button><button class="secondary" data-action="run-claim-decision" ${state.busy||!isPro()?'disabled':''}>Find Social Security claiming age &amp; spending targets${isPro()?'':' · Pro'}</button><button class="secondary" data-action="run-savings-decision" ${state.busy||!isPro()?'disabled':''}>Find age &amp; annual savings${isPro()?'':' · Pro'}</button>`)}${notice()}${planNotice()}${estimatedRothNotice(current())}${customComparisons()}${planningTargets()}${state.labResults?card('Scenario comparison',`${previewNotice(completed)}<div class="comparison-row"><strong>Scenario</strong><strong>${comparisonCount<=FREE_SIMULATION_PATHS?'Samples without shortfall':'Modeled readiness'}</strong><strong>Median ending · ${basisLabel(shownResult(completed))}</strong></div>${state.labResults.map(r=>`<div class="comparison-row"><div><strong>${escapeHTML(r.label)}</strong>${r.error||r.note?`<div class="muted">${escapeHTML(r.error||r.note)}</div>`:''}${r.scenario&&r.result&&!r.error&&state.labResults.indexOf(r)>0?`<button class="secondary comparison-copy" data-action="copy-comparison" data-index="${state.labResults.indexOf(r)}" ${state.busy?'disabled':''}>Create a plan with this change</button>`:''}</div><strong>${r.result?readinessLabel(r.result):'—'}</strong><strong>${r.result?money(shownResult(r.result).medianEndingBalance):'—'}</strong></div>`).join('')}<details class="comparison-help"><summary>How to read comparisons</summary><p class="form-note">Ending balances are measured at different lifetime-end ages. A change can improve funding without increasing the median amount left. Spending also changes the model’s stock/bond mix, and income changes taxes and withdrawals. Compare funding and the balance range in the full copied plan; a higher ending balance alone does not identify the best choice.</p><p class="form-note">Each comparison runs ${comparisonCount} Monte Carlo paths with the fixed comparison sequence for reproducible screening. Run the full plan for final results.</p></details>`):card('Quick comparisons',`<p class="form-note">The lab tests retirement timing, spending, claiming age, healthcare costs, Roth conversions, and cash use.</p><ul class="warning-list">${labVariants.map(x=>`<li>${escapeHTML(x[0])}</li>`).join('')}</ul>`)}`;}
-function planningTargets(){
-  const d=state.decision,claim=frontierCard(state.claimDecision?.frontier,state.claimFrontierSelection,state.busy)+frontierCard(state.savingsDecision?.frontier,state.savingsFrontierSelection,state.busy);if(!d)return claim;
+// Stress tests compare the plan with one what-if: the chosen one, else the
+// best completed what-if, else the first.
+function labStressTarget(rows=labRows()){
+  const ui=state.labUi,choices=rows.filter(r=>!r.baseline&&!r.locked);
+  if(!ui.stressTargetChosen||!choices.some(r=>r.id===ui.stressTarget))ui.stressTarget=(choices.filter(r=>r.result&&!r.stale).sort((a,b)=>b.result.successProbability-a.result.successProbability)[0]||choices[0])?.id??null;
+  return ui.stressTarget;
+}
+function labGoalHtml(){
+  const kind=state.labUi.goal.kind,busy=state.busy,add=k=>`<button class="secondary" data-action="lab-frontier-whatif" data-kind="${k}" ${busy?'disabled':''}>Add as a what-if</button>`;
+  if(kind==='claiming')return frontierCard(state.claimDecision?.frontier,state.claimFrontierSelection,busy,add('claiming'));
+  if(kind==='savings')return frontierCard(state.savingsDecision?.frontier,state.savingsFrontierSelection,busy,add('savings'));
+  return planningTargets(add('retirement'));
+}
+function labViewModel(){
+  const s=current(),entry=labEntry(s),set=activeLabSet(s),rows=labRows(set),ui=state.labUi,store=labStore(),runs=store.bySet.get(set.id);
+  const editing=set.whatIfs.find(w=>w.id===ui.editing)||null,lever=editing&&ui.editingLever?labLever(ui.editingLever):null;
+  const done=rows.filter(r=>r.result&&!r.stale),stressChoices=rows.filter(r=>!r.baseline&&!r.locked);
+  labStressTarget(rows);
+  const stress=store.stress.get(set.id),stressFresh=stress&&stress.fingerprint===labFingerprint([labScenario({},stress.count),labScenario(set.whatIfs.find(w=>w.id===stress.target)?.changes||{},stress.count)]);
+  const sensitivity=store.sensitivity;
+  const ages=new Set(),bands=done.map(r=>new Map(ageYearRows(r.shown.balanceBands||[]).filter(p=>p.pathCount>0).map(p=>[p.ageYear,p.median])));
+  for(const b of bands)for(const a of b.keys())if(a<=105)ages.add(a);
+  return {pro:isPro(),busy:state.busy,plan:s,basis:state.dollarBasis,sets:entry.sets,set,rows,editing,editingLever:lever?.key??null,leverDraftValue:editing&&lever?editing.changes[lever.key]:undefined,leverDraft:ui.leverDraft,leverError:ui.leverError,
+    live:state.labLive.whatIf===editing?.id&&state.labLive.fingerprint===labFingerprint(labScenario(editing?.changes||{},LIVE_ESTIMATE_PATHS))?state.labLive:{status:'idle'},livePaths:LIVE_ESTIMATE_PATHS,
+    whatIfCount:set.whatIfs.length,maxWhatIfs:labMaxWhatIfs(),paths:done[0]?.result.provenance.simulationCount??labPaths(),preview:(done[0]?.result.provenance.simulationCount??labPaths())<=FREE_SIMULATION_PATHS,
+    presets:LAB_PRESETS.map(p=>({...p,changes:p.changes(s)})).filter(p=>p.changes),
+    summary:labSummary(rows.filter(r=>!r.stale&&!r.locked),{stress:stressFresh?stress:null}),
+    measure:ui.measure,hidden:ui.hidden,chartAge:ui.chartAge,stress:stress?{...stress,stale:!stressFresh}:null,stressChoices,stressTarget:ui.stressTarget,
+    sensitivity:sensitivity?{...sensitivity,stale:sensitivity.fingerprint!==labFingerprint(labScenario({},sensitivity.count))}:null,sensitivityPaths:Math.min(SENSITIVITY_PATHS,effectivePaths()),
+    goal:ui.goal,ranAt:runs?.ranAt?new Date(runs.ranAt).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'',
+    yearly:[...ages].sort((a,b)=>a-b).map(age=>({age,values:bands.map(b=>b.get(age)??null)}))};
+}
+function lab(){
+  const vm=labViewModel();
+  const head=pageHead('Plan Lab','Build what-if versions of your plan and compare them on the same market paths, so every difference comes from your change, not luck.',`<span class="lab-pro-badge">${isPro()?'Pro · '+countLabel(labPaths())+' paths per plan':'Free preview · '+FREE_SIMULATION_PATHS+' paths'}</span><button class="primary" data-action="run-lab" ${state.busy?'disabled':''}>${vm.rows.filter(r=>!r.locked).length===1?'Run current plan':`Run ${vm.rows.filter(r=>!r.locked).length} plans`}</button>`);
+  const preview=vm.rows.find(r=>r.result&&!r.stale)?.result;
+  return labPage(vm,{head,notices:`${notice()}${isPro()?'':planNotice()}${estimatedRothNotice(current())}${preview?previewNotice(preview):''}`,goal:labGoalHtml()});
+}
+function planningTargets(extra=''){
+  const d=state.decision;if(!d)return '';
   const button=(action,label,value)=>value==null?'':`<div class="actions"><button class="secondary" data-action="${action}" ${state.busy?'disabled':''}>${label}</button></div>`;
-  return frontierCard(d.frontier,state.frontierSelection,state.busy)+claim+card('Planning targets',`<p class="form-note">Each target is tested separately with ${countLabel(d.simulationCount)} paths at ${pct(d.targetReadiness)} readiness. Use a target to update your current plan, then run the full forecast. Applying both changes together requires a new test.</p><div class="grid two"><div><span class="metric-label">Your earliest retirement age at ${pct(d.targetReadiness)} readiness</span><div class="metric-value">${d.earliestRetirementAge??'No age found'}</div><p class="form-note">${escapeHTML(ageSearchNote(d))}${current().household.separatePeople&&current().household.filingStatus==='Married'?' Spouse retirement date remains fixed.':''}</p>${button('apply-age-target','Use this retirement age',d.earliestRetirementAge)}</div><div><span class="metric-label">Modeled annual spending at ${pct(d.targetReadiness)} readiness</span><div class="metric-value">${d.safeAnnualSpending===null?'No amount found':(d.safeSpendingAtSearchLimit?'At least ':'')+money(d.safeAnnualSpending)}</div><p class="form-note">${d.safeSpendingAtSearchLimit?`The search stops at ${money(d.safeSpendingSearchLimit)}; higher spending was not tested. `:''}Rounded down to $500.</p>${button('apply-spending-target','Use this spending amount',d.safeAnnualSpending)}</div></div>`);
+  return frontierCard(d.frontier,state.frontierSelection,state.busy,extra)+card('Planning targets',`<p class="form-note">Each target is tested separately with ${countLabel(d.simulationCount)} paths at ${pct(d.targetReadiness)} readiness. Use a target to update your current plan, then run the full forecast. Applying both changes together requires a new test.</p><div class="grid two"><div><span class="metric-label">Your earliest retirement age at ${pct(d.targetReadiness)} readiness</span><div class="metric-value">${d.earliestRetirementAge??'No age found'}</div><p class="form-note">${escapeHTML(ageSearchNote(d))}${current().household.separatePeople&&current().household.filingStatus==='Married'?' Spouse retirement date remains fixed.':''}</p>${button('apply-age-target','Use this retirement age',d.earliestRetirementAge)}</div><div><span class="metric-label">Modeled annual spending at ${pct(d.targetReadiness)} readiness</span><div class="metric-value">${d.safeAnnualSpending===null?'No amount found':(d.safeSpendingAtSearchLimit?'At least ':'')+money(d.safeAnnualSpending)}</div><p class="form-note">${d.safeSpendingAtSearchLimit?`The search stops at ${money(d.safeSpendingSearchLimit)}; higher spending was not tested. `:''}Rounded down to $500.</p>${button('apply-spending-target','Use this spending amount',d.safeAnnualSpending)}</div></div>`);
 }
 const decisionKeys=kind=>kind==='savings'?['savingsDecision','savingsFrontierSelection']:kind==='claiming'?['claimDecision','claimFrontierSelection']:['decision','frontierSelection'];
 function selectFrontierPoint(index,kind='retirement'){
@@ -1048,7 +1109,7 @@ async function restoreCompletedResults(){
   state.restoringResults=false;
   if(['results','reports','withdrawals','dashboard'].includes(state.view))render({preserveEditor:true});
 }
-function results(){const r=shownResult(result());return `${pageHead('Monte Carlo simulation results','Explore the range of outcomes across many modeled lifetimes.')}${notice()}${r?'':planNotice()}${r?'':monteRunSummary(effectivePaths(),false)}${!r?(state.busy?'':`<div class="notice">${state.restoringResults?'Loading saved results…':hasSavedScenarios?'Your inputs are saved in this browser. Run again to regenerate results.':'Run the selected plan to view its results.'}</div>`):`<div class="stack">${resultVerdict(r)}${accountCheckWarning(current())}${estimatedRothNotice(current())}${monthlyPicture(r)}<div class="result-controls">${resultSaveNote(r)}${dollarBasisControl()}${planNotice()}</div>${resultHero(r)}${chartCard('bands')}${disclosure('How to read these results',resultsExplanation(r))}<details class="card result-detail"><summary>More charts, sensitivity checks &amp; annual tables</summary><div class="detail-body stack"><div class="split">${chartCard('survival')}${card('Assumption sensitivity',`${sensitivityBreakdown(r)}<button class="secondary" data-view="lab">Compare changes →</button>${readinessUpgrade(r)}`)}</div>${chartCard('paths')}${card('Savings coverage and household lifespan by age',`<p class="form-note">Both columns use all ${r.provenance.simulationCount} paths as their denominator. No shortfall observed includes completed lives with savings left. Household still alive means at least one person; it is independent of financial shortfalls. Each whole-year age shows its last modeled observation.</p><div class="table-wrap"><table><thead><tr><th>Age</th><th>${'No shortfall observed'}</th><th>${'Household still alive'}</th></tr></thead><tbody>${ageYearRows(r.notFailedByAge).map(p=>`<tr><td>${p.ageYear}</td><td>${shareLabel(p.notFailedShare,r.provenance.simulationCount)}</td><td>${shareLabel(p.aliveShare,r.provenance.simulationCount)}</td></tr>`).join('')}</tbody></table></div>`)}${card('Balance bands by age',`<p class="form-note">Amounts in ${basisLabel(r)}. Each whole-year age shows its last modeled observation, using only paths observed then. A shortfall is recorded as $0 and the path stops; completed lifetimes are not extended. Later rows use fewer paths, so they do not measure overall readiness. “Not enough simulated outcomes” means no surviving or observed paths at that age.</p><div class="table-wrap"><table><thead><tr><th>Age</th><th>Paths at this age</th><th>10th percentile</th><th>Median</th><th>90th percentile</th></tr></thead><tbody>${balanceDisplayRows(r).map(b=>`<tr><td>${b.ageYear}</td><td>${b.pathCount}</td><td>${b.noOutcomes?'Not enough simulated outcomes':money(b.pessimistic)}</td><td>${b.noOutcomes?'—':money(b.median)}</td><td>${b.noOutcomes?'—':money(b.optimistic)}</td></tr>`).join('')}</tbody></table></div>`)}${steadySimulationTable(r)}${card('Failure ages',r.failureAgeBuckets.length?`<div class="info-list">${r.failureAgeBuckets.map(b=>info(`Ages ${b.label}`,isPreviewResult(r)?`${b.count} sample paths`:`${b.count} paths · ${pct(b.shareOfFailures)} of failures`)).join('')}</div>`:'<p class="muted">No simulated paths ran out of funds.</p>')}</div></details>${planningDisclosure()}</div>`}`;}
+function results(){const r=shownResult(result());return `${pageHead('Monte Carlo simulation results','Explore the range of outcomes across many modeled lifetimes.')}${notice()}${r?'':planNotice()}${r?'':monteRunSummary(effectivePaths(),false)}${!r?(state.busy?'':`<div class="notice">${state.restoringResults?'Loading saved results…':hasSavedScenarios?'Your inputs are saved in this browser. Run again to regenerate results.':'Run the selected plan to view its results.'}</div>`):`<div class="stack">${resultVerdict(r)}${accountCheckWarning(current())}${estimatedRothNotice(current())}${monthlyPicture(r)}<div class="result-controls">${resultSaveNote(r)}${dollarBasisControl()}${planNotice()}</div>${resultHero(r)}${chartCard('bands')}${disclosure('How to read these results',resultsExplanation(r))}<details class="card result-detail"><summary>More charts, sensitivity checks &amp; annual tables</summary><div class="detail-body stack"><div class="split">${chartCard('survival')}${card('Assumption sensitivity',`${sensitivityBreakdown(r)}<button class="secondary" data-view="lab">Open Plan Lab →</button>${readinessUpgrade(r)}`)}</div>${chartCard('paths')}${card('Savings coverage and household lifespan by age',`<p class="form-note">Both columns use all ${r.provenance.simulationCount} paths as their denominator. No shortfall observed includes completed lives with savings left. Household still alive means at least one person; it is independent of financial shortfalls. Each whole-year age shows its last modeled observation.</p><div class="table-wrap"><table><thead><tr><th>Age</th><th>${'No shortfall observed'}</th><th>${'Household still alive'}</th></tr></thead><tbody>${ageYearRows(r.notFailedByAge).map(p=>`<tr><td>${p.ageYear}</td><td>${shareLabel(p.notFailedShare,r.provenance.simulationCount)}</td><td>${shareLabel(p.aliveShare,r.provenance.simulationCount)}</td></tr>`).join('')}</tbody></table></div>`)}${card('Balance bands by age',`<p class="form-note">Amounts in ${basisLabel(r)}. Each whole-year age shows its last modeled observation, using only paths observed then. A shortfall is recorded as $0 and the path stops; completed lifetimes are not extended. Later rows use fewer paths, so they do not measure overall readiness. “Not enough simulated outcomes” means no surviving or observed paths at that age.</p><div class="table-wrap"><table><thead><tr><th>Age</th><th>Paths at this age</th><th>10th percentile</th><th>Median</th><th>90th percentile</th></tr></thead><tbody>${balanceDisplayRows(r).map(b=>`<tr><td>${b.ageYear}</td><td>${b.pathCount}</td><td>${b.noOutcomes?'Not enough simulated outcomes':money(b.pessimistic)}</td><td>${b.noOutcomes?'—':money(b.median)}</td><td>${b.noOutcomes?'—':money(b.optimistic)}</td></tr>`).join('')}</tbody></table></div>`)}${steadySimulationTable(r)}${card('Failure ages',r.failureAgeBuckets.length?`<div class="info-list">${r.failureAgeBuckets.map(b=>info(`Ages ${b.label}`,isPreviewResult(r)?`${b.count} sample paths`:`${b.count} paths · ${pct(b.shareOfFailures)} of failures`)).join('')}</div>`:'<p class="muted">No simulated paths ran out of funds.</p>')}</div></details>${planningDisclosure()}</div>`}`;}
 function monthlyPicture(r){
   const s=r.uxAssumptions||current(),d=monthlyIncomeSummary(s,r,r.dollarBasis||state.dollarBasis);
   if(!d)return '';
@@ -1077,6 +1138,7 @@ function reportSummaryRows(s,r){
     ['Monthly costs before Medicare and taxes',spending.total===null?'Unknown — finish the spending inputs':money(spending.total,2)+' in today’s dollars'],
     ['Your Social Security at 67',inputSource(s,state.inputSources,'socialSecurity.annualBenefitAt67')==='Unknown'?'Unknown':money(s.socialSecurity.annualBenefitAt67/12,2)+' / month in today’s dollars'],
     ...(separate?[['Spouse Social Security at 67',inputSource(s,state.inputSources,'spouseIncome.annualBenefitAt67')==='Unknown'?'Unknown':money(s.spouseIncome.annualBenefitAt67/12,2)+' / month in today’s dollars']]:[]),
+    ...(planLabAdditions(s).length?[['Added in Plan Lab',planLabAdditions(s).map(x=>x.text).join('; ')]]:[]),
     ...(r?[['Simulated lifetimes without a shortfall',readinessLabel(r)+(isPreviewResult(r)?' — preview only':` of ${r.provenance.simulationCount.toLocaleString('en-US')} modeled lifetimes`)],['Median money left at lifetime end',money(shown.medianEndingBalance)+' in '+basisLabel(shown)],['Next useful test',resultNextTest(r)]]:[['Results','Run this plan to include results.']]),
     ['Your Roth history needs review',rothHistoryReview(s)],
     ...(separate?[['Spouse Roth history needs review',rothHistoryReview(s,'spouseRothHistory')]]:[])
@@ -1125,7 +1187,7 @@ function billingView(){
   const portalAction=a.billingPortalAvailable?'<div class="actions"><button class="secondary" data-action="billing-portal">Manage billing</button></div>':'';
   const ownerTestCheckout=a.ownerAccess&&a.testBilling&&a.checkoutAvailable?`<p class="form-note">Stripe test mode: these checkouts do not charge real money. Owner Pro remains active.</p>${choices}`:'';
   const proActions=isPro()?`<span class="tag">${a.ownerAccess?'Owner access':'Active on this account'}</span><div class="field billing-paths"><label for="billing-path-count">Paths for the next full run</label><input id="billing-path-count" type="number" inputmode="numeric" min="${MIN_SIMULATION_PATHS}" max="${MAX_SIMULATION_PATHS}" step="1" data-field="numberOfSimulations" data-type="number" value="${escapeHTML(current().numberOfSimulations)}"></div>${portalAction}${ownerTestCheckout}`:`${portalAction}${choices}${!a.checkoutAvailable?'<p class="form-note">Paid access is not configured yet. Stripe confirms the final price before payment.</p>':''}`;
-  return `${pageHead('Plans & billing','Choose the number of Monte Carlo paths for your plan.')}${notice()}${state.googleUnavailable&&state.message!==GOOGLE_UNAVAILABLE?`<div class="notice" role="status">${GOOGLE_UNAVAILABLE}</div>`:''}${card('Your account',account,'account-card')}<div class="grid two">${isPro()?'':card('Free preview',`<div class="metric-value">${FREE_SIMULATION_PATHS} paths</div><p>A quick look at possible lifetimes. The preview uses ${FREE_SIMULATION_PATHS} simulations.</p><p>Your scenarios and calculations stay on this device.</p>`)}${card('Pro',`<div class="metric-value">${isPro()?'10,000 paths by default':'Up to 10,000 paths'}</div><p>${isPro()?'Adjust the path count for a full run or use planning targets.':'Choose a higher path count for full runs and comparisons, and use planning targets.'} Comparisons use up to ${MAX_COMPARISON_PATHS.toLocaleString('en-US')} paths per scenario. Calculations still run on your device.</p>${proActions}`)}</div><p class="billing-footnote">Subscriptions renew automatically until canceled. Manage cancellation in Plans &amp; billing → Manage billing; Stripe shows the effective date. <a href="./terms.html#subscriptions">Subscription terms</a> · <a href="./support.html#refunds">Refund requests</a> · <a href="./privacy.html">Privacy</a> · <a href="./support.html">Contact support</a></p><p class="billing-footnote">Subscriptions are linked to the account used to sign in. Link accounts explicitly to share a subscription. Stripe handles payment details; this Site does not receive card numbers or your retirement scenarios.</p>`;
+  return `${pageHead('Plans & billing','Choose the number of Monte Carlo paths for your plan.')}${notice()}${state.googleUnavailable&&state.message!==GOOGLE_UNAVAILABLE?`<div class="notice" role="status">${GOOGLE_UNAVAILABLE}</div>`:''}${card('Your account',account,'account-card')}<div class="grid two">${isPro()?'':card('Free preview',`<div class="metric-value">${FREE_SIMULATION_PATHS} paths</div><p>A quick look at possible lifetimes. The preview uses ${FREE_SIMULATION_PATHS} simulations.</p><p>Your scenarios and calculations stay on this device.</p>`)}${card('Pro',`<div class="metric-value">${isPro()?'10,000 paths by default':'Up to 10,000 paths'}</div><p>${isPro()?'Adjust the path count for a full run or use planning targets.':'Choose a higher path count for full runs and comparisons, and use planning targets.'} Comparisons use up to ${MAX_COMPARISON_PATHS.toLocaleString('en-US')} paths per scenario. Calculations still run on your device.</p><ul class="plan-lab-benefits"><li><strong>Plan Lab</strong>: compare up to ${LAB_MAX_WHAT_IFS} what-ifs side by side and keep up to ${LAB_MAX_SETS} comparison sets per plan</li><li>Stress tests for a market drop, high inflation, low returns, long-term care and long lives</li><li>A ranking of what moves your result, a goal finder and a live estimate while you edit</li><li>CSV and comparison report downloads</li></ul>${proActions}`)}</div><p class="billing-footnote">Subscriptions renew automatically until canceled. Manage cancellation in Plans &amp; billing → Manage billing; Stripe shows the effective date. <a href="./terms.html#subscriptions">Subscription terms</a> · <a href="./support.html#refunds">Refund requests</a> · <a href="./privacy.html">Privacy</a> · <a href="./support.html">Contact support</a></p><p class="billing-footnote">Subscriptions are linked to the account used to sign in. Link accounts explicitly to share a subscription. Stripe handles payment details; this Site does not receive card numbers or your retirement scenarios.</p>`;
 }
 function reports(){
   const s=current(),r=result(),notes=reportSummaryNotes(s,r);
@@ -1134,7 +1196,7 @@ function reports(){
 }
 function render({preserveEditor=false}={}){
   const editor=preserveEditor?document.activeElement:null;
-  const keepEditor=['INPUT','SELECT'].includes(editor?.tagName)&&editor.id&&(editor.dataset.planName!==undefined||editor.dataset.frontierSlider!==undefined||editor.dataset.spendingHelper||editor.dataset.spendingIncluded||editor.dataset.field||editor.dataset.labInput||editor.dataset.growthHelper||editor.dataset.budget||editor.dataset.budgetAdjustment||editor.dataset.month!==undefined);
+  const keepEditor=['INPUT','SELECT'].includes(editor?.tagName)&&editor.id&&(editor.dataset.planName!==undefined||editor.dataset.frontierSlider!==undefined||editor.dataset.spendingHelper||editor.dataset.spendingIncluded||editor.dataset.field||editor.dataset.labLever||editor.dataset.labWhatifName!==undefined||editor.dataset.labSetName!==undefined||editor.dataset.labGoal||editor.dataset.growthHelper||editor.dataset.budget||editor.dataset.budgetAdjustment||editor.dataset.month!==undefined);
   rememberBudgetDisclosures();
   document.querySelectorAll('details[data-basic-optional]').forEach(el=>basicDisclosureOpen.set(el.dataset.scenarioId+':'+el.dataset.basicOptional,el.open));
   disposeCharts();
@@ -1187,14 +1249,14 @@ function rememberedStep(id){try{const saved=JSON.parse(localStorage.getItem(SETU
 function rememberStep(){if(state.view!=='setup')return;rememberSetupMode(current().id,state.guided);if(!state.guided)return;try{localStorage.setItem(SETUP_STEP_KEY,JSON.stringify({id:current().id,section:state.setupSection}));}catch{}}
 class CalculationCanceled extends Error{}
 let cancelCalculation=null;
-function runWorker(s,task='simulation',onProgress=null){return new Promise((resolve,reject)=>{
+function runWorker(s,task='simulation',onProgress=null,options=null){return new Promise((resolve,reject)=>{
   const worker=new Worker(new URL('./worker.js',import.meta.url),{type:'module'});
   const finish=()=>{worker.terminate();if(cancelCalculation===cancel)cancelCalculation=null;};
   const cancel=()=>{finish();reject(new CalculationCanceled('Calculation canceled.'));};
   cancelCalculation=cancel;
   worker.onmessage=e=>{if(e.data.type==='progress'){onProgress?.(e.data);return;}finish();e.data.type==='result'?resolve(e.data.result):reject(new Error(e.data.message));};
   worker.onerror=e=>{finish();reject(new Error((e.message||'Calculation failed')+'. Reload this page to load the latest calculator, then try again.'));};
-  worker.postMessage({scenario:s,task});
+  worker.postMessage(options?{scenario:s,task,options}:{scenario:s,task});
 });}
 function startCalculation(message){state.busy=true;state.busyMessage=message;state.progress={fraction:0,detail:''};state.message=message;render({preserveEditor:true});}
 function finishCalculation(){state.busy=false;state.progress=null;render({preserveEditor:true});}
@@ -1226,46 +1288,215 @@ function decisionProgress(p){
   const total=p.totalAges+p.totalAmounts;return total?(p.phase==='ages'?p.checkedAges:p.totalAges+p.checkedAmounts)/total*(p.frontierExpected ? .35 : 1):null;
 }
 function decisionDetail(p){if(p.phase==='frontier')return `Mapping ${p.age===null?(p.kind==='claiming'?'claiming ages':'retirement ages'):(p.kind==='claiming'?'claiming age ':'age ')+p.age} · ${p.completedAges} of ${p.totalFrontierAges} ages ready · ${countLabel(p.checkedCandidates)} ${p.kind==='savings'?'savings':'spending'} amounts tested`;return p.phase==='ages'?`Checked ${p.checkedAges} of up to ${p.totalAges} retirement ages`:`Checked ${countLabel(p.checkedAmounts)} of up to ${countLabel(p.totalAmounts)} spending amounts`;}
-async function runDecision(kind=false){
+async function runDecision(kind=false,targetReadiness=null){
   kind=kind===true?'claiming':kind||'retirement';const claiming=kind==='claiming',savings=kind==='savings',[resultKey,selectionKey]=decisionKeys(kind);
   if(state.busy)return;
   if(!isPro()){setMessage(TARGETS_NEED_PRO);return;}
   if(blockingUnknowns(current()).length){setMessage('Error: Review Unknown inputs before running.');return;}
   const revision=calculationRevision,s=simulationScenario();
   startCalculation(savings?'Finding retirement-age and annual savings targets…':claiming?'Finding Social Security claiming-age and spending targets…':'Finding retirement-age and spending targets…');
-  try{const decision=await runWorker(s,savings?'savings-decision':claiming?'claim-decision':'decision',p=>setProgress(claiming||savings?(p.totalFrontierAges?p.completedAges/p.totalFrontierAges:1):decisionProgress(p),decisionDetail(p)));if(revision!==calculationRevision)return;state[resultKey]=decision;const choices=frontierChoices(decision.frontier),age=claiming?s.socialSecurity.claimAge:primaryRetirementAge(s);state[selectionKey]=choices.length?choices.reduce((best,p,i)=>Math.abs(p.age-age)<Math.abs(choices[best].age-age)?i:best,0):0;state.message=savings?'Retirement-age and annual savings targets ready.':claiming?'Social Security claiming-age and spending targets ready.':'Planning targets ready.';}
+  try{const decision=await runWorker(s,savings?'savings-decision':claiming?'claim-decision':'decision',p=>setProgress(claiming||savings?(p.totalFrontierAges?p.completedAges/p.totalFrontierAges:1):decisionProgress(p),decisionDetail(p)),targetReadiness===null?null:{targetReadiness});if(revision!==calculationRevision)return;state[resultKey]=decision;state.labUi.goal.kind=kind;const choices=frontierChoices(decision.frontier),age=claiming?s.socialSecurity.claimAge:primaryRetirementAge(s);state[selectionKey]=choices.length?choices.reduce((best,p,i)=>Math.abs(p.age-age)<Math.abs(choices[best].age-age)?i:best,0):0;state.message=savings?'Retirement-age and annual savings targets ready.':claiming?'Social Security claiming-age and spending targets ready.':'Planning targets ready.';}
   catch(e){if(revision===calculationRevision)state.message=e instanceof CalculationCanceled?TARGETS_CANCELED:'Error: '+e.message;}
   finally{finishCalculation();}
 }
-async function runLab(custom=false,combined=false,stress=false){
-  if(state.busy)return;
-  if(blockingUnknowns(current()).length){setMessage('Error: Review Unknown inputs before running.');return;}
-  const revision=calculationRevision,base=simulationScenario();
-  let variants=stress?[[`Lower returns · up to 7% before and after retirement`,s=>{s.market.preRetirementMeanReturn=Math.min(s.market.preRetirementMeanReturn,.07);s.market.stockMeanReturn=Math.min(s.market.stockMeanReturn,.07);}]]:labVariants;
-  if(custom){
-    const d=labDraft(),monthly=parseMoneyInput(d.monthlySpending),date=d.retirementDate;
-    if(!calendarDate(date)||date<localCalendarDate()||!String(d.monthlySpending).trim()||!Number.isFinite(monthly)||monthly<0||monthly>MAX_DOLLAR_AMOUNT/12){setMessage('Error: Enter a retirement date today or later and a finite monthly spending amount of 0 or more within the supported range.');return;}
-    const annual=d.monthlySpending===moneyInputValue(base.spending.annualBaseSpending/12)?base.spending.annualBaseSpending:monthly*12;
-    variants=[[`Your retirement on ${dateLabel(date)}`,s=>{s.household.retirementDate=date;s.household.alreadyRetired=false;syncCalendarAges(s);}], [`Base spending ${money(monthly,2)} / month`,s=>setAnnualBaseSpending(s,annual)]];
-  }
-  if(custom&&combined){const [dateChange,spendingChange]=variants;variants.push(['Retirement date and spending together',s=>{dateChange[1](s);spendingChange[1](s);}]);}
-  const rows=[['Current plan',()=>{}],...variants];
-  base.numberOfSimulations=Math.min(MAX_COMPARISON_PATHS,base.numberOfSimulations);
-  const baseline=JSON.stringify(base);
-  state.labResults=[];startCalculation('Running scenario comparisons…');
+// Comparison runs need balances, funding curves and the lifetime totals, not
+// the scatter points or the separate sensitivity checks of a full forecast.
+const LAB_RUN_OPTIONS={includeRiskAnalysis:false,includePathPoints:false,captureMetrics:true};
+function labReady(){
+  if(state.busy)return false;
+  if(blockingUnknowns(current()).length){setMessage('Error: Review Unknown inputs before running.');return false;}
+  return true;
+}
+// Runs a list of comparison jobs one at a time, keeping completed rows when canceled.
+async function runLabJobs(jobs,message,onResult){
+  const revision=calculationRevision;startCalculation(message);
   try{
-    for(const [index,[label,change]] of rows.entries()){
-      const s=deep(base);change(s);const errors=validateScenario(s);let row;
-      // A comparison identical to the plan would only repeat the first row.
-      if(index&&JSON.stringify(s)===baseline)row={label,result:null,note:'Already matches the current plan.'};
-      else try{row={label,scenario:s,changedPaths:comparisonChangedPaths(base,s),result:errors.length?null:await runWorker(s,'simulation',p=>setProgress((index+p.fraction)/rows.length,`${label} · comparison ${index+1} of ${rows.length}`)),error:errors.join(' ')};}
-      catch(e){if(e instanceof CalculationCanceled)throw e;row={label,result:null,error:e.message};}
-      if(revision!==calculationRevision)return;
-      state.labResults.push(row);setProgress((index+1)/rows.length,`${index+1} of ${rows.length} comparisons complete`);render({preserveEditor:true});
+    for(const [index,job] of jobs.entries()){
+      let outcome;
+      try{outcome={result:await runWorker(job.scenario,'simulation',p=>setProgress((index+p.fraction)/jobs.length,`${job.label} · ${index+1} of ${jobs.length}`),{...LAB_RUN_OPTIONS,...job.options})};}
+      catch(e){if(e instanceof CalculationCanceled)throw e;outcome={result:null,error:e.message};}
+      if(revision!==calculationRevision)return false;
+      onResult(job,outcome);setProgress((index+1)/jobs.length,`${index+1} of ${jobs.length} complete`);render({preserveEditor:true});
     }
-    state.message='Comparisons ready.';
-  }catch(e){if(!(e instanceof CalculationCanceled))throw e;if(revision===calculationRevision)state.message=COMPARISONS_CANCELED;}
+    return true;
+  }catch(e){if(!(e instanceof CalculationCanceled))throw e;if(revision===calculationRevision)state.message=COMPARISONS_CANCELED;return false;}
   finally{finishCalculation();}
+}
+async function runLab(){
+  if(!labReady())return;
+  const s=current(),set=activeLabSet(s),count=labPaths(),base=labScenario({},count),baseline=labFingerprint(base),store=labStore();
+  const runs={rows:new Map(),ranAt:Date.now()};store.bySet.set(set.id,runs);
+  const jobs=[];
+  for(const row of [{id:'baseline',name:'Current plan',changes:{}},...set.whatIfs.slice(0,labMaxWhatIfs())]){
+    const scenario=labScenario(row.changes,count),fingerprint=labFingerprint(scenario),errors=row.id==='baseline'?[]:whatIfErrors(simulationScenario(),row.changes);
+    // A what-if identical to the plan would only repeat the first row.
+    if(row.id!=='baseline'&&!errors.length&&fingerprint===baseline){runs.rows.set(row.id,{result:null,fingerprint,count,note:'Already matches your current plan.'});continue;}
+    if(errors.length){runs.rows.set(row.id,{result:null,fingerprint,count,error:errors.join(' ')});continue;}
+    jobs.push({id:row.id,label:row.name,scenario,fingerprint,changedPaths:comparisonChangedPaths(base,scenario)});
+  }
+  const finished=await runLabJobs(jobs,'Running Plan Lab comparisons…',(job,outcome)=>runs.rows.set(job.id,{...outcome,fingerprint:job.fingerprint,count,scenario:job.scenario,changedPaths:job.changedPaths}));
+  if(finished){state.message='Comparisons ready.';render({preserveEditor:true});}
+}
+async function runLabStress(){
+  if(!isPro()){setMessage('Stress tests are part of Pro.');return;}
+  if(!labReady())return;
+  const s=current(),set=activeLabSet(s),targetId=labStressTarget(labRows(set)),target=set.whatIfs.slice(0,labMaxWhatIfs()).find(w=>w.id===targetId)||null,count=labPaths();
+  const plans=[{id:'baseline',name:'Current plan',changes:{}},...(target?[target]:[])],jobs=[];
+  for(const test of STRESS_TESTS)for(const plan of plans){const scenario=labScenario(plan.changes,count);test.change?.(scenario);jobs.push({test:test.key,id:plan.id,label:`${test.label} · ${plan.name}`,scenario,options:test.options||{}});}
+  const errors=target?whatIfErrors(simulationScenario(),target.changes):[];if(errors.length){setMessage('Error: '+errors.join(' '));return;}
+  const rows=STRESS_TESTS.map(test=>({key:test.key,results:{}}));
+  const stress={target:target?.id??null,rows,count,fingerprint:labFingerprint([labScenario({},count),labScenario(target?.changes||{},count)])};
+  const finished=await runLabJobs(jobs,'Running stress tests…',(job,outcome)=>{rows.find(r=>r.key===job.test).results[job.id]=outcome.result;labStore().stress.set(set.id,stress);});
+  if(finished){state.message='Stress tests ready.';render({preserveEditor:true});}
+}
+async function runLabSensitivity(){
+  if(!isPro()){setMessage('The sensitivity ranking is part of Pro.');return;}
+  if(!labReady())return;
+  const count=Math.min(SENSITIVITY_PATHS,effectivePaths()),base=labScenario({},count),jobs=[{key:'base',label:'Current plan',scenario:base}];
+  for(const input of SENSITIVITY_INPUTS)for(const side of ['low','high']){const scenario=deep(base);if(input[side](scenario)&&!validateScenario(scenario).length&&labFingerprint(scenario)!==labFingerprint(base))jobs.push({key:input.key,side,label:`${input.label} · ${side==='low'?'lower':'higher'}`,scenario});}
+  const results=new Map();
+  const finished=await runLabJobs(jobs,'Ranking what moves your result…',(job,outcome)=>results.set(job.key+':'+(job.side||''),outcome.result));
+  if(!finished)return;
+  const baseResult=results.get('base:');if(!baseResult){setMessage('Error: The sensitivity ranking could not run.');return;}
+  const points=r=>r?Math.round((r.successProbability-baseResult.successProbability)*1000)/10:null;
+  const rows=SENSITIVITY_INPUTS.map(input=>{const low=points(results.get(input.key+':low')),high=points(results.get(input.key+':high'));const best=(high??0)>Math.max(0,low??0)?'high':(low??0)>0?'low':null;return {key:input.key,label:input.label,range:input.range,control:input.control,low,high,best};}).sort((a,b)=>(Math.abs(b.low??0)+Math.abs(b.high??0))-(Math.abs(a.low??0)+Math.abs(a.high??0)));
+  labStore().sensitivity={rows,base:baseResult,count,fingerprint:labFingerprint(base)};state.message='Sensitivity ranking ready.';render({preserveEditor:true});
+}
+// The live estimate uses its own worker so it never blocks or cancels a full
+// comparison. A newer edit supersedes an estimate still running.
+function stopLiveEstimate(){liveWorker?.terminate();liveWorker=null;}
+function liveRun(s){return new Promise((resolve,reject)=>{stopLiveEstimate();const worker=new Worker(new URL('./worker.js',import.meta.url),{type:'module'});liveWorker=worker;worker.onmessage=e=>{if(e.data.type==='progress')return;worker.terminate();if(liveWorker===worker)liveWorker=null;e.data.type==='result'?resolve(e.data.result):reject(new Error(e.data.message));};worker.onerror=e=>{worker.terminate();reject(new Error(e.message||'Estimate failed'));};worker.postMessage({scenario:s,task:'simulation',options:{includeRiskAnalysis:false,includePathPoints:false}});});}
+async function runLiveEstimate(){
+  const set=activeLabSet(),w=set.whatIfs.find(x=>x.id===state.labUi.editing);
+  if(!isPro()||!w||blockingUnknowns(current()).length){stopLiveEstimate();state.labLive={status:'idle'};return;}
+  const scenario=labScenario(w.changes,LIVE_ESTIMATE_PATHS),fingerprint=labFingerprint(scenario),errors=whatIfErrors(simulationScenario(),w.changes),token=Symbol('live');
+  state.labLive={status:'running',whatIf:w.id,fingerprint,token};
+  if(errors.length){state.labLive={status:'error',whatIf:w.id,fingerprint,error:errors.join(' ')};return;}
+  try{
+    const baseScenarioLive=labScenario({},LIVE_ESTIMATE_PATHS),baseKey=labFingerprint(baseScenarioLive);
+    const base=state.labLiveBase?.fingerprint===baseKey?state.labLiveBase.result:await liveRun(baseScenarioLive);
+    if(state.labLive.token!==token)return;state.labLiveBase={fingerprint:baseKey,result:base};
+    const result=await liveRun(scenario);if(state.labLive.token!==token)return;
+    state.labLive={status:'done',whatIf:w.id,fingerprint,result,base};
+  }catch(e){if(state.labLive.token===token)state.labLive={status:'error',whatIf:w.id,fingerprint,error:e.message};}
+  if(state.view==='lab'&&!state.busy)render({preserveEditor:true});
+}
+function labReportText(){
+  const vm=labViewModel(),rows=vm.rows.filter(r=>r.result&&!r.stale),lines=[`PLAN LAB COMPARISON · ${current().name}`,`Set: ${vm.set.name}`,`${rows[0]?.result.provenance.simulationCount??vm.paths} paths per plan on the same fixed sequence. Balances in ${vm.basis==='today'?'today’s':'future'} dollars; taxes in today’s dollars.`,''];
+  if(vm.summary)lines.push('IN SHORT',vm.summary.headline,`Current plan: ${readinessLabel(vm.summary.base.result)}. Best: ${vm.summary.best.label} ${readinessLabel(vm.summary.best.result)} (${vm.summary.delta}).`,'');
+  for(const r of rows){const m=r.metrics;lines.push(r.label.toUpperCase(),`Changes: ${r.baseline?'none':r.changesText.join('; ')}`,`Readiness: ${readinessLabel(r.result)}${r.baseline?'':` (${r.delta})`}`,`Lifetimes with a shortfall: ${m.shortfalls} of ${m.paths}`,`Median left at end: ${money(m.medianLeft)}`,`Left in tough markets (10th percentile): ${money(m.toughLeft)}`,`Median age when money runs out: ${m.medianFailureAge==null?'none':m.medianFailureAge.toFixed(1)}`,...(m.lifetimeTax==null?[]:[`Median lifetime federal income tax: ${money(m.lifetimeTax)}`,`Median years with a Medicare surcharge: ${m.surchargeYears}`,`Median Roth conversions: ${money(m.conversions)}`]),'');}
+  if(vm.stress&&!vm.stress.stale){lines.push('STRESS TESTS');for(const t of STRESS_TESTS){const row=vm.stress.rows.find(x=>x.key===t.key);lines.push(`${t.label}: current plan ${row?.results.baseline?readinessLabel(row.results.baseline):'—'}${vm.stress.target&&row?.results[vm.stress.target]?` · ${vm.rows.find(x=>x.id===vm.stress.target)?.label} ${readinessLabel(row.results[vm.stress.target])}`:''}`);}lines.push('');}
+  if(vm.sensitivity&&!vm.sensitivity.stale){lines.push('WHAT MOVES THE RESULT (readiness points)');for(const r of vm.sensitivity.rows)lines.push(`${r.label} (${r.range}): ${r.low??'n/a'} / ${r.high??'n/a'}`);lines.push('');}
+  lines.push('Hypothetical estimates using U.S. federal rules. Readiness is the share of modeled lifetimes without a portfolio shortfall, not a prediction or guarantee.');
+  return lines.join('\n')+'\n';
+}
+function labWhatIf(id){return activeLabSet().whatIfs.find(w=>w.id===id);}
+// Inputs that only Plan Lab edits. A plan carries them after Make this my plan,
+// so review and reports list them and review can remove each one.
+const PLAN_LAB_INPUTS=[['partTimeIncome',partTimeIncomeActive,s=>s.partTimeIncome,s=>{s.partTimeIncome={annualNet:0,endAge:0};}],['oneTimeExpenses',s=>s.oneTimeExpenses.length>0,s=>s.oneTimeExpenses,s=>{s.oneTimeExpenses=[];}],['homePlan',homePlanActive,s=>s.homePlan,s=>{s.homePlan=baseScenario().homePlan;}],['withdrawalOrder',s=>(s.withdrawalStrategy.withdrawalOrder??'Standard')!=='Standard',s=>s.withdrawalStrategy.withdrawalOrder,s=>{s.withdrawalStrategy.withdrawalOrder='Standard';}]];
+function planLabAdditions(s){return PLAN_LAB_INPUTS.filter(([,on])=>on(s)).map(([key,,value])=>({key,label:labLever(key).label,text:labLever(key).describe(value(s),s)}));}
+function planLabReview(s){const items=planLabAdditions(s);return items.length?`<section class="card"><h2>Added in Plan Lab</h2><p class="form-note">These inputs came from a what-if you applied. Change them in Plan Lab, or remove them here.</p><dl class="assumption-summary">${items.map(x=>`<div><dt>${escapeHTML(x.label)}</dt><dd>${escapeHTML(x.text)}<small><button class="text-link" data-action="remove-lab-input" data-key="${x.key}">Remove</button></small></dd></div>`).join('')}</dl></section>`:'';}
+// Names, chart choices and draft lever fields; returns true when handled.
+async function labChange(el,s){
+  const d=el.dataset||{},ui=state.labUi;
+  if(d.labLever){ui.leverDraft[d.labField]=el.value;return true;}
+  if(d.labWhatifName!==undefined){const w=labWhatIf(ui.editing),name=el.value.trim();if(!w)return true;if(!name||name.length>80){showFieldError(el,'Enter a name from 1 to 80 characters.');return true;}w.name=name;await persist(false);render({preserveEditor:true});return true;}
+  if(d.labSetName!==undefined){const set=activeLabSet(s),name=el.value.trim();if(!name||name.length>60){showFieldError(el,'Enter a set name from 1 to 60 characters.');return true;}set.name=name;await persist(false);render({preserveEditor:true});return true;}
+  if(d.labSeries!==undefined){if(el.checked)ui.hidden.delete(d.labSeries);else ui.hidden.add(d.labSeries);render({preserveEditor:true});return true;}
+  if(d.labChartAge!==undefined){const age=Number(el.value);if(Number.isInteger(age))ui.chartAge=age;render({preserveEditor:true});return true;}
+  if(d.labStressTarget!==undefined){ui.stressTarget=el.value;ui.stressTargetChosen=true;render({preserveEditor:true});return true;}
+  if(d.labGoal==='kind'){if(['retirement','claiming','savings'].includes(el.value))ui.goal.kind=el.value;render({preserveEditor:true});return true;}
+  if(d.labGoal==='target'){const value=Number(el.value);if(value>=70&&value<=95)ui.goal.target=value/100;return true;}
+  return false;
+}
+function labAddWhatIf(changes,name=''){
+  const set=activeLabSet();
+  if(set.whatIfs.length>=labMaxWhatIfs()){setMessage(isPro()?`A comparison set holds up to ${LAB_MAX_WHAT_IFS} what-ifs. Remove one or start a new set.`:`Free accounts compare one what-if. Remove it to try another, or explore Pro to compare up to ${LAB_MAX_WHAT_IFS}.`);return null;}
+  const w=newWhatIf(current(),changes,name);set.whatIfs.push(w);return w;
+}
+// Generated names follow the changes; a name the visitor typed stays as it is.
+function renameIfAuto(w,before){if(w.name===autoName(before,current())||w.name==='New what-if')w.name=autoName(w.changes,current());}
+function openLever(w,lever){const ui=state.labUi;ui.editingLever=lever.key;ui.leverError='';ui.leverDraft=Object.fromEntries(lever.fields(current(),w.changes[lever.key]).map(f=>[f.name,f.value]));}
+async function labAction(a,el,s){
+  const ui=state.labUi,entry=labEntry(s),set=activeLabSet(s),id=el.dataset.id;
+  if(a==='run-lab'){await runLab();return;}
+  if(a==='run-lab-stress'){await runLabStress();return;}
+  if(a==='run-lab-sensitivity'){await runLabSensitivity();return;}
+  if(a==='run-lab-goal'){await runDecision(ui.goal.kind,ui.goal.target);return;}
+  if(a==='compare-lower-returns'){
+    state.view='lab';const changes={returnCap:.07};
+    if(Math.max(s.market.stockMeanReturn,s.market.preRetirementMeanReturn)<=.07){setMessage('Your plan already assumes average returns of 7% or less.');return;}
+    if(!set.whatIfs.some(w=>JSON.stringify(w.changes)===JSON.stringify(changes))){if(!labAddWhatIf(changes,'Lower returns · up to 7%'))return;await persist(false);}
+    await runLab();return;
+  }
+  if(a==='lab-select-set'){if(!entry.sets.some(x=>x.id===el.dataset.set))return;entry.activeSet=el.dataset.set;ui.editing=null;ui.editingLever=null;stopLiveEstimate();await persist(false);render();return;}
+  if(a==='lab-new-set'){
+    if(!isPro()){setMessage('More comparison sets are part of Pro.');return;}
+    if(entry.sets.length>=LAB_MAX_SETS){setMessage(`Keep up to ${LAB_MAX_SETS} comparison sets per plan.`);return;}
+    const next={id:labId('set'),name:`Comparison set ${entry.sets.length+1}`,whatIfs:[]};entry.sets.push(next);entry.activeSet=next.id;ui.editing=null;ui.editingLever=null;
+    await persist(false);render();$('#lab-set-name')?.focus();return;
+  }
+  if(a==='lab-delete-set'){
+    if(entry.sets.length<2||!confirm(`Delete the comparison set “${set.name}” and its what-ifs?`))return;
+    entry.sets=entry.sets.filter(x=>x!==set);entry.activeSet=entry.sets[0].id;labStore().bySet.delete(set.id);labStore().stress.delete(set.id);ui.editing=null;ui.editingLever=null;
+    await persist(false);render();return;
+  }
+  if(a==='lab-add'){
+    const preset=el.dataset.preset?LAB_PRESETS.find(p=>p.key===el.dataset.preset):null,changes=preset?preset.changes(s):{};
+    if(preset&&!changes)return;
+    const w=labAddWhatIf(changes,preset?.label);if(!w)return;
+    ui.editing=w.id;ui.editingLever=null;ui.leverError='';await persist(false);render();$('#lab-builder')?.scrollIntoView({block:'start'});runLiveEstimate();return;
+  }
+  if(a==='lab-edit'){if(!labWhatIf(id))return;ui.editing=id;ui.editingLever=null;ui.leverError='';render();$('#lab-builder')?.scrollIntoView({block:'start'});runLiveEstimate();return;}
+  if(a==='lab-edit-close'){ui.editing=null;ui.editingLever=null;stopLiveEstimate();render();return;}
+  if(a==='lab-duplicate'){const w=labWhatIf(id);if(!w)return;const copy=labAddWhatIf(w.changes,(w.name+' copy').slice(0,80));if(!copy)return;ui.editing=copy.id;ui.editingLever=null;await persist(false);render();runLiveEstimate();return;}
+  if(a==='lab-remove'){const w=labWhatIf(id);if(!w)return;set.whatIfs=set.whatIfs.filter(x=>x!==w);if(ui.editing===id){ui.editing=null;ui.editingLever=null;stopLiveEstimate();}await persist(false);render();return;}
+  if(a==='lab-lever-edit'){const w=labWhatIf(ui.editing),lever=labLever(el.dataset.lever);if(!w||!lever?.available(s))return;openLever(w,lever);render({preserveEditor:true});$(`#lab-${lever.key}-${lever.fields(s,w.changes[lever.key])[0].name}`)?.focus();return;}
+  if(a==='lab-lever-cancel'){ui.editingLever=null;ui.leverError='';render();return;}
+  if(a==='lab-lever-save'){
+    const w=labWhatIf(ui.editing),lever=labLever(el.dataset.lever);if(!w||!lever||ui.editingLever!==lever.key)return;
+    const read=lever.read(ui.leverDraft,s);if(read.error){ui.leverError=read.error;render({preserveEditor:true});return;}
+    const before=deep(w.changes),next={...w.changes,[lever.key]:read.value},errors=whatIfErrors(s,next);
+    if(errors.length){ui.leverError=errors[0];render({preserveEditor:true});return;}
+    w.changes=next;renameIfAuto(w,before);ui.editingLever=null;ui.leverError='';await persist(false);render();runLiveEstimate();return;
+  }
+  if(a==='lab-lever-remove'){const w=labWhatIf(ui.editing);if(!w||!Object.hasOwn(w.changes,el.dataset.lever))return;const before=deep(w.changes);delete w.changes[el.dataset.lever];renameIfAuto(w,before);await persist(false);render();runLiveEstimate();return;}
+  if(a==='lab-measure'){if(!['funded','median','tough','tax'].includes(el.dataset.measure))return;ui.measure=el.dataset.measure;render();return;}
+  if(a==='lab-open-plan'){state.view='setup';render();window.scrollTo(0,0);return;}
+  if(a==='lab-apply'||a==='lab-copy'){
+    if(state.busy)return;const w=labWhatIf(id);if(!w)return;
+    const errors=whatIfErrors(s,w.changes);if(errors.length){setMessage('Error: '+errors.join(' '));return;}
+    const next=applyWhatIf(s,w.changes),changed=comparisonChangedPaths(s,next);
+    if(!changed.length){setMessage('Your plan already matches this what-if.');return;}
+    if(a==='lab-apply'){
+      if(!confirm(`Update “${s.name}” with the changes in “${w.name}”? Its results will need a new run.`))return;
+      Object.assign(s,next);personalize(s);for(const path of changed)state.inputSources[s.id][path]='Entered';
+      spendingHelpers.delete(s.id);retirementDateDrafts.delete(s.id+':retirementDate');state.results.delete(s.id);invalidateExploration();await resultCache.remove(s.id);
+      state.view='setup';state.setupSection=5;await persist();setMessage(`Your plan now includes “${w.name}”. Run the full forecast to check it.`);window.scrollTo(0,0);return;
+    }
+    // The comparison's calculation date must not freeze the new plan's clock.
+    const copy=next;copy.id=newPlanId();copy.name=(s.name+' · '+w.name).slice(0,120);copy.household.asOfDate='';
+    const sources=deep(state.inputSources[s.id]);for(const path of changed)sources[path]='Entered';
+    state.scenarios.push(copy);state.inputSources[copy.id]=sources;state.optionalAnswers[copy.id]=deep(state.optionalAnswers[s.id]||{});state.entryPeriods[copy.id]=deep(state.entryPeriods[s.id]||{});state.accountChecks[copy.id]=state.accountChecks[s.id];rememberSetupMode(copy.id,state.guided);selectScenario(copy.id);state.view='setup';state.setupSection=5;
+    await persist();setMessage('What-if saved as a new plan. Review it and run the full forecast.');window.scrollTo(0,0);return;
+  }
+  if(a==='lab-sensitivity-whatif'){
+    const input=SENSITIVITY_INPUTS.find(x=>x.key===el.dataset.input);if(!input?.whatIf||!['low','high'].includes(el.dataset.side))return;
+    const w=labAddWhatIf(input.whatIf(s,el.dataset.side));if(!w)return;await persist(false);setMessage(`Added “${w.name}”. Run the comparison to see it side by side.`);return;
+  }
+  if(a==='lab-frontier-whatif'){
+    const kind=el.dataset.kind;if(!['retirement','claiming','savings'].includes(kind))return;
+    const [resultKey,selectionKey]=decisionKeys(kind),point=selectedFrontierPoint(state[resultKey]?.frontier,state[selectionKey]);if(!point)return;
+    const date=addCalendarMonths(s.household.birthday,point.age*12),timing=s.household.alreadyRetired?{}:{retirementDate:date};
+    const changes=kind==='claiming'?{claimAge:point.age,annualBaseSpending:point.annualSpending}:kind==='savings'?{...timing,annualSavings:point.annualSavings}:{...timing,annualBaseSpending:point.annualSpending};
+    const w=labAddWhatIf(changes);if(!w)return;await persist(false);setMessage(`Added “${w.name}”. Run the comparison to see it side by side.`);return;
+  }
+  if(a==='lab-download-csv'||a==='lab-download-report'){
+    if(!isPro()){setMessage('Comparison downloads are part of Pro.');return;}
+    const vm=labViewModel(),rows=vm.rows.filter(r=>r.result&&!r.stale);if(!rows.length)return;
+    if(a==='lab-download-csv')download('plan-lab-comparison.csv',labCsv(rows.map(r=>({label:r.label,changesText:r.baseline?'':r.changesText.join('; '),metrics:r.metrics})),{basis:vm.basis,yearly:vm.yearly}),'text/csv');
+    else download('plan-lab-report.txt',labReportText(),'text/plain');
+  }
 }
 function download(name,text,type){const blob=new Blob([text],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function closeHelp(except=null){for(const help of document.querySelectorAll('.help.open')){if(help===except)continue;help.classList.remove('open');help.querySelector('.help-trigger').setAttribute('aria-expanded','false');}}
@@ -1405,10 +1636,10 @@ $('#main').addEventListener('click',async e=>{const runPlan=e.target.closest('[d
     if(state.busy||!confirm('Reset all plans? This removes all saved plans and results in this browser and restores only the 3 original example plans. Download a plan backup first if you want to keep your plans.'))return;
     invalidateExploration();state.scenarios=originalPlans();if(isPro())state.scenarios.forEach(applyProSimulationDefault);
     state.selectedId=state.scenarios[0].id;state.exampleIds=new Set(state.scenarios.map(plan=>plan.id));
-    state.inputSources=normalizeInputSources(null,state.scenarios,'Sample/default');state.optionalAnswers=normalizeOptionalAnswers(null,state.scenarios);state.accountChecks={};state.entryPeriods=normalizeEntryPeriods(null,state.scenarios);
+    state.inputSources=normalizeInputSources(null,state.scenarios,'Sample/default');state.optionalAnswers=normalizeOptionalAnswers(null,state.scenarios);state.accountChecks={};state.entryPeriods=normalizeEntryPeriods(null,state.scenarios);state.labSets={};
     state.hasStartedPlan=false;state.guided=false;state.setupSection=0;state.budgetReturn=null;state.advancedOpen=false;state.allocationOpen=false;state.rothHistoryOpen=false;
     state.results.clear();state.resultSaveStatus.clear();state.restoredResults.clear();
-    for(const drafts of [budgetViews,spendingHelpers,retirementDateDrafts,savingsTasks,rothHelpOpen,basicDisclosureOpen,growthHelpers,labDrafts])drafts.clear();
+    for(const drafts of [budgetViews,spendingHelpers,retirementDateDrafts,savingsTasks,rothHelpOpen,basicDisclosureOpen,growthHelpers])drafts.clear();
     if(await persist(false,true)){
       // Finish an older result write before clearing records, including those
       // with the same IDs and inputs as the restored examples.
@@ -1418,10 +1649,10 @@ $('#main').addEventListener('click',async e=>{const runPlan=e.target.closest('[d
     }else render();
     return;
   }
-  if(a==='new-scenario'){const copy=deep(s);copy.id=newPlanId();copy.name=s.name+' copy';state.scenarios.push(copy);state.inputSources[copy.id]=deep(state.inputSources[s.id]);state.optionalAnswers[copy.id]=deep(state.optionalAnswers[s.id]||{});state.entryPeriods[copy.id]=deep(state.entryPeriods[s.id]||{});state.accountChecks[copy.id]=state.accountChecks[s.id];rememberSetupMode(copy.id,state.guided);selectScenario(copy.id);state.view='setup';await persist();setMessage('Plan copied. Adjust its inputs.');}
+  if(a==='new-scenario'){const copy=deep(s);copy.id=newPlanId();copy.name=s.name+' copy';state.scenarios.push(copy);state.inputSources[copy.id]=deep(state.inputSources[s.id]);state.optionalAnswers[copy.id]=deep(state.optionalAnswers[s.id]||{});state.entryPeriods[copy.id]=deep(state.entryPeriods[s.id]||{});state.accountChecks[copy.id]=state.accountChecks[s.id];if(state.labSets[s.id])state.labSets[copy.id]=copyLabSets(state.labSets[s.id]);rememberSetupMode(copy.id,state.guided);selectScenario(copy.id);state.view='setup';await persist();setMessage('Plan copied. Adjust its inputs.');}
   if(a==='select-scenario'){selectScenario(el.dataset.id);state.view='dashboard';await persist();render();}
   if(a==='rename-scenario'){const target=state.scenarios.find(x=>x.id===el.dataset.id),name=prompt('Plan name',target.name);if(name?.trim()){target.name=name.trim();await persist();render();}}
-  if(a==='delete-scenario'){if(state.scenarios.length===1||!confirm('Delete this plan?'))return;invalidateExploration();state.scenarios=state.scenarios.filter(x=>x.id!==el.dataset.id);state.results.delete(el.dataset.id);await resultCache.remove(el.dataset.id);if(state.selectedId===el.dataset.id)state.selectedId=state.scenarios[0].id;await persist();render();}
+  if(a==='delete-scenario'){if(state.scenarios.length===1||!confirm('Delete this plan?'))return;invalidateExploration();state.scenarios=state.scenarios.filter(x=>x.id!==el.dataset.id);delete state.labSets[el.dataset.id];state.results.delete(el.dataset.id);await resultCache.remove(el.dataset.id);if(state.selectedId===el.dataset.id)state.selectedId=state.scenarios[0].id;await persist();render();}
   if(a==='add-month'){
     const ui=budgetView();if(ui.pending)return;
     ui.pending=blankBudgetMonth(s.budget);ui.open['month-'+s.budget.monthlyBudgets.length]=true;
@@ -1477,26 +1708,14 @@ $('#main').addEventListener('click',async e=>{const runPlan=e.target.closest('[d
     if(!changed.length){setMessage('Your plan already uses this target. Run the full forecast to check it.');return;}
     Object.assign(s,next);personalize(s);
     for(const path of changed)state.inputSources[s.id][path]='Estimated';
-    labDrafts.delete(s.id);spendingHelpers.delete(s.id);
+    spendingHelpers.delete(s.id);
     if(age)retirementDateDrafts.delete(s.id+':retirementDate');
     state.results.delete(s.id);invalidateExploration();await resultCache.remove(s.id);
     state.view='setup';state.setupSection=5;
     await persist();setMessage(`${savings?'Retirement age and annual savings':claiming?'Social Security claiming age and base spending':pair?'Retirement age and base spending':age?'Retirement age':'Base spending'} target applied and marked Estimated. Run the full forecast to check the updated plan.`);window.scrollTo(0,0);return;
   }
-  if(a==='copy-comparison'){
-    if(state.busy)return;
-    const row=state.labResults?.[Number(el.dataset.index)];if(!row?.scenario||!row.result||row.error)return;
-    const copy=deep(row.scenario);copy.id=newPlanId();copy.name=s.name+' · '+row.label;copy.numberOfSimulations=s.numberOfSimulations;
-    // The comparison's calculation date must not freeze the new plan's clock.
-    copy.household.asOfDate='';
-    const sources=deep(state.inputSources[s.id]);for(const path of row.changedPaths)sources[path]='Entered';
-    state.scenarios.push(copy);state.inputSources[copy.id]=sources;state.optionalAnswers[copy.id]=deep(state.optionalAnswers[s.id]||{});state.entryPeriods[copy.id]=deep(state.entryPeriods[s.id]||{});state.accountChecks[copy.id]=state.accountChecks[s.id];rememberSetupMode(copy.id,state.guided);selectScenario(copy.id);state.view='setup';state.setupSection=5;
-    await persist();setMessage('Comparison copied. Review it and run the full plan.');window.scrollTo(0,0);return;
-  }
-  if(a==='compare-lower-returns'){state.view='lab';await runLab(false,false,true);return;}
-  if(a==='run-custom-lab')await runLab(true);
-  if(a==='run-combined-lab')await runLab(true,true);
-  if(a==='run-lab')await runLab();
+  if(a==='remove-lab-input'){const input=PLAN_LAB_INPUTS.find(([key])=>key===el.dataset.key);if(!input||!input[1](s))return;input[3](s);personalize(s);state.results.delete(s.id);invalidateExploration();await resultCache.remove(s.id);await persist();setMessage(`${labLever(input[0]).label} removed from your plan. Run the full forecast to refresh results.`);return;}
+  if(a.startsWith('lab-')||['run-lab','run-lab-stress','run-lab-sensitivity','run-lab-goal','compare-lower-returns'].includes(a)){await labAction(a,el,s);return;}
   if(a==='checkout'||a==='billing-portal'){el.disabled=true;try{const response=await fetch(a==='checkout'?'/api/billing/checkout':'/api/billing/portal',{method:'POST',credentials:'same-origin',headers:{...(await billingHeaders()),...(a==='checkout'?{'Content-Type':'application/json'}:{})},...(a==='checkout'?{body:JSON.stringify({interval:el.dataset.interval})}:{})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Billing is unavailable.');const url=new URL(data.url);if(url.protocol!=='https:'||url.hostname!==(a==='checkout'?'checkout.stripe.com':'billing.stripe.com'))throw new Error('Unexpected billing link.');location.assign(url.href);}catch(error){el.disabled=false;setMessage('Error: '+error.message,{preserveEditor:true});}return;}
   if(a==='run-decision')await runDecision();
   if(a==='run-claim-decision')await runDecision(true);
@@ -1505,7 +1724,7 @@ $('#main').addEventListener('click',async e=>{const runPlan=e.target.closest('[d
   if(a==='download-report')download('retirement-report.txt',reportText(s,result()),'text/plain');
   if(a==='copy-report'){try{await navigator.clipboard.writeText(reportText(s,result()));setMessage('Report copied.');}catch{setMessage('Error: Clipboard access is unavailable. Download the text report instead.');}}
   if(a==='print')window.print();
-  if(a==='export-backup')download('retirement-scenarios.json',JSON.stringify({format:'retirement-readiness-lab-web-v1',inputSources:state.inputSources,optionalAnswers:state.optionalAnswers,accountChecks:state.accountChecks,exampleIds:[...state.exampleIds],entryPeriods:state.entryPeriods,scenarios:state.scenarios.map(({seed,...scenario})=>scenario)},null,2),'application/json');
+  if(a==='export-backup')download('retirement-scenarios.json',JSON.stringify({format:'retirement-readiness-lab-web-v1',inputSources:state.inputSources,optionalAnswers:state.optionalAnswers,accountChecks:state.accountChecks,exampleIds:[...state.exampleIds],entryPeriods:state.entryPeriods,labSets:state.labSets,scenarios:state.scenarios.map(({seed,...scenario})=>scenario)},null,2),'application/json');
   if(a==='import-backup')$('#import-file').click();
 });
 function numericEdit(el,{dollars=false,percent=false}={}){
@@ -1563,14 +1782,15 @@ $('#main').addEventListener('focusout',e=>{
 $('#main').addEventListener('input',e=>{
   const el=e.target;if(el.dataset?.frontierSlider!==undefined){selectFrontierPoint(el.value,el.dataset.frontierSlider);return;}
   if(el.dataset?.spendingHelper){const d=spendingHelper();if(!['total','mortgage','rent','healthcare'].includes(el.dataset.spendingHelper))return;d[el.dataset.spendingHelper]=el.value;d.open=true;$('#spending-calculator-result').innerHTML=spendingCalculatorResult(current());return;}
-  if(el.dataset?.labInput){labDraft()[el.dataset.labInput]=el.value;calculationRevision++;state.labResults=null;state.message='Comparison inputs changed. Choose Compare my changes to update the rows.';const status=$('#lab-draft-status');if(status)status.textContent='Comparison inputs changed. Choose Compare my changes to update the rows.';return;}
+  if(el.dataset?.labLever){state.labUi.leverDraft[el.dataset.labField]=el.value;return;}
+  if(el.dataset?.labGoal==='target'){const value=Number(el.value);if(value>=70&&value<=95){state.labUi.goal.target=value/100;const out=$('#lab-goal-target-value');if(out)out.textContent=value+'%';}return;}
   const key=el.dataset?.growthHelper;if(!key)return;
   const h=growthHelper(current());h[key]=el.value;h.open=true;
   // Changing the owner or account changes which fields are shown.
   if(key==='owner'||key==='account'){render({preserveEditor:true});return;}
   $('#growth-helper-result').innerHTML=growthHelperResult(current());
 });
-$('#main').addEventListener('change',async e=>{const el=e.target,s=current();clearFieldError(el);if(el.dataset?.frontierSlider!==undefined)return;if(el.dataset?.growthHelper)return;if(el.dataset?.labInput){labDraft()[el.dataset.labInput]=el.value;return;}
+$('#main').addEventListener('change',async e=>{const el=e.target,s=current();clearFieldError(el);if(el.dataset?.frontierSlider!==undefined)return;if(el.dataset?.growthHelper)return;if(await labChange(el,s))return;
   if(el.dataset?.planName!==undefined){const name=el.value.trim();if(!name||name.length>120){showFieldError(el,'Enter a plan name from 1 to 120 characters.');return;}s.name=name;el.value=name;personalize(s);await persist();render({preserveEditor:true});return;}
   if(el.dataset?.spendingHelper){const d=spendingHelper();if(['total','mortgage','rent','healthcare'].includes(el.dataset.spendingHelper))d[el.dataset.spendingHelper]=el.value;d.open=true;$('#spending-calculator-result').innerHTML=spendingCalculatorResult(s);return;}
   if(el.dataset?.spendingIncluded){const key=el.dataset.spendingIncluded;if(!['mortgage','rent','healthcare'].includes(key))return;const d=spendingHelper();d.included[key]=el.checked;d.open=true;render({preserveEditor:true});if(el.checked)$('#spending-helper-'+key)?.focus();return;}
@@ -1615,7 +1835,7 @@ if(el.name==='dollar-basis'){state.dollarBasis=el.value==='today'?'today':'futur
   }
 
 });
-$('#import-file').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;try{const data=JSON.parse(await file.text()),scenarios=Array.isArray(data)?data:data.scenarios;if(!Array.isArray(scenarios)||!scenarios.length)throw new Error('No scenarios found in the file.');const normalized=normalizeScenarios(scenarios);for(const s of normalized){const errors=validateScenarioDraft(s);if(errors.length)throw new Error(`${s.name}: ${errors.join(' ')}`);prepareCalendarScenario(s);}state.scenarios=normalized;state.inputSources=normalizeInputSources(data.inputSources,normalized);state.optionalAnswers=normalizeOptionalAnswers(data.optionalAnswers,normalized);state.accountChecks=normalizeAccountChecks(data.accountChecks,normalized);state.exampleIds=new Set(Array.isArray(data.exampleIds)?data.exampleIds.filter(id=>normalized.some(s=>s.id===id)):[]);state.entryPeriods=normalizeEntryPeriods(data.entryPeriods,normalized);state.budgetReturn=null;budgetViews.clear();spendingHelpers.clear();retirementDateDrafts.clear();if(isPro())state.scenarios.forEach(applyProSimulationDefault);state.selectedId=normalized[0].id;state.results.clear();invalidateExploration();await resultCache.clear();await persist(true,true);setMessage(`${normalized.length} scenarios imported.`);}catch(error){setMessage('Error: '+error.message);}e.target.value='';});
+$('#import-file').addEventListener('change',async e=>{const file=e.target.files?.[0];if(!file)return;try{const data=JSON.parse(await file.text()),scenarios=Array.isArray(data)?data:data.scenarios;if(!Array.isArray(scenarios)||!scenarios.length)throw new Error('No scenarios found in the file.');const normalized=normalizeScenarios(scenarios);for(const s of normalized){const errors=validateScenarioDraft(s);if(errors.length)throw new Error(`${s.name}: ${errors.join(' ')}`);prepareCalendarScenario(s);}state.scenarios=normalized;state.inputSources=normalizeInputSources(data.inputSources,normalized);state.optionalAnswers=normalizeOptionalAnswers(data.optionalAnswers,normalized);state.accountChecks=normalizeAccountChecks(data.accountChecks,normalized);state.exampleIds=new Set(Array.isArray(data.exampleIds)?data.exampleIds.filter(id=>normalized.some(s=>s.id===id)):[]);state.entryPeriods=normalizeEntryPeriods(data.entryPeriods,normalized);state.labSets=normalizeLabSets(data.labSets,normalized);state.budgetReturn=null;budgetViews.clear();spendingHelpers.clear();retirementDateDrafts.clear();if(isPro())state.scenarios.forEach(applyProSimulationDefault);state.selectedId=normalized[0].id;state.results.clear();invalidateExploration();await resultCache.clear();await persist(true,true);setMessage(`${normalized.length} scenarios imported.`);}catch(error){setMessage('Error: '+error.message);}e.target.value='';});
 applyRoute(location.hash);
 render();
 const resultRestoreReady=restoreCompletedResults();
@@ -1708,6 +1928,9 @@ async function bootAuth(){
 }
 bootAuth();
 window.addEventListener('focus',()=>{if(!state.busy)loadAccess();});
+// The sticky progress panel sits just below the sticky top bar, whose height changes with width.
+const topbar=$('.topbar');
+if(topbar&&typeof ResizeObserver==='function')new ResizeObserver(()=>document.documentElement.style.setProperty('--topbar-height',topbar.offsetHeight+'px')).observe(topbar);
 
 window.addEventListener('storage',event=>{
   if(event.key!==storageKey&&event.key!==null)return;

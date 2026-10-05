@@ -1,4 +1,4 @@
-import {scenarioEngineVersion,syncCalendarAges,DEFAULT_SEED} from './model.js';
+import {scenarioEngineVersion,syncCalendarAges,omitUnusedPlanLabInputs,DEFAULT_SEED} from './model.js';
 
 // Match calculation inputs, not plan names, draft budgets, source labels or
 // the next-run path count. A completed run always retains its actual count.
@@ -6,7 +6,7 @@ export function resultFingerprint(s,today){
   const copy=structuredClone(s);
   for(const key of ['id','name','budget','numberOfSimulations','simulationPathsCustomized'])delete copy[key];
   delete copy.household.datesNeedReview;
-  copy.seed=DEFAULT_SEED;syncCalendarAges(copy);copy.household.asOfDate=today;
+  copy.seed=DEFAULT_SEED;syncCalendarAges(copy);copy.household.asOfDate=today;omitUnusedPlanLabInputs(copy);
   const stable=value=>Array.isArray(value)?value.map(stable):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,stable(value[key])])):value;
   return JSON.stringify([scenarioEngineVersion(copy),stable(copy)]);
 }

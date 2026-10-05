@@ -37,24 +37,26 @@ function candidatePool(scenario){
 }
 
 self.onmessage=async e=>{
-  const {task,scenario}=e.data,progress=update=>self.postMessage({type:'progress',...update});
+  const {task,scenario}=e.data,options=e.data.options||{},progress=update=>self.postMessage({type:'progress',...update});
+  // Goal searches default to the original 80% readiness target.
+  const target=Number.isFinite(options.targetReadiness)?{targetReadiness:options.targetReadiness}:{};
   try{
     let result;
     if(task==='decision-candidate')result=candidateReadiness(scenario,e.data.candidate);
     else if(task==='claim-decision'||task==='savings-decision'){
       const pool=candidatePool(scenario);
-      try{result={frontier:task==='savings-decision'?await searchSavingsFrontier(scenario,{evaluate:pool.evaluate,onProgress:progress}):await searchReadinessFrontier(scenario,{kind:'claiming',evaluate:pool.evaluate,onProgress:progress})};}
+      try{result={frontier:task==='savings-decision'?await searchSavingsFrontier(scenario,{evaluate:pool.evaluate,onProgress:progress,...target}):await searchReadinessFrontier(scenario,{kind:'claiming',evaluate:pool.evaluate,onProgress:progress,...target})};}
       finally{pool.close();}
     }
     else if(task==='decision'){
       const pool=candidatePool(scenario);
       try{
-        result=await searchDecision(scenario,{evaluate:pool.evaluate,concurrency:pool.size,onProgress:update=>progress({...update,frontierExpected:true})});
+        result=await searchDecision(scenario,{evaluate:pool.evaluate,concurrency:pool.size,onProgress:update=>progress({...update,frontierExpected:true}),...target});
         result.frontier=await searchReadinessFrontier(scenario,{evaluate:pool.evaluate,simulationCount:result.simulationCount,targetReadiness:result.targetReadiness,initialSpending:result.safeAnnualSpending??scenario.spending.annualBaseSpending,onProgress:progress});
       }
       finally{pool.close();}
     }
-    else result=runSimulation(scenario,fraction=>progress({fraction}));
+    else result=runSimulation(scenario,fraction=>progress({fraction}),options);
     self.postMessage({type:'result',result});
   }catch(error){self.postMessage({type:'error',message:String(error.message||error)});}
 };
