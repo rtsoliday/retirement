@@ -601,6 +601,47 @@ test('applied budget deductions remain visible at the housing handoff until the 
   assert.equal(a.saved().inputSources[s.id]['mortgage.monthlyPayment'],'Entered');
 });
 
+test('deducted rent stays prominent with completed forecasts and reports until retirement rent is reviewed',async()=>{
+  const s=model.prepareCalendarScenario(model.baseScenario());
+  s.budget.monthlyBudgets=[{month:'2026-09',creditCardBills:[{monthlyAmount:4000}],adjustments:{rent:2000}}];
+  model.applyBudgetEstimate(s);
+  const a=app({scenarios:[s],selectedId:s.id,inputSources:{[s.id]:{_origin:'Sample/default'}}});
+  const r=await completeCachedRun(a),warning='the forecast may understate living costs and overstate readiness';
+  assert.equal(a.current().spending.annualBaseSpending,24000);assert.equal(a.current().rent.monthlyRent,0);
+  const before=planReview.monthlyIncomeSummary(a.current(),r).expenses;
+  const corrected=structuredClone(a.workers.at(-1).data.scenario);corrected.rent.monthlyRent=2000;
+  const withRent=runSimulation(corrected);
+  assert.ok(Math.abs(planReview.monthlyIncomeSummary(corrected,withRent).expenses-before-2000)<.01);
+  const results=a.results();assert.match(results,/You excluded rent from your budget/);
+  assert.ok(results.indexOf(warning)<results.indexOf('class="card result-verdict'),'Warning precedes the readiness verdict');
+  assert.ok(results.indexOf(warning)<results.indexOf('Your monthly picture'),'Warning precedes the living-cost summary');
+  for(const html of [a.dashboard(),a.lab(),a.reports()])assert.ok(html.includes(warning));
+  for(const report of [a.reportSummaryText(a.current(),r),a.reportText(a.current(),r)]){
+    assert.match(report,/BUDGET NEEDS REVIEW: You excluded rent/);assert.match(report,/overstate readiness/);
+  }
+  const restored=app(a.saved());assert.match(restored.results(),/You excluded rent from your budget/);
+  await a.click('edit-input',{index:'3',path:'rent.monthlyRent'});
+  assert.equal(a.state.view,'setup');assert.equal(a.state.setupSection,3);
+  await a.change('#main',{dataset:{field:'rent.monthlyRent',type:'money'},value:'2000'});
+  assert.equal(a.current().rent.monthlyRent,2000);assert.equal(a.state.results.has(s.id),false);
+  assert.doesNotMatch(a.results(),/budget-handoff/);assert.doesNotMatch(a.reportSummaryText(a.current()),/BUDGET NEEDS REVIEW/);
+});
+
+test('each deducted payment warning clears only after its retirement amount or None is recorded',async()=>{
+  const s=model.prepareCalendarScenario(model.baseScenario());
+  s.household.retirementDate=model.addCalendarMonths(s.household.birthday,63*12);model.syncCalendarAges(s);
+  s.budget.monthlyBudgets=[{month:'2026-09',creditCardBills:[{monthlyAmount:5000}],adjustments:{mortgage:1000,rent:1000,healthcare:500}}];
+  model.applyBudgetEstimate(s);
+  const a=app({scenarios:[s],selectedId:s.id,inputSources:{[s.id]:{_origin:'Sample/default'}}});
+  for(const [path,label] of [['mortgage.monthlyPayment','mortgage payments'],['rent.monthlyRent','rent'],['healthcare.preMedicareMonthlyPremium','health insurance premiums']]){
+    assert.ok(a.results().includes(`You excluded ${label} from your budget`));
+    await a.click('input-none',{path});
+    assert.ok(!a.results().includes(`You excluded ${label} from your budget`));
+  }
+  assert.doesNotMatch(a.results(),/budget-handoff/);
+  assert.doesNotMatch(app(a.saved()).reportSummaryText(a.current()),/BUDGET NEEDS REVIEW/);
+});
+
 test('the what-if builder stacks date and spending changes without changing the base plan',async()=>{
   const a=app(),s=a.current(),before=structuredClone(s),date=model.addCalendarMonths(s.household.retirementDate,12);a.state.view='lab';
   assert.match(a.lab(),/Plan Lab/);assert.match(a.lab(),/data-action="lab-add"/);assert.doesNotMatch(a.lab(),/value="NaN"/);
