@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <link rel="canonical" href="https://retirementforecast.us/sheet">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0e463c">
+  <meta name="description" content="A spreadsheet view of Retirement Forecast: compare U.S. retirement plans side by side with live Monte Carlo results.">
+  <meta name="author" content="Robert Soliday">
+  <title>Retirement Forecast Sheet</title>
+  <link rel="icon" type="image/svg+xml" href="./forecast-fan.svg?v=33">
+  <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png?v=33">
+  <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png?v=33">
+  <link rel="stylesheet" href="./sheet.css?v=1">
+</head>
+<body>
+  <header class="toolbar" aria-label="Sheet tools">
+    <a class="brand" href="./" title="Open the classic planner"><img src="./forecast-fan.svg?v=33" alt="" width="20" height="20"><span>Retirement Forecast</span></a>
+    <div class="group" role="group" aria-label="Plans">
+      <button id="add-copy" title="Add a column that copies the selected plan">+ Copy</button>
+      <button id="add-blank" title="Add a blank column; fill the ? cells">+ Blank</button>
+      <button id="set-base" title="Compare the other columns against the selected plan">Set base</button>
+      <button id="delete-plan" title="Delete the selected plan">Delete</button>
+    </div>
+    <div class="group" role="group" aria-label="View">
+      <button id="diff-only" aria-pressed="false" title="Show only rows where plans differ">Differences</button>
+      <div class="segmented" role="group" aria-label="Dollar basis">
+        <button id="basis-today" aria-pressed="true" title="Remove inflation from results">Today $</button>
+        <button id="basis-future" aria-pressed="false" title="Show what a statement would show">Future $</button>
+      </div>
+    </div>
+    <div class="group" role="group" aria-label="Calculation">
+      <button id="recalc" class="primary" title="Run every plan at its full path count (F9)">Full run <kbd>F9</kbd></button>
+      <span id="access" class="access"></span>
+    </div>
+    <div class="group end" role="group" aria-label="More">
+      <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
+      <button id="redo" title="Redo (Ctrl+Y)">Redo</button>
+      <button id="csv" title="Download this sheet as CSV">CSV</button>
+      <button id="keys" aria-expanded="false" aria-controls="keys-panel" title="Keyboard shortcuts">Keys</button>
+      <a class="classic" href="./">Classic</a>
+    </div>
+  </header>
+
+  <div class="formula" role="group" aria-label="Selected cell">
+    <output id="cell-name" class="cell-name" aria-label="Cell address"></output>
+    <span class="fx" aria-hidden="true">fx</span>
+    <input id="formula-input" aria-label="Cell value" autocomplete="off" spellcheck="false">
+  </div>
+  <div id="caption" class="caption" hidden></div>
+
+  <main id="scroller" class="scroller">
+    <table id="grid" role="grid" tabindex="0" aria-label="Retirement plans"></table>
+  </main>
+
+  <div id="issues" class="issues" hidden></div>
+  <aside id="keys-panel" class="keys-panel" hidden aria-label="Keyboard shortcuts">
+    <dl>
+      <div><dt>Type</dt><dd>Replace the cell</dd></div>
+      <div><dt>F2</dt><dd>Edit the cell</dd></div>
+      <div><dt>Enter / Tab</dt><dd>Save, move down / right</dd></div>
+      <div><dt>Esc</dt><dd>Cancel the edit</dd></div>
+      <div><dt>Delete</dt><dd>Blank the cell (Unknown)</dd></div>
+      <div><dt>Space</dt><dd>Toggle Yes/No, next choice</dd></div>
+      <div><dt>Shift + arrows</dt><dd>Select a range</dd></div>
+      <div><dt>Ctrl + C / V</dt><dd>Copy and paste, also to Excel</dd></div>
+      <div><dt>Ctrl + R</dt><dd>Fill right from the left cell</dd></div>
+      <div><dt>Ctrl + Z / Y</dt><dd>Undo / redo</dd></div>
+      <div><dt>F9</dt><dd>Full run</dd></div>
+      <div><dt>Ctrl + PgUp / PgDn</dt><dd>Switch sheet</dd></div>
+      <div><dt>40k, 1.2M, =3500*12</dt><dd>Number shorthand</dd></div>
+    </dl>
+  </aside>
+
+  <footer class="tabs">
+    <nav class="sheet-tabs" aria-label="Sheets">
+      <button data-tab="plan">Plans</button>
+      <button data-tab="forecast">Forecast</button>
+      <button data-tab="yearly">Yearly</button>
+    </nav>
+    <nav class="more-links" aria-label="Classic planner tools">
+      <a href="./#/budget">Budget</a><a href="./#/lab">Plan Lab</a><a href="./#/reports">Backup</a>
+    </nav>
+    <p class="disclaimer">U.S. planning only. Educational estimates, not advice or guarantees. <a href="./methodology.html">Model scope</a></p>
+  </footer>
+  <footer id="status" class="status">
+    <span id="note" class="note" role="status"></span>
+    <span id="aggregate" class="aggregate"></span>
+    <span id="calc" class="calc" role="status"></span>
+  </footer>
+
+  <input id="cell-editor" class="cell-editor" aria-label="Edit cell" autocomplete="off" spellcheck="false" hidden>
+  <select id="cell-select" class="cell-editor" aria-label="Choose a value" hidden></select>
+  <script type="module" src="./sheet.js?v=1"></script>
+</body>
+</html>

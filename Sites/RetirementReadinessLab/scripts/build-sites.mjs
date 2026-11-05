@@ -26,6 +26,8 @@ await mkdir(assetDir,{recursive:true});
 for(const name of modules)await cp(path.join(client,name),path.join(assetDir,name));
 const index=await readFile(path.join(client,'index.html'),'utf8');
 await writeFile(path.join(client,'index.html'),index.replace(/src="\.\/app\.js(?:\?[^\"]*)?"/,`src="./assets/${release}/app.js"`));
+const sheet=await readFile(path.join(client,'sheet.html'),'utf8');
+await writeFile(path.join(client,'sheet.html'),sheet.replace(/src="\.\/sheet\.js(?:\?[^\"]*)?"/,`src="./assets/${release}/sheet.js"`));
 const workerSource = await readFile(path.join(root, 'worker/index.js'), 'utf8');
 const adminHtml = await readFile(path.join(root, 'dist/admin.html'), 'utf8');
 const verificationHtml = await readFile(path.join(root,'worker/mcp-verification.html'),'utf8');
