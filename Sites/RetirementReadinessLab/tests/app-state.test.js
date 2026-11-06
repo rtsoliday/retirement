@@ -3404,3 +3404,65 @@ test('the store is never written in a form that cannot be loaded',async()=>{
   assert.equal(await a.persist(),true);
   assert.doesNotMatch(a.state.storageError,/not saved/i);
 });
+
+const restoreFile=(a,text)=>a.change('#import-file',{files:[{text:async()=>text}],value:'backup.json'});
+
+test('restore refuses a file that is not a plan backup, and changes nothing',async()=>{
+  const a=app();await a.persist();const before=a.stored();
+  for(const text of ['[{"sku":"A1","qty":3}]','{"scenarios":[{"id":"x","name":"No sections"}]}']){
+    await restoreFile(a,text);
+    assert.equal(a.stored(),before,text);
+    assert.match(a.state.message,/doesn’t look like/,text);
+  }
+});
+
+test('restore asks before replacing saved plans, and a no changes nothing',async()=>{
+  const source=app();await source.persist();const backup=source.stored();
+  const asked=[];let answer=false;
+  const a=app(null,{confirm:message=>{asked.push(message);return answer;}});
+  await restoreFile(a,backup);
+  assert.equal(asked.length,0,'nothing saved yet, so nothing to lose');
+  assert.equal(a.state.scenarios.length,3);
+  const before=a.stored();
+  const other=JSON.parse(backup);other.scenarios=[other.scenarios[0]];
+  await restoreFile(a,JSON.stringify(other));
+  assert.equal(asked.length,1);assert.match(asked[0],/Replace all saved plans/);assert.match(asked[0],/1 plan/);
+  assert.equal(a.stored(),before,'a no leaves the store alone');
+  assert.equal(a.state.scenarios.length,3);
+  answer=true;
+  await restoreFile(a,JSON.stringify(other));
+  assert.equal(a.saved().scenarios.length,1);
+});
+
+test('restore asks before replacing unreadable saved plans too',async()=>{
+  const source=app();await source.persist();const backup=source.stored();
+  const original={scenarios:[null],selectedId:'old'};
+  const a=app(original,{confirm:()=>false});
+  await restoreFile(a,backup);
+  assert.deepEqual(a.saved(),original);
+  assert.match(a.state.message,/could not be loaded/);
+});
+
+test('money a backup does not state becomes Unknown instead of sample dollars',async()=>{
+  const a=app();
+  await restoreFile(a,'{"scenarios":[{"id":"a","name":"Partial","accounts":{"pretax":1000}}]}');
+  const s=a.current(),sources=a.state.inputSources[s.id];
+  assert.equal(s.accounts.pretax,1000);
+  assert.notEqual(sources['accounts.pretax'],'Unknown','a stated amount stays');
+  for(const path of ['accounts.roth','accounts.taxable','accounts.cash','spending.annualBaseSpending','socialSecurity.annualBenefitAt67'])assert.equal(sources[path],'Unknown',path);
+  assert.match(a.state.message,/marked Unknown/);
+  const count=a.workers.length;await a.run();assert.equal(a.workers.length,count,'no run on money nobody entered');
+});
+
+test('a complete backup and an old flat backup are not marked Unknown by restore',async()=>{
+  const source=app();await source.persist();
+  const a=app();await restoreFile(a,source.stored());
+  assert.equal(Object.values(a.state.inputSources[a.current().id]).filter(v=>v==='Unknown').length,0);
+  assert.doesNotMatch(a.state.message,/marked Unknown/);
+  const b=app();
+  await restoreFile(b,'{"scenarios":[{"id":"old","name":"Old flat plan","currentAge":50,"retirementAge":65,"pretaxBalance":1000,"annualSpending":40000}]}');
+  assert.equal(b.current().name,'Old flat plan');
+  assert.equal(b.current().accounts.pretax,1000);
+  assert.equal(b.current().accounts.roth,0,'the old flat format has always defaulted to zero');
+  assert.doesNotMatch(b.state.message,/doesn’t look like|marked Unknown/);
+});

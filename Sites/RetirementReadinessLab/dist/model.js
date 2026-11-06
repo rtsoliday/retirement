@@ -277,6 +277,20 @@ export function validateScenarioStructure(s) {
   return [...validateBudgetStructure(s.budget),...validateRothHistoryStructure(s.rothHistory),...validateRothHistoryStructure(s.spouseRothHistory),...validateEmployerRoth(s.employerRothAccounts),...validateOneTimeExpensesStructure(s.oneTimeExpenses)];
 }
 
+// A restore must not replace plans with a file that merely parses as JSON.
+export function looksLikePlan(raw){
+  if(!raw||typeof raw!=='object'||Array.isArray(raw))return false;
+  return raw.currentAge!==undefined||Object.entries(TYPE_TEMPLATE).some(([key,value])=>value&&typeof value==='object'&&!Array.isArray(value)&&raw[key]&&typeof raw[key]==='object');
+}
+// Missing fields normally take the sample plan's values. For the money a forecast rests
+// on, that would calculate on dollars nobody entered, so a restore marks these Unknown.
+// The old flat format is exempt: it has always defaulted its amounts to zero.
+const AMOUNTS_A_BACKUP_MUST_STATE=['accounts.pretax','accounts.roth','accounts.taxable','accounts.cash','spending.annualBaseSpending','socialSecurity.annualBenefitAt67','healthcare.preMedicareMonthlyPremium'];
+export function absentPersonalAmounts(raw){
+  if(raw?.currentAge!==undefined&&!raw.household)return [];
+  return AMOUNTS_A_BACKUP_MUST_STATE.filter(path=>{const [section,key]=path.split('.');return raw?.[section]?.[key]===undefined;});
+}
+
 // Both views repair a store the same way on load, and the planner on restore too.
 export function repairScenarioStructure(s){return repairEmployerRoth(s?.employerRothAccounts);}
 export function repairScenarios(scenarios){

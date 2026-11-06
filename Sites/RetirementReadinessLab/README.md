@@ -78,6 +78,8 @@ Numeric edits are saved when committed by leaving the field. Malformed entries k
 
 Saved plans must pass `validateScenarioStructure` to open, and one failing plan makes the whole store unreadable. So the planner tests each field edit against that check before applying it, and `persist` refuses to write a store that fails it. Earlier releases could save a blank employer Roth name or an out-of-range employer Roth number, so `repairScenarios` fixes exactly those two faults when plans load in either view and when a backup is restored: a blank name gets a default, and an impossible number returns to its default and is marked Unknown, which blocks calculations until it is re-entered. Opening a repaired store writes nothing; the repair is saved with the next edit. Any other structural fault keeps the existing protection: the stored data is left alone and the page offers Export unreadable backup and Replace unreadable saved plans.
 
+Restore refuses a file with no plan sections, and asks before replacing plans that are already saved. Amounts a backup does not state (balances, base spending, Social Security and the pre-Medicare premium) are marked Unknown rather than filled from the sample plan, so they block a run until entered. The old flat backup format is exempt, because it has always defaulted those amounts to zero.
+
 Use Node.js 22 or newer. The test runner enumerates test files explicitly, including on Windows. From the repository root:
 
 ```bash
