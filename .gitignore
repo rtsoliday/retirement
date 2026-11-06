@@ -1,2 +1,5 @@
 __pycache__/
 .pytest_cache/
+
+# Saved by the retirement simulator on each run. Holds personal numbers.
+Python/retirement_simulator/config.json

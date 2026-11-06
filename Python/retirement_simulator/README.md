@@ -8,7 +8,7 @@ A Tkinter front end for the Monte Carlo model in `core.py`. It projects retireme
 - `monticarlo.py`: legacy spelling retained as a compatibility launcher.
 - `core.py`: simulation and tax calculations.
 - `DeathProbsE_*_Alt2_TR2025.csv`: mortality tables used by the application.
-- `config.json`: saved scenario settings.
+- `config.json`: saved scenario settings. The app creates it when it saves. It holds personal numbers, so Git ignores it; without it the app starts from defaults.
 - `tests/`: unit and regression tests.
 
 ## Run

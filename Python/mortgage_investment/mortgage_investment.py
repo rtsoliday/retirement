@@ -300,10 +300,10 @@ def plot_results(history: list[dict], starting_investment: float):
 
 # Default parameter values
 DEFAULT_PARAMS = {
-    "investment_rate": 0.1472,
-    "mortgage_outstanding": 143098.56,
-    "mortgage_rate": 0.0225,
-    "monthly_payment": 1294.45,
+    "investment_rate": 0.0700,
+    "mortgage_outstanding": 200000.00,
+    "mortgage_rate": 0.0600,
+    "monthly_payment": 1200.00,
     "capital_gains_rate": 0.15,
 }
 
