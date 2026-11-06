@@ -19,7 +19,7 @@ const NAME_ROW={path:'name',type:'text',label:'Plan',note:'Plan name. The planne
 const PERSONAL_PATHS=['household.birthday','household.retirementDate','accounts.pretax','accounts.roth','accounts.taxable','accounts.cash','spending.annualBaseSpending','socialSecurity.annualBenefitAt67','spouseAccounts.pretax','spouseAccounts.roth','spouseIncome.annualBenefitAt67','healthcare.preMedicareMonthlyPremium','rothHistory.contributionBasis','rothHistory.firstContributionYear','spouseRothHistory.contributionBasis','spouseRothHistory.firstContributionYear',...['contributions','spouseContributions'].flatMap(prefix=>['pretax','employerPretax','roth','taxable','cash'].map(key=>`${prefix}.${key}`))];
 
 // ---------- Saved plans (same store and locking as the classic planner) ----------
-let lastSavedRaw=null,saveQueue=Promise.resolve(),pendingSaves=0,storeBlocked=false;
+let lastSavedRaw=null,saveQueue=Promise.resolve(),pendingSaves=0,storeBlocked=false,saveEpoch=0;
 function originalPlans(){return sampleScenarios().map(s=>{prepareCalendarScenario(s,{needsReview:false});s.household.separatePeople=true;s.household.spouseRetirementDate=s.household.retirementDate;return s;});}
 function readStore(){
   const raw=localStorage.getItem(STORE_KEY);lastSavedRaw=raw;
@@ -41,6 +41,7 @@ const app={
   tab:'plan',sel:{r:1,c:2,ar:1,ac:2},edit:null,model:null,collapsed:new Set(),diffOnly:false,basis:'today',yearlyId:'',
   tier:'free',undo:[],redo:[],results:new Map(),lastShown:new Map(),jobs:new Map(),queue:[],full:false,noteOverride:'',
   startState:'idle', // idle → edit-pending → counted; see countsAsSimulationStart.
+  saveFailure:'',calcFailure:'', // Stay on screen until a later save or result works.
 };
 function loadInto(){
   const store=readStore();
@@ -49,18 +50,25 @@ function loadInto(){
   if(!app.plans.some(p=>p.id===app.yearlyId))app.yearlyId=app.selectedId;
   if(app.tier==='pro')for(const s of app.plans)applyProSimulationDefault(s);
 }
+// Never write over plans this page can't read, whichever way it found out.
+function blockStore(){storeBlocked=true;renderNote();}
 function persist(){
   if(storeBlocked)return Promise.resolve(false);
-  const payload=JSON.stringify({...app.saved,scenarios:app.plans,selectedId:app.selectedId,hasStartedPlan:true,inputSources:app.sources,optionalAnswers:app.optional,exampleIds:[...app.exampleIds],accountChecks:app.saved.accountChecks??{},entryPeriods:app.saved.entryPeriods??{},labSets:app.saved.labSets??{}});
+  const payload=JSON.stringify({...app.saved,scenarios:app.plans,selectedId:app.selectedId,hasStartedPlan:true,inputSources:app.sources,optionalAnswers:app.optional,exampleIds:[...app.exampleIds],accountChecks:app.saved.accountChecks??{},entryPeriods:app.saved.entryPeriods??{},labSets:app.saved.labSets??{}}),epoch=saveEpoch;
+  const failed=text=>{app.saveFailure=text;renderNote();return false;};
   const save=async()=>{
-    if(!navigator.locks){setNote('Automatic saving isn’t available in this browser. Use the planner to back up.',true);return false;}
+    if(!navigator.locks)return failed('This browser can’t save here, so these edits will be lost when you leave. Download the CSV to keep a copy.');
     return navigator.locks.request(STORE_KEY,()=>{
+      // This payload was built from plans a conflict has since replaced.
+      if(epoch!==saveEpoch)return false;
       if(localStorage.getItem(STORE_KEY)!==lastSavedRaw){
-        setNote('Saved plans changed in another tab, so this edit wasn’t saved. Loaded the newer plans.',true);
-        loadInto();app.undo=[];app.redo=[];refresh();return false;
+        saveEpoch++;
+        try{loadInto();app.saveFailure='';app.undo=[];app.redo=[];setNote('Saved plans changed in another tab, so this edit wasn’t saved. Loaded the newer plans.',true);refresh();}
+        catch{blockStore();}
+        return false;
       }
-      localStorage.setItem(STORE_KEY,payload);lastSavedRaw=payload;return true;
-    }).catch(()=>{setNote('This change couldn’t be saved in browser storage.',true);return false;});
+      localStorage.setItem(STORE_KEY,payload);lastSavedRaw=payload;app.saveFailure='';renderNote();return true;
+    }).catch(()=>failed('This change couldn’t be saved, so it will be lost when you leave. Free up browser storage, then edit again.'));
   };
   pendingSaves++;saveQueue=saveQueue.then(save,save).finally(()=>{pendingSaves--;});return saveQueue;
 }
@@ -78,7 +86,17 @@ const fullPaths=s=>isPro()?Math.max(MIN_SIMULATION_PATHS,Math.min(MAX_SIMULATION
 const livePaths=s=>Math.min(fullPaths(s),isPro()?LIVE_ESTIMATE_PATHS:FREE_SIMULATION_PATHS);
 const fingerprint=s=>resultFingerprint(s,localCalendarDate());
 const OPTIONS={includePathPoints:false,includeRiskAnalysis:false};
-function remember(key,result){app.results.delete(key);app.results.set(key,result);while(app.results.size>48)app.results.delete(app.results.keys().next().value);}
+function remember(key,result){
+  app.results.delete(key);app.results.set(key,result);
+  if(app.results.size<=48)return;
+  // Drop the oldest, but never a result a plan on screen still relies on: nothing
+  // would recalculate it until the next edit.
+  const inUse=new Set(app.plans.map(fingerprint));
+  for(const old of app.results.keys()){
+    if(app.results.size<=48)break;
+    if(!inUse.has(old.slice(0,old.lastIndexOf('|'))))app.results.delete(old);
+  }
+}
 function currentResult(s){
   const fp=fingerprint(s),result=app.results.get(fp+'|'+fullPaths(s))||app.results.get(fp+'|'+livePaths(s))||null;
   return {result,fresh:Boolean(result)};
@@ -102,12 +120,12 @@ function pump(){
     worker.onmessage=e=>{
       if(e.data.type==='progress'){job.progress=e.data.fraction??job.progress;renderCalc();return;}
       worker.terminate();if(app.jobs.get(next.id)===job)app.jobs.delete(next.id);
-      if(e.data.type==='result')remember(next.key,e.data.result);
-      else setNote(`${plan.name}: ${e.data.message}`,true);
+      if(e.data.type==='result'){remember(next.key,e.data.result);app.calcFailure='';}
+      else app.calcFailure=`${plan.name}: ${e.data.message}`;
       if(!app.jobs.size&&!app.queue.length)app.full=false;
       refresh({keepCalc:true});pump();
     };
-    worker.onerror=()=>{worker.terminate();if(app.jobs.get(next.id)===job)app.jobs.delete(next.id);setNote('The calculation couldn’t start. Reload the page.',true);renderCalc();pump();};
+    worker.onerror=()=>{worker.terminate();if(app.jobs.get(next.id)===job)app.jobs.delete(next.id);app.calcFailure='The calculation couldn’t start. Reload the page to load the latest calculator.';renderNote();renderCalc();pump();};
     worker.postMessage({scenario:next.scenario,task:'simulation',options:OPTIONS});
     if(countsAsSimulationStart({explicit:next.explicit,editPending:app.startState==='edit-pending',count:next.count,fullCount:fullPaths(plan)})){
       app.startState='counted';reportUsage('simulation_start');
@@ -123,10 +141,12 @@ function enqueue(plan,count,explicit=false){
   // Snapshot now. The key describes these inputs, and the plan can be edited before a worker is free.
   app.queue.push({id:plan.id,key,count,explicit,scenario:simulationScenario(plan,count)});
 }
-let recalcTimer=0;
+let recalcTimer=0,recalcPending=false;
 function scheduleRecalc(delay=180){
   clearTimeout(recalcTimer);
+  recalcPending=true;
   recalcTimer=setTimeout(()=>{
+    recalcPending=false;
     for(const plan of app.plans){
       const blocked=planIssues(plan,app.sources).some(i=>i.level==='unknown'||i.level==='error');
       if(blocked){cancelJob(plan.id);continue;}
@@ -287,10 +307,11 @@ function forecastModel(){
     {kind:'head',frozen:true,cells:[{t:'',cls:'c-sticky'},...plans.flatMap(p=>metrics.map((_,i)=>({t:i===0?p.name:'',clip:i===0?p.name:'',cls:i===0?'group-name left':''})))]},
     {kind:'head',frozen:true,lastFrozen:true,cells:[{t:'Age',cls:'c-sticky'},...plans.flatMap(()=>metrics.map(([label])=>({t:label})))]}
   ];
-  for(const {age,plans:cells} of table)rows.push({kind:'data',cells:[{t:String(age),clip:age,cls:'c-sticky calc'},...cells.flatMap(cell=>metrics.map(([,key])=>{
+  for(const {age,plans:cells} of table)rows.push({kind:'data',cells:[{t:String(age),clip:age,cls:'c-sticky calc'},...cells.flatMap((cell,i)=>metrics.map(([,key])=>{
     if(!cell)return {t:'',cls:'none'};
-    if(key==='funded')return {t:fundedLabel(cell.funded,cell.count),clip:fundedLabel(cell.funded,cell.count),cls:'funded calc',style:`--share:${((cell.funded??0)*100).toFixed(1)}%`};
-    return {t:moneyText(Math.round(cell[key])),clip:Math.round(cell[key]),num:cell[key],cls:'calc'};
+    const stale=states[i].stale?' stale':'';
+    if(key==='funded')return {t:fundedLabel(cell.funded,cell.count),clip:fundedLabel(cell.funded,cell.count),cls:`funded calc${stale}`,style:`--share:${((cell.funded??0)*100).toFixed(1)}%`};
+    return {t:moneyText(Math.round(cell[key])),clip:Math.round(cell[key]),num:cell[key],cls:`calc${stale}`};
   }))]});
   if(!table.length)rows.push({kind:'data',cells:[{t:'',cls:'c-sticky'},{t:'No results yet',cls:'none left'}]});
   return {cols,rows};
@@ -303,7 +324,7 @@ function yearlyModel(){
   for(const row of data){
     const months=Math.round(row.age*12),age=months%12?`${Math.floor(months/12)}y ${months%12}m`:String(months/12);
     const date=row.date?cellText({type:'date'},row.date):'';
-    rows.push({kind:'data',cells:[{t:age,clip:row.age,cls:'c-sticky calc'},{t:date,cls:'calc'},...used.map(([key])=>{const v=Math.round(row[key]);return {t:v?moneyText(v):'–',clip:v,num:row[key],cls:`calc${key==='unfunded'&&v>0?' bad':''}`};})]});
+    rows.push({kind:'data',cells:[{t:age,clip:row.age,cls:'c-sticky calc'},{t:date,cls:`calc${st.stale?' stale':''}`},...used.map(([key])=>{const v=Math.round(row[key]);return {t:v?moneyText(v):'–',clip:v,num:row[key],cls:`calc${st.stale?' stale':''}${key==='unfunded'&&v>0?' bad':''}`};})]});
   }
   if(!data.length)rows.push({kind:'data',cells:[{t:'',cls:'c-sticky'},{t:st.blocked?'Fill the blank cells first':'Calculating…',cls:'none left'}]});
   return {cols,rows};
@@ -373,8 +394,10 @@ function renderFormula(){
 function setNote(text,error=false){app.noteOverride=text;app.noteError=error;renderNote();}
 function renderNote(){
   const el=$('note'),cell=activeCell(),row=app.model?.rows[app.sel.r];
-  el.classList.toggle('error',Boolean(app.noteOverride)&&Boolean(app.noteError));
-  el.textContent=app.noteOverride||cell?.note||row?.note||(row?.section?`${row.section.label}: Space shows or hides this block.`:'');
+  // Problems that lose work or hide the truth stay until they are fixed.
+  const sticky=app.saveFailure||(storeBlocked?'Saved plans couldn’t be read, so nothing here is saved. Open the planner to recover them.':'')||app.calcFailure;
+  el.classList.toggle('error',Boolean(sticky)||(Boolean(app.noteOverride)&&Boolean(app.noteError)));
+  el.textContent=sticky||app.noteOverride||cell?.note||row?.note||(row?.section?`${row.section.label}: Space shows or hides this block.`:'');
 }
 function renderAggregate(){
   const {top,bottom,left,right}=rangeBounds(),values=[];
@@ -398,7 +421,7 @@ function renderCalc(){
   if(running){
     const done=jobs.reduce((n,j)=>n+(j.progress||0),0),totalCount=jobs.reduce((n,j)=>n+(j.count||0),0);
     $('calc').textContent=`Calculating ${Math.round(done/running*100)}%${totalCount>running*LIVE_ESTIMATE_PATHS?` · ${totalCount.toLocaleString('en-US')} paths`:''}`;
-  }else $('calc').textContent='Ready';
+  }else $('calc').textContent=app.calcFailure?'Stopped':recalcPending?'Updating…':app.plans.some(p=>planState(p).stale)?'Out of date':'Ready';
   const stopping=running&&app.full;
   button.classList.toggle('stopping',Boolean(stopping));
   button.innerHTML=stopping?'Stop':'Full run <kbd>F9</kbd>';
@@ -585,6 +608,7 @@ function pasteText(text){
 function downloadCsv(){
   const m=app.model,name=app.tab==='yearly'?(app.plans.find(p=>p.id===app.yearlyId)?.name||'plan')+' yearly':app.tab==='forecast'?'forecast':'plans';
   const rows=m.rows.map(row=>row.cells.map(cell=>cell.clip??cell.t??''));
+  if(m.rows.some(row=>row.cells.some(cell=>/\bstale\b/.test(cell.cls||''))))rows.unshift(['Out of date: some numbers below are from before your latest edit.']);
   const url=URL.createObjectURL(new Blob([toCsv(rows)],{type:'text/csv'})),a=document.createElement('a');
   a.href=url;a.download=`retirement-${name.replace(/[^a-z0-9]+/gi,'-').toLowerCase()}.csv`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
@@ -801,9 +825,9 @@ window.addEventListener('storage',event=>{
   if(event.key!==STORE_KEY&&event.key!==null)return;
   try{if(localStorage.getItem(STORE_KEY)===lastSavedRaw)return;}catch{return;}
   if(app.edit||pendingSaves)return;
-  try{loadInto();app.undo=[];app.redo=[];refresh();setNote('Updated from another tab.');}catch{storeBlocked=true;setNote('Saved plans couldn’t be read. Open the planner to recover them.',true);}
+  try{loadInto();storeBlocked=false;app.saveFailure='';app.undo=[];app.redo=[];refresh();setNote('Updated from another tab.');}catch{blockStore();}
 });
-window.addEventListener('beforeunload',e=>{if(pendingSaves){e.preventDefault();e.returnValue='';}});
+window.addEventListener('beforeunload',e=>{if(pendingSaves||app.saveFailure){e.preventDefault();e.returnValue='';}});
 
 // Same access check as the classic planner. Any failure means the free preview.
 async function loadAccess(){
@@ -825,9 +849,8 @@ async function start(){
   try{loadInto();}
   catch{
     // Never overwrite plans this page can't read.
-    storeBlocked=true;
+    blockStore();
     const plans=originalPlans();Object.assign(app,{plans,sources:normalizeInputSources(null,plans,'Sample/default'),optional:normalizeOptionalAnswers(null,plans),selectedId:plans[0].id,yearlyId:plans[0].id});
-    setNote('Saved plans couldn’t be read, so these are samples and nothing is saved. Open the planner to recover them.',true);
   }
   refresh();
   if(!storeBlocked)placeOnArrival();

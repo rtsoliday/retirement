@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import * as sheetModel from '../dist/sheet-model.js';
+import * as model from '../dist/model.js';
+import * as planReview from '../dist/plan-review.js';
 import {resultFingerprint} from '../dist/result-cache.js';
 import {baseScenario,sampleScenarios,prepareCalendarScenario,validateScenario,addCalendarMonths,localCalendarDate} from '../dist/model.js';
 import {normalizeInputSources} from '../dist/ux-guidance.js';
@@ -254,4 +256,137 @@ test('the sheet repairs locked stores the same way the planner does',()=>{
   const script=readFileSync(new URL('../dist/sheet.js',import.meta.url),'utf8');
   assert.match(script,/repaired=repairScenarios\(plans\)/);
   assert.match(script,/markRepairedUnknown\(sources,repaired\)/);
+});
+
+// Runs the sheet's real store code against a fake browser, so these tests exercise what ships.
+function storeHarness({raw=null,locks=true,quota=false}={}){
+  const source=readFileSync(new URL('../dist/sheet.js',import.meta.url),'utf8');
+  const stored={value:raw,full:quota,held:null};
+  const storage={getItem:()=>stored.value,setItem(_key,value){if(stored.full)throw new Error('QuotaExceededError');stored.value=value;}};
+  const locksApi={request:async(_name,fn)=>{if(stored.held)await stored.held;return fn();}};
+  const notes=[],listeners={};
+  const context=vm.createContext({
+    ...model,normalizeInputSources,...planReview,structuredClone,JSON,Promise,Set,Map,String,Array,Object,Number,
+    localStorage:storage,navigator:locks?{locks:locksApi}:{},
+    window:{addEventListener:(name,fn)=>{listeners[name]=fn;}},
+    setNote:(text,error)=>{notes.push({text,error});},refresh(){},renderNote(){},copyLabSets:x=>x,
+  });
+  const core=source.slice(source.indexOf('const STORE_KEY'),source.indexOf('const $=id'))+source.slice(source.indexOf('let lastSavedRaw'),source.indexOf('function snapshot'))+source.slice(source.indexOf("window.addEventListener('storage'"),source.indexOf('// Same access check'));
+  vm.runInContext(core+';this.h={app,loadInto,persist,block:()=>storeBlocked,setBlocked:v=>{storeBlocked=v;}};',context);
+  return {...context.h,stored,notes,fire:name=>listeners[name]};
+}
+const validStore=edit=>{const s=plan();edit?.(s);return JSON.stringify({scenarios:[s],selectedId:s.id,hasStartedPlan:true});};
+
+test('a failed save stays visible and leaving warns, until a later save works',async()=>{
+  const h=storeHarness({raw:validStore()});h.loadInto();
+  const before=h.stored.value;h.stored.full=true;
+  h.app.plans[0].accounts.pretax=2000;
+  assert.equal(await h.persist(),false);
+  assert.equal(h.stored.value,before,'the store keeps its last good copy');
+  assert.match(h.app.saveFailure,/lost when you leave/);
+  let warned=false;h.fire('beforeunload')({preventDefault(){warned=true;}});assert.ok(warned,'leaving must warn');
+  h.stored.full=false;
+  assert.equal(await h.persist(),true);
+  assert.equal(h.app.saveFailure,'');
+  warned=false;h.fire('beforeunload')({preventDefault(){warned=true;}});assert.equal(warned,false);
+});
+
+test('a browser without Web Locks is told plainly that edits here will not be kept',async()=>{
+  const h=storeHarness({raw:validStore(),locks:false});h.loadInto();
+  assert.equal(await h.persist(),false);
+  assert.match(h.app.saveFailure,/lost when you leave/);
+  assert.doesNotMatch(h.app.saveFailure,/back up/i,'the planner never sees these edits, so it cannot back them up');
+});
+
+test('repairing an unreadable store in another tab lets this tab save again',async()=>{
+  const h=storeHarness({raw:'{bad'});
+  assert.throws(()=>h.loadInto());h.setBlocked(true);
+  assert.equal(await h.persist(),false,'blocked while unreadable');
+  h.stored.value=validStore(s=>{s.name='Repaired';});
+  h.fire('storage')({key:'retirement-readiness-lab-sites-v1'});
+  assert.equal(h.block(),false,'a good reload must clear the block');
+  assert.equal(h.app.plans[0].name,'Repaired');
+  h.app.plans[0].accounts.pretax=123;
+  assert.equal(await h.persist(),true);
+  assert.equal(JSON.parse(h.stored.value).scenarios[0].accounts.pretax,123);
+});
+
+test('an unreadable store written by another tab is never overwritten, even with no storage event',async()=>{
+  const h=storeHarness({raw:validStore()});h.loadInto();
+  const unreadable='{"scenarios":"UNREADABLE-BACKUP"}';h.stored.value=unreadable;
+  assert.equal(await h.persist(),false);
+  assert.equal(h.stored.value,unreadable);
+  assert.equal(h.block(),true,'the failed reload must block saving');
+  assert.equal(await h.persist(),false);
+  assert.equal(h.stored.value,unreadable,'a second edit must not overwrite it');
+});
+
+test('a save queued before a conflict cannot overwrite the other tab',async()=>{
+  const h=storeHarness({raw:validStore()});h.loadInto();
+  let release;h.stored.held=new Promise(resolve=>{release=resolve;});
+  h.app.plans[0].accounts.pretax=200000;const first=h.persist();
+  h.app.plans[0].accounts.pretax=250000;const second=h.persist();
+  h.stored.value=validStore(s=>{s.name='Other tab edit';});const other=h.stored.value;
+  release();h.stored.held=null;
+  assert.equal(await first,false);assert.equal(await second,false);
+  assert.equal(h.stored.value,other,'the other tab edit survives');
+  assert.equal(h.app.plans[0].name,'Other tab edit');
+});
+
+// The display code, run with a stubbed plan state.
+function displayHarness(state,extra={}){
+  const source=readFileSync(new URL('../dist/sheet.js',import.meta.url),'utf8');
+  const els={calc:{textContent:''},recalc:{classList:{toggle(){}},innerHTML:''},note:{classList:{toggle(_c,on){els.note.error=on;}},textContent:''}};
+  const context=vm.createContext({...sheetModel,letter:i=>String(i),$:id=>els[id],basePlan:()=>extra.plan,activeCell:()=>null,LIVE_ESTIMATE_PATHS:200,planState:()=>state,
+    storeBlocked:false,recalcPending:false,app:{plans:[extra.plan],basis:'today',yearlyId:extra.plan.id,jobs:new Map(),queue:[],sel:{r:0,c:0},noteOverride:'',saveFailure:'',calcFailure:'',...extra.app}});
+  const pick=(from,to)=>source.slice(source.indexOf(from),source.indexOf(to));
+  vm.runInContext(pick('function forecastModel','const buildModel')+pick('function renderNote','function renderAggregate')+pick('function renderCalc','function renderToolbar')+';this.d={forecastModel,yearlyModel,renderNote,renderCalc};',context);
+  return {...context.d,els};
+}
+const staleCells=model=>model.rows.flatMap(row=>row.cells).filter(cell=>/\bstale\b/.test(cell.cls||'')).length;
+
+test('old numbers are marked as old on Forecast and Yearly, and the status does not say Ready',()=>{
+  const s=plan(),result=runSimulation(sheetModel.simulationScenario(s,100));
+  const current=displayHarness({result,stale:false,blocked:false},{plan:s});
+  assert.equal(staleCells(current.forecastModel()),0);assert.equal(staleCells(current.yearlyModel()),0);
+  current.renderCalc();assert.equal(current.els.calc.textContent,'Ready');
+  const old=displayHarness({result,stale:true,blocked:false},{plan:s});
+  assert.ok(staleCells(old.forecastModel())>0,'Forecast must mark them');
+  assert.ok(staleCells(old.yearlyModel())>0,'Yearly must mark them');
+  old.renderCalc();assert.equal(old.els.calc.textContent,'Out of date');
+});
+
+test('a worker failure stays on screen and in the status',()=>{
+  const s=plan(),failed=displayHarness({result:null,stale:false,blocked:false},{plan:s,app:{calcFailure:'The calculation couldn’t start.'}});
+  failed.renderCalc();assert.equal(failed.els.calc.textContent,'Stopped');
+  failed.renderNote();assert.match(failed.els.note.textContent,/couldn’t start/);assert.equal(failed.els.note.error,true);
+});
+
+test('a failed save outranks other notes in the status bar',()=>{
+  const s=plan(),h=displayHarness({result:null,stale:false,blocked:false},{plan:s,app:{saveFailure:'lost when you leave',noteOverride:'something else'}});
+  h.renderNote();assert.equal(h.els.note.textContent,'lost when you leave');assert.equal(h.els.note.error,true);
+});
+
+test('a downloaded CSV says so when its numbers are out of date',()=>{
+  const source=readFileSync(new URL('../dist/sheet.js',import.meta.url),'utf8');
+  assert.match(source.slice(source.indexOf('function downloadCsv'),source.indexOf('function setTab')),/Out of date/);
+});
+
+test('a full result cache never drops a result a plan on screen is still showing',()=>{
+  const source=readFileSync(new URL('../dist/sheet.js',import.meta.url),'utf8');
+  const code=source.slice(source.indexOf('function remember'),source.indexOf('function currentResult'));
+  const today=localCalendarDate(),fingerprint=s=>resultFingerprint(s,today);
+  const untouched=plan(s=>{s.id='untouched';}),edited=plan(s=>{s.id='edited';});
+  const app={results:new Map(),plans:[untouched,edited]};
+  const context=vm.createContext({app,fingerprint});
+  vm.runInContext(code+';this.remember=remember;',context);
+  const key=fingerprint(untouched)+'|100';
+  context.remember(key,{plan:'untouched'});
+  const firstEdit=()=>{edited.accounts.pretax=1000;return fingerprint(edited)+'|100';};
+  const oldest=firstEdit();
+  for(let i=0;i<120;i++){edited.accounts.pretax=1000+i;context.remember(fingerprint(edited)+'|100',{i});}
+  assert.equal(app.results.get(key)?.plan,'untouched','a plan nobody edited keeps its result');
+  assert.ok(app.results.has(fingerprint(edited)+'|100'),'and so does the plan being edited');
+  assert.ok(app.results.size<=48,'the cache stays bounded');
+  assert.equal(app.results.has(oldest),false,'superseded results are the ones dropped');
 });
