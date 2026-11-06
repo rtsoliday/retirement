@@ -6,7 +6,7 @@ import * as sheetModel from '../dist/sheet-model.js';
 import * as model from '../dist/model.js';
 import * as planReview from '../dist/plan-review.js';
 import {resultFingerprint} from '../dist/result-cache.js';
-import {baseScenario,sampleScenarios,prepareCalendarScenario,validateScenario,addCalendarMonths,localCalendarDate} from '../dist/model.js';
+import {baseScenario,sampleScenarios,prepareCalendarScenario,validateScenario,scenarioWarnings,addCalendarMonths,localCalendarDate} from '../dist/model.js';
 import {normalizeInputSources} from '../dist/ux-guidance.js';
 import {runSimulation} from '../dist/engine.js';
 import {SECTIONS,EDITABLE_ROWS,getPath,cellText,editText,parseCell,applyCell,clearCell,isUnknown,evaluateArithmetic,blockingUnknowns,planIssues,simulationScenario,shownResult,readinessDelta,forecastTable,yearlyTable,fanPaths,fanPeak,totalSavings,toCsv,toTsv,parseTsv} from '../dist/sheet-model.js';
@@ -389,4 +389,56 @@ test('a full result cache never drops a result a plan on screen is still showing
   assert.ok(app.results.has(fingerprint(edited)+'|100'),'and so does the plan being edited');
   assert.ok(app.results.size<=48,'the cache stays bounded');
   assert.equal(app.results.has(oldest),false,'superseded results are the ones dropped');
+});
+
+test('text that only looks like a number is refused, never misread',()=>{
+  const s=plan(),money=rowFor('accounts.pretax'),pct=rowFor('market.stockMeanReturn'),int=rowFor('socialSecurity.claimAge'),year=rowFor('rothHistory.firstContributionYear');
+  // A misaligned paste reaches these. Each used to become a different number with no complaint.
+  for(const text of ['10/1/2029','2029-10-01','(1,234)','3500/12','100-20','2,5','=2,5*2','=12,34+1','0x10'])assert.ok(parseCell(money,text,s).error,`money ${text} -> ${JSON.stringify(parseCell(money,text,s))}`);
+  for(const text of ['2,5','0x10','10/1','1-2'])assert.ok(parseCell(pct,text,s).error,`percent ${text}`);
+  for(const text of ['6,7','0x10','1/2'])assert.ok(parseCell(int,text,s).error,`whole number ${text}`);
+  for(const text of ['2018-10-1','2018/1'])assert.ok(parseCell(year,text,s).error,`year ${text}`);
+  // A percent sign in a percent cell means that percent, not a percent of a percent.
+  assert.equal(parseCell(pct,'=2.5%*2',s).value,.05);
+  assert.equal(parseCell(pct,'=2.5*2',s).value,.05);
+  // Everything the sheet documents still works, and = still opens every operator.
+  for(const [text,expected] of [['40k',40000],['$1.2M',1200000],['1,250,000',1250000],['$1,000.50',1000.5],['=3500*12',42000],['3500*12',42000],['1000+500',1500],['=1,000*12',12000],['=3500/12*12',3500],['=100-20',80],['=(1000+500)*2',3000],['(1000+500)*2',3000],['-5',-5],['1e3',1000]])assert.equal(parseCell(money,text,s).value,expected,text);
+  for(const [text,expected] of [['2.5',.025],['2.5%',.025],['-1',-.01],['=5/2',.025]])assert.equal(parseCell(pct,text,s).value,expected,text);
+  assert.equal(parseCell(int,'1,000',s).value,1000);
+  // Dates still belong in date cells.
+  assert.equal(parseCell(rowFor('household.retirementDate'),'10/1/2039',s).value,'2039-10-01');
+});
+
+test('an impossible pension age is an error, and one past the plan’s own horizon is a warning',()=>{
+  const startError=s=>validateScenario(s).filter(text=>/pension start age/i.test(text));
+  const startWarning=s=>scenarioWarnings(s).filter(text=>/pension.*maximum modeling age/i.test(text));
+  const pays=plan(s=>{s.guaranteedIncome.annualIncome=60000;s.guaranteedIncome.startAge=66;});
+  assert.deepEqual(startError(pays),[]);assert.deepEqual(startWarning(pays),[]);
+  const typo=plan(s=>{s.guaranteedIncome.annualIncome=60000;s.guaranteedIncome.startAge=660;});
+  assert.equal(startError(typo).length,1,'660 for 66 must be caught');
+  // The modeling age is a cutoff, not a lifespan, so these plans still run correctly.
+  const pastHorizon=plan(s=>{s.guaranteedIncome.annualIncome=60000;s.guaranteedIncome.startAge=95;s.household.targetEndAge=90;});
+  assert.deepEqual(startError(pastHorizon),[],'a plan that stops early is still valid');
+  assert.equal(startWarning(pastHorizon).length,1,'but it should say the pension is not counted');
+  const atHorizon=plan(s=>{s.guaranteedIncome.annualIncome=60000;s.guaranteedIncome.startAge=90;s.household.targetEndAge=90;});
+  assert.deepEqual(startError(atHorizon),[]);assert.deepEqual(startWarning(atHorizon),[]);
+  // A zero pension's other fields are unused, so they stay ignored.
+  const unused=plan(s=>{s.guaranteedIncome.annualIncome=0;s.guaranteedIncome.startAge=660;});
+  assert.deepEqual(startError(unused),[]);assert.deepEqual(startWarning(unused),[]);
+  const spouse=edit=>plan(s=>{s.household.filingStatus='Married';s.household.spouseBirthday='1970-01-01';s.household.spouseRetirementDate=s.household.retirementDate;s.spouseIncome.annualPension=30000;edit(s);});
+  assert.equal(startError(spouse(s=>{s.spouseIncome.pensionStartAge=660;})).length,1,'the spouse pension too');
+  assert.equal(startWarning(spouse(s=>{s.spouseIncome.pensionStartAge=95;s.household.targetEndAge=90;})).length,1);
+});
+
+test('a change of access restarts running jobs, so no column is left waiting',async()=>{
+  const source=readFileSync(new URL('../dist/sheet.js',import.meta.url),'utf8');
+  const code=source.slice(source.indexOf('async function loadAccess'),source.indexOf('async function start'));
+  const calls=[],app={tier:'free',plans:[plan()]};let tier='pro';
+  const context=vm.createContext({app,JSON,sessionStorage:{getItem:()=>null},authHeaders:async()=>({}),applyProSimulationDefault(){},
+    fetch:async()=>({ok:true,json:async()=>({tier})}),stopAll:()=>calls.push('stopAll'),refresh:()=>calls.push('refresh')});
+  vm.runInContext(code+';this.loadAccess=loadAccess;',context);
+  await context.loadAccess();
+  assert.deepEqual(calls,['stopAll','refresh'],'jobs at the old path count must stop before the plans recalculate');
+  calls.length=0;await context.loadAccess();
+  assert.deepEqual(calls,[],'no change means running jobs carry on');
 });

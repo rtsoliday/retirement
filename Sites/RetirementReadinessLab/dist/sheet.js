@@ -839,6 +839,8 @@ async function loadAccess(){
     const tier=access?.tier==='pro'?'pro':'free';
     if(tier===app.tier)return;
     app.tier=tier;
+    // A job running at the old path count would otherwise block the plan's new one.
+    stopAll();
     if(tier==='pro')for(const s of app.plans)applyProSimulationDefault(s);
     refresh();
   }catch{/* The free preview keeps working. */}

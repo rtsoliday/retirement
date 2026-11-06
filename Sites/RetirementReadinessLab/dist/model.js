@@ -394,6 +394,7 @@ export function validateScenario(s) {
   if (s.healthcare.preMedicareMonthlyPremium < 0) errors.push('Healthcare premium cannot be negative.');
   if (s.socialSecurity.annualBenefitAt67 < 0) errors.push('Social Security estimate cannot be negative.');
   if (s.guaranteedIncome.annualIncome < 0 || primaryPension&&(s.guaranteedIncome.startAge < 0 || s.guaranteedIncome.annualIncrease < -.02 || s.guaranteedIncome.annualIncrease > .15 || (h.filingStatus === 'Married' && (s.guaranteedIncome.survivorPercent < 0 || s.guaranteedIncome.survivorPercent > 1)))) errors.push('Guaranteed income assumptions are outside the supported range.');
+  if (primaryPension&&s.guaranteedIncome.startAge>119) errors.push('Pension start age must be 119 or younger. Check for a typing error.');
   const market=s.market;
   if (market.preRetirementMeanReturn < -.20 || market.preRetirementMeanReturn > .25 || market.stockMeanReturn < -.20 || market.stockMeanReturn > .25 || market.bondMeanReturn < -.20 || market.bondMeanReturn > .20 || market.preRetirementStdDev < 0 || market.preRetirementStdDev > .60 || market.stockStdDev < 0 || market.stockStdDev > .60 || market.bondStdDev < 0 || market.bondStdDev > .40) errors.push('Market return assumptions are outside the supported range.');
   if (ALLOCATION_KEYS.some(k=>s.postRetirementAllocation[k]<0 || s.postRetirementAllocation[k]>1)) errors.push('Stock allocation must be between 0% and 100%.');
@@ -425,6 +426,7 @@ export function validateScenario(s) {
       const si=s.spouseIncome;
       if(si.annualBenefitAt67<0||si.annualBenefitAt67>MAX_DOLLAR_AMOUNT||s.socialSecurity.spouseClaimAge<62||s.socialSecurity.spouseClaimAge>70)errors.push('Spouse own Social Security needs a nonnegative annual amount and claim age 62–70.');
       if(si.annualPension<0||si.annualPension>MAX_DOLLAR_AMOUNT||si.annualPension>0&&(!Number.isInteger(si.pensionStartAge)||si.pensionStartAge<0||!Number.isInteger(si.pensionStartAgeMonths)||si.pensionStartAgeMonths<0||si.pensionStartAgeMonths>11||si.annualIncrease<-.02||si.annualIncrease>.15||si.survivorPercent<0||si.survivorPercent>1))errors.push('Spouse pension assumptions are outside the supported range.');
+      if(si.annualPension>0&&si.pensionStartAge>119)errors.push('Spouse pension start age must be 119 or younger. Check for a typing error.');
       const rh=s.spouseRothHistory;
       if(rh.contributionBasis<0||rh.contributionBasis>MAX_DOLLAR_AMOUNT||!Number.isInteger(rh.firstContributionYear)||(rh.firstContributionYear!==0&&(rh.firstContributionYear<1998||rh.firstContributionYear>2026))||(rh.firstContributionYear===0&&(s.spouseAccounts.roth>0||rh.contributionBasis>0||rh.conversions.some(l=>l.amount>0))))errors.push('Review spouse Roth contribution basis and first funding year.');
       if(rh.conversions.reduce((n,l)=>n+l.amount,rh.contributionBasis)>MAX_DOLLAR_AMOUNT)errors.push('Spouse Roth principal exceeds the supported dollar range.');
@@ -549,6 +551,10 @@ export function setAnnualBaseSpending(scenario,amount) {
 export function scenarioWarnings(s) {
   const notes=[],h=s.household,total=Object.values(s.accounts).reduce((a,b)=>a+b,0)+employerRothTotal(s),years=retirementAge(s)-h.currentAge;
   if(retirementAge(s)<50)notes.push('Retiring before 50 creates a long drawdown period.');
+  // The modeling age is a cutoff, not a lifespan, so these plans still run. The results just end first.
+  const uncounted=(amount,age)=>amount>0&&age>h.targetEndAge&&age<=119;
+  if(uncounted(s.guaranteedIncome.annualIncome,s.guaranteedIncome.startAge))notes.push('Your pension starts after the maximum modeling age, so these results do not count it.');
+  if(h.filingStatus==='Married'&&h.separatePeople&&uncounted(s.spouseIncome.annualPension,s.spouseIncome.pensionStartAge))notes.push('Your spouse’s pension starts after the maximum modeling age, so these results do not count it.');
   if(s.spending.annualBaseSpending/Math.max(1,total)>.07)notes.push('Annual base spending exceeds 7% of current assets.');
   if(s.spending.generalInflationMean<.015)notes.push('General inflation below 1.5% may understate spending pressure.');
   if(s.market.stockMeanReturn>.145||s.market.preRetirementMeanReturn>.145)notes.push('Expected return above 14.5% may make readiness look stronger.');

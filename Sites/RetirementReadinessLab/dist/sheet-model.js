@@ -173,8 +173,11 @@ export function editText(row,value){return row.type===MONEY?String(value):cellTe
 
 // Arithmetic only: =2500*12 is worked out once and the answer is stored. Parsed
 // by hand so nothing a person pastes is ever evaluated as code.
-export function evaluateArithmetic(text){
-  const source=text.replace(/^=/,'').replace(/[\s,$]/g,'');
+export function evaluateArithmetic(text,{percentScale=.01}={}){
+  // A comma only counts as thousands grouping, so 2,5 can never be read as 25.
+  const ungrouped=text.replace(/(?<![\d.])\d{1,3}(?:,\d{3})+(?!\d)/g,group=>group.replace(/,/g,''));
+  if(ungrouped.includes(','))return {error:'That arithmetic can’t be worked out.'};
+  const source=ungrouped.replace(/^=/,'').replace(/[\s$]/g,'');
   if(/[a-jl-zA-JL-Z]/.test(source.replace(/[kKmM](?![a-zA-Z0-9])/g,'')))return {error:'Cell references aren’t supported. Use numbers, such as =2500*12.'};
   let at=0;
   const peek=()=>source[at];
@@ -185,7 +188,7 @@ export function evaluateArithmetic(text){
     const match=/^(\d+(?:\.\d*)?|\.\d+)([kKmM%]?)/.exec(source.slice(at));
     if(!match)throw new Error('number');
     at+=match[0].length;
-    const scale={k:1e3,K:1e3,m:1e6,M:1e6,'%':.01}[match[2]]??1;
+    const scale={k:1e3,K:1e3,m:1e6,M:1e6,'%':percentScale}[match[2]]??1;
     return Number(match[1])*scale;
   }
   function product(){let value=atom();while(peek()==='*'||peek()==='/'){const op=source[at++],next=atom();value=op==='*'?value*next:value/next;}return value;}
@@ -196,11 +199,17 @@ export function evaluateArithmetic(text){
     return {value:Number(value.toPrecision(15))};
   }catch{return {error:'That arithmetic can’t be worked out.'};}
 }
-const looksLikeArithmetic=text=>text.startsWith('=')||/\d\s*[*/+]/.test(text)||/\d\s*-\s*[\d(.]/.test(text)||/^\(/.test(text);
+// Without a leading =, only * and + count as arithmetic. A / or - there is far more
+// likely to be a date or a pasted accounting value, and reading it as arithmetic would
+// quietly store a different number.
+const looksLikeArithmetic=text=>text.startsWith('=')||/\d\s*[*+]/.test(text);
+// parseMoneyInput's grouping rules, without its dollar sign and k/M shorthand.
+const plainNumber=text=>/^[+-]?(?:(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/.test(text)?Number(text.replace(/,/g,'')):NaN;
 
-function parseNumberText(text,{money=false}={}){
-  if(looksLikeArithmetic(text)){const out=evaluateArithmetic(text);return out.error?out:{value:out.value};}
-  const value=money?parseMoneyInput(text):Number(text.replace(/,/g,''));
+function parseNumberText(text,{money=false,percentCell=false}={}){
+  // In a percent cell the answer is already in percent, so 2.5% means 2.5 there.
+  if(looksLikeArithmetic(text)){const out=evaluateArithmetic(text,percentCell?{percentScale:1}:{});return out.error?out:{value:out.value};}
+  const value=money?parseMoneyInput(text):plainNumber(text);
   return Number.isFinite(value)?{value}:{error:money?'Enter an amount such as 40000, 40k or =3500*12.':'Enter a number.'};
 }
 function parseDateText(text){
@@ -235,7 +244,7 @@ export function parseCell(row,text,s){
   }
   switch(row.type){
     case MONEY:{const out=parseNumberText(value,{money:true});if(out.error)return out;return Math.abs(out.value)>MAX_DOLLAR_AMOUNT?{error:'That amount is too large.'}:out;}
-    case PCT:{const out=parseNumberText(value.replace(/%$/,''));return out.error?{error:'Enter a percent such as 2.5.'}:{value:Number((out.value/100).toPrecision(15))};}
+    case PCT:{const out=parseNumberText(value.replace(/%$/,''),{percentCell:true});return out.error?{error:'Enter a percent such as 2.5.'}:{value:Number((out.value/100).toPrecision(15))};}
     case INT:{const out=parseNumberText(value);if(out.error)return {error:'Enter a whole number.'};return Number.isInteger(out.value)?out:{error:'Enter a whole number.'};}
     case DATE:{const date=parseDateText(value);if(!date)return {error:'Enter a date such as 10/1/2029.'};const problem=dateProblem(row,date,s);return problem?{error:problem}:{value:date};}
     case YES_NO:{const v=value.toLowerCase();if(['y','yes','true','1','x'].includes(v))return {value:true};if(['n','no','false','0'].includes(v))return {value:false};return {error:'Enter Yes or No.'};}
