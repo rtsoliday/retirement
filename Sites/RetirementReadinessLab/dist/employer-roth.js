@@ -4,6 +4,23 @@ export const employerRothDefaults=()=>({name:'Employer Roth',type:'401k',owner:'
 const validDate=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value+'T00:00:00Z'))&&new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
 export const employerRothTotal=s=>(s.employerRothAccounts||[]).filter(a=>a.owner==='you'||s.household.filingStatus==='Married').reduce((n,a)=>n+a.balance,0);
 export const hasEmployerRoth=s=>(s.employerRothAccounts||[]).some(a=>a.owner==='you'||s.household.filingStatus==='Married');
+// Earlier releases could save a blank name or an impossible number here, and one such
+// plan then stopped every plan from opening. Repair only those two faults. A number goes
+// back to its default and its path is returned so the caller can mark it Unknown: the
+// user re-enters it, and no run ever calculates on a made-up value.
+export function repairEmployerRoth(accounts){
+  const names=[],numbers=[];
+  if(!Array.isArray(accounts))return {names,numbers};
+  const defaults=employerRothDefaults(),impossible=v=>typeof v==='number'&&(!Number.isFinite(v)||Math.abs(v)>Number.MAX_SAFE_INTEGER);
+  accounts.forEach((a,i)=>{
+    if(!a||typeof a!=='object'||Array.isArray(a))return;
+    const stem=`employerRothAccounts.${i}.`;
+    if(typeof a.name==='string'&&!a.name.trim()){a.name=`${defaults.name} ${i+1}`;names.push(stem+'name');}
+    for(const [k,v] of Object.entries(a))if(impossible(v)){a[k]=typeof defaults[k]==='number'?defaults[k]:0;numbers.push(stem+k);}
+    if(Array.isArray(a.conversions))a.conversions.forEach((lot,j)=>{if(!lot||typeof lot!=='object')return;for(const k of ['taxYear','amount','taxableAmount'])if(impossible(lot[k])){lot[k]=0;numbers.push(`${stem}conversions.${j}.${k}`);}});
+  });
+  return {names,numbers};
+}
 export function validateEmployerRoth(accounts,{complete=false,today='2026-12-31',married=true}={}){
   if(!Array.isArray(accounts))return ['Employer Roth accounts must be an array.'];
   const errors=[],defaults=employerRothDefaults(),year=Number(today.slice(0,4)),max=Number.MAX_SAFE_INTEGER;

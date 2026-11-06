@@ -1,6 +1,6 @@
 // Spreadsheet view controller. Rows and rules live in sheet-model.js; the
 // calculation is the same worker and engine the classic planner uses.
-import {normalizeScenarios,validateScenarioStructure,prepareCalendarScenario,sampleScenarios,applyProSimulationDefault,localCalendarDate,FREE_SIMULATION_PATHS,MIN_SIMULATION_PATHS,MAX_SIMULATION_PATHS} from './model.js';
+import {normalizeScenarios,validateScenarioStructure,repairScenarios,markRepairedUnknown,repairNotice,prepareCalendarScenario,sampleScenarios,applyProSimulationDefault,localCalendarDate,FREE_SIMULATION_PATHS,MIN_SIMULATION_PATHS,MAX_SIMULATION_PATHS} from './model.js';
 import {normalizeInputSources} from './ux-guidance.js';
 import {normalizeOptionalAnswers,OPTIONAL_QUESTIONS,inputTask} from './plan-review.js';
 import {copyLabSets,LIVE_ESTIMATE_PATHS} from './plan-lab.js';
@@ -29,11 +29,12 @@ function readStore(){
   }
   const {scenarios,...saved}=JSON.parse(raw);
   if(!Array.isArray(scenarios)||!scenarios.length)throw new Error('No saved scenarios.');
-  const plans=normalizeScenarios(scenarios);
+  const plans=normalizeScenarios(scenarios),repaired=repairScenarios(plans);
   for(const s of plans){if(validateScenarioStructure(s).length)throw new Error('Invalid saved scenario structure.');prepareCalendarScenario(s);}
   const sources=normalizeInputSources(saved.inputSources,plans,'Saved value; source not recorded');
+  markRepairedUnknown(sources,repaired);
   const exampleIds=Array.isArray(saved.exampleIds)?saved.exampleIds.filter(id=>plans.some(p=>p.id===id)):plans.filter(p=>sources[p.id]?._origin==='Sample/default'&&Object.values(sources[p.id]).every(v=>v==='Sample/default')).map(p=>p.id);
-  return {saved,plans,sources,optional:normalizeOptionalAnswers(saved.optionalAnswers,plans),exampleIds:new Set(exampleIds),selectedId:String(saved.selectedId??'')};
+  return {saved,plans,sources,optional:normalizeOptionalAnswers(saved.optionalAnswers,plans),exampleIds:new Set(exampleIds),selectedId:String(saved.selectedId??''),repairNote:repaired.size?repairNotice(plans,repaired):''};
 }
 const app={
   plans:[],sources:{},optional:{},exampleIds:new Set(),drafts:new Map(),selectedId:'',saved:{},
@@ -43,7 +44,7 @@ const app={
 };
 function loadInto(){
   const store=readStore();
-  Object.assign(app,{saved:store.saved,plans:store.plans,sources:store.sources,optional:store.optional,exampleIds:store.exampleIds});
+  Object.assign(app,{saved:store.saved,plans:store.plans,sources:store.sources,optional:store.optional,exampleIds:store.exampleIds,repairNote:store.repairNote||''});
   app.selectedId=store.plans.some(p=>p.id===store.selectedId)?store.selectedId:store.plans[0].id;
   if(!app.plans.some(p=>p.id===app.yearlyId))app.yearlyId=app.selectedId;
   if(app.tier==='pro')for(const s of app.plans)applyProSimulationDefault(s);
@@ -107,7 +108,7 @@ function pump(){
       refresh({keepCalc:true});pump();
     };
     worker.onerror=()=>{worker.terminate();if(app.jobs.get(next.id)===job)app.jobs.delete(next.id);setNote('The calculation couldn’t start. Reload the page.',true);renderCalc();pump();};
-    worker.postMessage({scenario:simulationScenario(plan,next.count),task:'simulation',options:OPTIONS});
+    worker.postMessage({scenario:next.scenario,task:'simulation',options:OPTIONS});
     if(countsAsSimulationStart({explicit:next.explicit,editPending:app.startState==='edit-pending',count:next.count,fullCount:fullPaths(plan)})){
       app.startState='counted';reportUsage('simulation_start');
     }
@@ -119,7 +120,8 @@ function enqueue(plan,count,explicit=false){
   if(app.results.has(key)||job?.key===key)return;
   cancelJob(plan.id);
   app.jobs.set(plan.id,{key,count,progress:0,worker:null});
-  app.queue.push({id:plan.id,key,count,explicit});
+  // Snapshot now. The key describes these inputs, and the plan can be edited before a worker is free.
+  app.queue.push({id:plan.id,key,count,explicit,scenario:simulationScenario(plan,count)});
 }
 let recalcTimer=0;
 function scheduleRecalc(delay=180){
@@ -829,6 +831,7 @@ async function start(){
   }
   refresh();
   if(!storeBlocked)placeOnArrival();
+  if(app.repairNote)setNote(app.repairNote);
   grid.focus({preventScroll:true});
   reportUsage('arrival',arrivalReferrer(document.referrer));
   try{await initializeSocialAuth(loadAccess);}catch{}

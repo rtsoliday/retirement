@@ -1,5 +1,5 @@
 import {savingsDefaults,hasFutureSavings} from './savings.js';
-import {employerRothDefaults,employerRothTotal,hasEmployerRoth,validateEmployerRoth} from './employer-roth.js';
+import {employerRothDefaults,employerRothTotal,hasEmployerRoth,validateEmployerRoth,repairEmployerRoth} from './employer-roth.js';
 export {employerRothDefaults,employerRothTotal,hasEmployerRoth};
 export const ENGINE_VERSION = '2026.09-calendar-dates';
 export const scenarioEngineVersion=s=>{
@@ -275,6 +275,19 @@ export function validateScenarioStructure(s) {
   (function compare(expected,actual,path){for(const [key,value] of Object.entries(expected)){if(value===null)continue;const next=path?`${path}.${key}`:key;if(Array.isArray(value)){if(!Array.isArray(actual?.[key]))wrongTypes.push(next);}else if(typeof value==='object'){if(actual?.[key]&&typeof actual[key]==='object'&&!Array.isArray(actual[key]))compare(value,actual[key],next);else wrongTypes.push(next);}else if(typeof actual?.[key]!==typeof value)wrongTypes.push(next);}})(TYPE_TEMPLATE,s,'');
   if (wrongTypes.length) return [`These assumptions have the wrong type: ${wrongTypes.join(', ')}.`];
   return [...validateBudgetStructure(s.budget),...validateRothHistoryStructure(s.rothHistory),...validateRothHistoryStructure(s.spouseRothHistory),...validateEmployerRoth(s.employerRothAccounts),...validateOneTimeExpensesStructure(s.oneTimeExpenses)];
+}
+
+// Both views repair a store the same way on load, and the planner on restore too.
+export function repairScenarioStructure(s){return repairEmployerRoth(s?.employerRothAccounts);}
+export function repairScenarios(scenarios){
+  const repaired=new Map();
+  for(const s of scenarios){const found=repairScenarioStructure(s);if(found.names.length||found.numbers.length)repaired.set(s.id,found);}
+  return repaired;
+}
+export function markRepairedUnknown(sources,repaired){for(const [id,{numbers}] of repaired)for(const path of numbers)(sources[id]||={})[path]='Unknown';}
+export function repairNotice(scenarios,repaired){
+  const names=scenarios.filter(s=>repaired.has(s.id)).map(s=>`“${s.name}”`).join(', ');
+  return `${names} ${repaired.size===1?'was':'were'} repaired so your plans could open. An employer Roth account had a blank name or an impossible number. Open My plan to check its name and re-enter anything marked Unknown.`;
 }
 
 export function validateOneTimeExpensesStructure(list) {

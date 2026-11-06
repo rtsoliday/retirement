@@ -3328,3 +3328,79 @@ test('the planner opens on the plan the sheet had in focus without saving that c
   const b=app(null,{socialActions:{takeHandedOffPlan:()=>'plan-that-is-gone'}});
   assert.equal(b.state.selectedId,samples[0].id);
 });
+
+async function planWithEmployerRoth(){
+  const a=app();a.state.setupSection=1;a.state.view='setup';
+  await a.click('account-answer',{answer:'yes'});await a.click('add-employer-roth');
+  const stem='employerRothAccounts.0.';
+  for(const [key,type,value] of [['name','text','My 403b'],['balance','money','100000'],['contributionBasis','money','60000'],['firstContributionYear','number','2021']])await a.change('#main',{dataset:{field:stem+key,type},value});
+  await a.click('add-employer-conversion',{account:'0'});
+  return {a,stem,id:a.current().id};
+}
+
+test('an edit that would stop every plan from loading is refused, and the plans still load',async()=>{
+  const {a,stem,id}=await planWithEmployerRoth(),account=a.current().employerRothAccounts[0];
+  for(const [key,type,value] of [['name','text',''],['name','text','   '],['firstContributionYear','number','1e20'],['annualIncrease','percent','1e20'],['conversions.0.taxYear','number','1e20']]){
+    const before=structuredClone(a.current().employerRothAccounts);
+    await a.change('#main',{dataset:{field:stem+key,type},value});
+    assert.deepEqual(structuredClone(a.current().employerRothAccounts),before,`${key}=${JSON.stringify(value)} must not change the plan`);
+    assert.match(a.state.message,/^Error: .*previous value was kept/);
+    const reloaded=app(a.saved());
+    assert.doesNotMatch(reloaded.state.message,/could not be loaded/);
+    assert.ok(reloaded.state.scenarios.some(s=>s.id===id));
+  }
+  assert.equal(account.name,'My 403b');
+});
+
+test('a store an earlier release locked now opens, repaired, with nothing invented and nothing written',async()=>{
+  const {a,stem,id}=await planWithEmployerRoth(),locked=a.saved();
+  const broken=locked.scenarios.find(s=>s.id===id).employerRothAccounts[0];broken.name='';broken.firstContributionYear=1e20;
+  const raw=JSON.stringify(locked);
+  const b=app(null,{rawStorage:raw});
+  assert.doesNotMatch(b.state.message,/could not be loaded/);
+  assert.match(b.state.message,/repaired/i);
+  const plan=b.state.scenarios.find(s=>s.id===id);assert.ok(plan,'the user gets their plan back');
+  assert.equal(plan.employerRothAccounts[0].name,'Employer Roth 1');
+  assert.equal(plan.employerRothAccounts[0].balance,100000,'good amounts survive');
+  assert.equal(plan.employerRothAccounts[0].firstContributionYear,0);
+  assert.equal(b.state.inputSources[id][stem+'firstContributionYear'],'Unknown','a cleared number must be re-entered');
+  assert.equal(b.stored(),raw,'nothing is written until the user saves');
+  // Unknown blocks the run, so a repaired plan can never calculate on a made-up value.
+  b.state.selectedId=id;const count=b.workers.length;await b.run();assert.equal(b.workers.length,count);
+  // After a real edit the store is healthy and the notice is gone.
+  await b.change('#main',{dataset:{field:stem+'firstContributionYear',type:'number'},value:'2021'});
+  const c=app(b.saved());assert.doesNotMatch(c.state.message,/repaired|could not be loaded/i);
+  assert.equal(c.state.scenarios.find(s=>s.id===id).employerRothAccounts[0].firstContributionYear,2021);
+});
+
+test('restoring a backup taken while locked brings the plans back',async()=>{
+  const {a,stem,id}=await planWithEmployerRoth(),locked=a.saved();
+  const broken=locked.scenarios.find(s=>s.id===id).employerRothAccounts[0];broken.name='';broken.firstContributionYear=1e20;
+  const b=app({scenarios:[null],selectedId:'old'});assert.match(b.state.message,/could not be loaded/);
+  await b.change('#import-file',{files:[{text:async()=>JSON.stringify(locked)}],value:'backup.json'});
+  const plan=b.state.scenarios.find(s=>s.id===id);assert.ok(plan);
+  assert.equal(plan.employerRothAccounts[0].name,'Employer Roth 1');
+  assert.equal(b.state.inputSources[id][stem+'firstContributionYear'],'Unknown');
+  assert.doesNotMatch(app(b.saved()).state.message,/could not be loaded/);
+});
+
+test('a refused restore says why while saved plans are unreadable',async()=>{
+  const a=app({scenarios:[null],selectedId:'old'});
+  await a.change('#import-file',{files:[{text:async()=>'{"scenarios":"nope"}'}],value:'backup.json'});
+  const page=a.dashboard();
+  assert.match(page,/No scenarios found in the file/,'the reason must be visible');
+  assert.match(page,/could not be loaded/,'the recovery notice stays too');
+  assert.match(page,/replace-unreadable-plans/);
+});
+
+test('the store is never written in a form that cannot be loaded',async()=>{
+  const a=app();await a.persist();const before=a.stored();
+  a.current().employerRothAccounts=[{...model.employerRothDefaults(),name:''}];
+  assert.equal(await a.persist(),false);
+  assert.equal(a.stored(),before);
+  assert.match(a.state.message,/not saved/i);
+  let warned=false;a.beforeUnload({preventDefault(){warned=true;}});assert.ok(warned,'closing the tab warns');
+  a.current().employerRothAccounts=[];
+  assert.equal(await a.persist(),true);
+  assert.doesNotMatch(a.state.storageError,/not saved/i);
+});

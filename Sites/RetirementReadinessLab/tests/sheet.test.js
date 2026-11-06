@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+import * as sheetModel from '../dist/sheet-model.js';
+import {resultFingerprint} from '../dist/result-cache.js';
 import {baseScenario,sampleScenarios,prepareCalendarScenario,validateScenario,addCalendarMonths,localCalendarDate} from '../dist/model.js';
 import {normalizeInputSources} from '../dist/ux-guidance.js';
 import {runSimulation} from '../dist/engine.js';
@@ -222,4 +225,33 @@ test('the sheet page uses the shared store and the release hash',()=>{
   assert.match(script,/navigator\.locks\.request\(STORE_KEY/);
   const build=readFileSync(new URL('../scripts/build-sites.mjs',import.meta.url),'utf8');
   assert.match(build,/sheet\.js/);
+});
+
+test('a queued plan runs on the inputs it was queued with, so an edit cannot file its result under the old key',()=>{
+  const today=localCalendarDate(),fingerprint=s=>resultFingerprint(s,today);
+  const source=readFileSync(new URL('../dist/sheet.js',import.meta.url),'utf8');
+  const block=source.slice(source.indexOf('function cancelJob'),source.indexOf('let recalcTimer')).replaceAll('import.meta.url',JSON.stringify('https://example.test/sheet.js'));
+  const workers=[],remembered=new Map();
+  class Worker{constructor(){workers.push(this);}postMessage(message){this.posted=structuredClone(message);}terminate(){this.terminated=true;}}
+  const running=plan(s=>{s.id='running';}),queued=plan(s=>{s.id='queued';s.spending.annualBaseSpending=60000;});
+  const context=vm.createContext({app:{plans:[running,queued],jobs:new Map(),queue:[],results:new Map(),full:false,startState:'idle'},navigator:{hardwareConcurrency:2},Worker,URL,
+    simulationScenario:sheetModel.simulationScenario,countsAsSimulationStart:sheetModel.countsAsSimulationStart,fingerprint,fullPaths:()=>100,OPTIONS:{},
+    remember:(key,result)=>remembered.set(key,result),refresh(){},setNote(){},renderCalc(){},reportUsage(){}});
+  vm.runInContext(block+';this.enqueue=enqueue;this.pump=pump;',context);
+  context.enqueue(running,100);context.enqueue(queued,100);context.pump();
+  assert.equal(workers.length,1,'one worker, so the second plan waits');
+  const queuedKey=fingerprint(queued)+'|100';
+  queued.spending.annualBaseSpending=5;
+  workers[0].onmessage({data:{type:'result',result:{plan:'running'}}});
+  assert.equal(workers.length,2,'the waiting plan starts when the worker frees up');
+  assert.equal(workers[1].posted.scenario.spending.annualBaseSpending,60000,'it must run the inputs it was queued with');
+  workers[1].onmessage({data:{type:'result',result:{plan:'queued'}}});
+  assert.equal(remembered.get(queuedKey)?.plan,'queued');
+  assert.equal(fingerprint(workers[1].posted.scenario)+'|100',queuedKey,'the key must describe exactly what ran');
+});
+
+test('the sheet repairs locked stores the same way the planner does',()=>{
+  const script=readFileSync(new URL('../dist/sheet.js',import.meta.url),'utf8');
+  assert.match(script,/repaired=repairScenarios\(plans\)/);
+  assert.match(script,/markRepairedUnknown\(sources,repaired\)/);
 });

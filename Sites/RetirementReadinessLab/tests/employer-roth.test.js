@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {baseScenario,employerRothDefaults,normalizeScenario,validateScenario,validateScenarioDraft,scenarioEngineVersion} from '../dist/model.js';
+import {baseScenario,employerRothDefaults,normalizeScenario,validateScenario,validateScenarioDraft,validateScenarioStructure,repairScenarioStructure,scenarioEngineVersion} from '../dist/model.js';
 import {EmployerRothLedger} from '../dist/employer-roth.js';
 import {RothConversionLedger} from '../dist/roth-conversions.js';
 import {PersonAccounts} from '../dist/person-accounts.js';
@@ -131,4 +131,34 @@ test('validation rejects malformed imports, incomplete history and conflicting t
 });
 test('pooled and separate plans include employer balances in seeded and steady results; saved caches distinguish edits',()=>{
   for(const separatePeople of [false,true]){const s=plan(65);s.household.separatePeople=separatePeople;s.household.targetEndAge=66;s.numberOfSimulations=10;assert.equal(runSimulation(s).provenance.engineVersion,scenarioEngineVersion(s));near(runSteadySimulation(s).monthlyDetails[0].portfolio,100000);assert.match(scenarioEngineVersion(s),/employer-roth/);const f=resultFingerprint(s,'2026-10-01');s.employerRothAccounts[0].contributionBasis=1;assert.notEqual(resultFingerprint(s,'2026-10-01'),f);}
+});
+
+test('structure repair fixes only the two faults that locked saved plans, and invents nothing',()=>{
+  const healthy=baseScenario();healthy.employerRothAccounts=[{...employerRothDefaults(),name:'Acme',balance:1000,firstContributionYear:2021}];
+  const before=structuredClone(healthy);
+  assert.deepEqual(repairScenarioStructure(healthy),{names:[],numbers:[]});
+  assert.deepEqual(healthy,before,'a healthy plan is left alone');
+
+  const s=baseScenario();
+  s.employerRothAccounts=[
+    {...employerRothDefaults(),name:'Fine',balance:1000},
+    {...employerRothDefaults(),name:'   ',balance:2000,firstContributionYear:1e20,annualIncrease:-1e300,conversions:[{taxYear:1e20,amount:500,taxableAmount:1e16}]},
+  ];
+  assert.ok(validateScenarioStructure(s).length,'this is the shape that used to lock the store');
+  const repairs=repairScenarioStructure(s);
+  assert.deepEqual(repairs.names,['employerRothAccounts.1.name']);
+  assert.deepEqual(repairs.numbers.sort(),['employerRothAccounts.1.annualIncrease','employerRothAccounts.1.conversions.0.taxYear','employerRothAccounts.1.conversions.0.taxableAmount','employerRothAccounts.1.firstContributionYear'].sort());
+  assert.equal(s.employerRothAccounts[1].name,'Employer Roth 2');
+  assert.equal(s.employerRothAccounts[1].firstContributionYear,0);
+  assert.equal(s.employerRothAccounts[1].annualIncrease,employerRothDefaults().annualIncrease);
+  assert.equal(s.employerRothAccounts[1].balance,2000,'good amounts are kept');
+  assert.equal(s.employerRothAccounts[1].conversions[0].amount,500,'good amounts are kept');
+  assert.equal(s.employerRothAccounts[0].name,'Fine');
+  assert.deepEqual(validateScenarioStructure(s),[]);
+  assert.deepEqual(repairScenarioStructure(s),{names:[],numbers:[]},'a second pass finds nothing');
+
+  // Anything else stays unreadable and protected, rather than being guessed at.
+  const other=baseScenario();other.employerRothAccounts='not a list';
+  assert.deepEqual(repairScenarioStructure(other),{names:[],numbers:[]});
+  assert.ok(validateScenarioStructure(other).length);
 });
