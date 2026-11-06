@@ -1,0 +1,3 @@
+# These files are frozen byte for byte and checked against manifest.json.
+# Their manifests pin CRLF line endings, so Git must never convert them.
+* -text

@@ -1,6 +1,6 @@
 # Frozen calculation references
 
-These modules are the complete transitive calculation dependencies of two original Git commits. Each manifest records the commit and SHA-256 of every unchanged source module. Preserve these files when changing the current engine; a reference must never import current calculation code. The integrity checks catch accidental edits.
+These modules are the complete transitive calculation dependencies of two original Git commits. Each manifest records the commit and SHA-256 of every unchanged source module. Preserve these files when changing the current engine; a reference must never import current calculation code. The integrity checks catch accidental edits. The modules keep the CRLF line endings their manifests pin, and `.gitattributes` here stops Git converting them.
 
 `pre-optimization` comes from `c8c34b37b38f1ee3fab36f03e242172e4b97c797`. `pre-household` comes from `c9fb1c538f8c46abd1262b9b10e8e700c9fc7f88`. The fixed simulation inputs are in `fixtures/simulation-reference-inputs.json`; old backups remain in `fixtures/pre-household-results.json`.
 
