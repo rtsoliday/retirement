@@ -3,6 +3,7 @@
 <head>
   <link rel="canonical" href="https://retirementforecast.us/">
   <meta charset="utf-8">
+  <script>/* Someone who chose the sheet lands on it. A hash or query means a specific page or a sign-in or checkout return, and Back or reload must not bounce. */try{if(!location.search&&!location.hash&&localStorage.getItem('retirement-preferred-view')==='sheet'&&performance.getEntriesByType('navigation')[0]?.type==='navigate'){sessionStorage.setItem('retirement-landing-referrer',document.referrer);window.stop();location.replace('./sheet.html');}}catch{}</script>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0e463c">
   <meta name="description" content="Explore U.S. retirement plans with Monte Carlo simulations of market returns, inflation, healthcare costs, and longevity.">
@@ -13,13 +14,14 @@
   <link rel="icon" type="image/svg+xml" href="./forecast-fan.svg?v=33">
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png?v=33">
   <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png?v=33">
-  <link rel="stylesheet" href="./style.css?v=59">
+  <link rel="stylesheet" href="./style.css?v=60">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
 <div class="shell">
     <aside class="sidebar">
       <div class="brand" aria-label="Retirement Forecast - Monte Carlo Simulator"><img class="brand-icon" src="./forecast-fan.svg?v=33" alt=""><div class="brand-name"><strong>Retirement <br>Forecast</strong><small>Monte Carlo Simulator</small></div></div>
+      <nav class="view-switch" aria-label="View"><span aria-current="page">Planner</span><a id="to-sheet" href="./sheet.html" title="The same plans as a spreadsheet">Sheet</a></nav>
       <button id="menu-toggle" class="secondary" aria-expanded="false" aria-controls="navigation">Menu ☰</button>
     <nav aria-label="Main navigation" id="navigation">
       <span class="nav-group">Your plan</span>
@@ -44,6 +46,6 @@
     </div>
   </div>
   <input type="file" id="import-file" accept="application/json,.json" hidden>
-  <script type="module" src="./app.js?v=52"></script>
+  <script type="module" src="./app.js?v=53"></script>
 </body>
 </html>

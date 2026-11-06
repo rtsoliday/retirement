@@ -19,10 +19,10 @@ kbd{font:inherit;font-size:.82em;opacity:.8;padding-left:3px}
 .brand{display:flex;align-items:center;gap:6px;color:var(--accent-ink);font-weight:700;text-decoration:none;white-space:nowrap}
 .group{display:flex;align-items:center;gap:3px}
 .group.end{margin-left:auto}
-.toolbar button,.classic{height:25px;padding:0 8px;border:1px solid var(--line-2);border-radius:4px;background:var(--paper);cursor:pointer;white-space:nowrap}
-.toolbar button:hover,.classic:hover{background:var(--chrome-2)}
+.toolbar button{height:25px;padding:0 8px;border:1px solid var(--line-2);border-radius:4px;background:var(--paper);cursor:pointer;white-space:nowrap}
+.toolbar button:hover{background:var(--chrome-2)}
 .toolbar button:disabled{opacity:.45;cursor:default;background:var(--paper)}
-.toolbar button:focus-visible,.classic:focus-visible,.sheet-tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.toolbar button:focus-visible,.view-switch a:focus-visible,.sheet-tabs button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .toolbar button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
 .toolbar button.primary:hover{background:var(--accent-ink)}
 .toolbar button.stopping{background:var(--paper);color:var(--unknown-ink);border-color:var(--unknown-ink)}
@@ -31,7 +31,13 @@ kbd{font:inherit;font-size:.82em;opacity:.8;padding-left:3px}
 .segmented button{border-radius:0;margin-left:-1px}
 .segmented button:first-child{border-radius:4px 0 0 4px;margin-left:0}
 .segmented button:last-child{border-radius:0 4px 4px 0}
-.classic{display:inline-flex;align-items:center;text-decoration:none;color:var(--ink)}
+.view-switch{display:flex;flex:none}
+.view-switch>*{display:inline-flex;align-items:center;height:25px;padding:0 8px;border:1px solid var(--line-2);background:var(--paper);color:var(--ink);text-decoration:none;white-space:nowrap}
+.view-switch>:first-child{border-radius:4px 0 0 4px}
+.view-switch>:last-child{border-radius:0 4px 4px 0;margin-left:-1px}
+.view-switch a:hover{background:var(--chrome-2)}
+.view-switch a:focus-visible{position:relative}
+.view-switch [aria-current]{position:relative;background:var(--accent-wash);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
 .access{color:var(--muted);padding-left:5px;white-space:nowrap}
 .access a{font-weight:600}
 
@@ -150,14 +156,14 @@ select.cell-editor{text-align:left;padding:0 2px;color:var(--ink)}
 .note{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .note.error{color:#ffd7d2;font-weight:600}
 .aggregate,.calc{flex:none;white-space:nowrap;font-variant-numeric:tabular-nums}
-.calc{min-width:92px;text-align:right;opacity:.92}
+.status .calc{min-width:92px;text-align:right;opacity:.92}
 
 @media (max-width:760px){
   :root{--row:34px;--head:20px;--rownum:0px;--unit:0px;--label:124px;--plan:112px;font-size:13.5px}
   .toolbar{flex-wrap:nowrap;overflow-x:auto;gap:10px;scrollbar-width:none}
   .brand span{display:none}
   .group.end{margin-left:0}
-  .toolbar button,.classic{height:32px}
+  .toolbar button,.view-switch>*{height:32px}
   .formula{height:34px}
   .cell-name{width:58px;font-size:12px}
   .fx{display:none}

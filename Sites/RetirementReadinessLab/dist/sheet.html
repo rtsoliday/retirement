@@ -11,11 +11,12 @@
   <link rel="icon" type="image/svg+xml" href="./forecast-fan.svg?v=33">
   <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32.png?v=33">
   <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png?v=33">
-  <link rel="stylesheet" href="./sheet.css?v=1">
+  <link rel="stylesheet" href="./sheet.css?v=2">
 </head>
 <body>
   <header class="toolbar" aria-label="Sheet tools">
-    <a class="brand" href="./" title="Open the classic planner"><img src="./forecast-fan.svg?v=33" alt="" width="20" height="20"><span>Retirement Forecast</span></a>
+    <div class="brand"><img src="./forecast-fan.svg?v=33" alt="" width="20" height="20"><span>Retirement Forecast</span></div>
+    <nav class="view-switch" aria-label="View"><a id="to-planner" href="./#/" title="The same plans, page by page">Planner</a><span aria-current="page">Sheet</span></nav>
     <div class="group" role="group" aria-label="Plans">
       <button id="add-copy" title="Add a column that copies the selected plan">+ Copy</button>
       <button id="add-blank" title="Add a blank column; fill the ? cells">+ Blank</button>
@@ -38,7 +39,6 @@
       <button id="redo" title="Redo (Ctrl+Y)">Redo</button>
       <button id="csv" title="Download this sheet as CSV">CSV</button>
       <button id="keys" aria-expanded="false" aria-controls="keys-panel" title="Keyboard shortcuts">Keys</button>
-      <a class="classic" href="./">Classic</a>
     </div>
   </header>
 
@@ -78,7 +78,7 @@
       <button data-tab="forecast">Forecast</button>
       <button data-tab="yearly">Yearly</button>
     </nav>
-    <nav class="more-links" aria-label="Classic planner tools">
+    <nav class="more-links" aria-label="Planner tools">
       <a href="./#/budget">Budget</a><a href="./#/lab">Plan Lab</a><a href="./#/reports">Backup</a>
     </nav>
     <p class="disclaimer">U.S. planning only. Educational estimates, not advice or guarantees. <a href="./methodology.html">Model scope</a></p>
@@ -91,6 +91,6 @@
 
   <input id="cell-editor" class="cell-editor" aria-label="Edit cell" autocomplete="off" spellcheck="false" hidden>
   <select id="cell-select" class="cell-editor" aria-label="Choose a value" hidden></select>
-  <script type="module" src="./sheet.js?v=1"></script>
+  <script type="module" src="./sheet.js?v=2"></script>
 </body>
 </html>

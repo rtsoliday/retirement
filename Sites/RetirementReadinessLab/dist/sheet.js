@@ -2,19 +2,20 @@
 // calculation is the same worker and engine the classic planner uses.
 import {normalizeScenarios,validateScenarioStructure,prepareCalendarScenario,sampleScenarios,applyProSimulationDefault,localCalendarDate,FREE_SIMULATION_PATHS,MIN_SIMULATION_PATHS,MAX_SIMULATION_PATHS} from './model.js';
 import {normalizeInputSources} from './ux-guidance.js';
-import {normalizeOptionalAnswers,OPTIONAL_QUESTIONS} from './plan-review.js';
+import {normalizeOptionalAnswers,OPTIONAL_QUESTIONS,inputTask} from './plan-review.js';
 import {copyLabSets,LIVE_ESTIMATE_PATHS} from './plan-lab.js';
 import {resultFingerprint} from './result-cache.js';
 import {readinessLabel} from './result-format.js';
 import {initializeSocialAuth,authHeaders} from './auth.js';
 import {reportUsage} from './usage-metrics.js';
-import {SECTIONS,getPath,cellText,editText,parseCell,applyCell,clearCell,isUnknown,planIssues,blockingUnknowns,rowForPath,simulationScenario,shownResult,readinessDelta,fanPeak,fanPaths,forecastTable,fundedLabel,yearlyTable,YEARLY_COLUMNS,moneyText,toTsv,toCsv,parseTsv} from './sheet-model.js';
+import {SECTIONS,getPath,cellText,editText,parseCell,applyCell,clearCell,isUnknown,planIssues,blockingUnknowns,rowForPath,simulationScenario,shownResult,readinessDelta,fanPeak,fanPaths,forecastTable,fundedLabel,yearlyTable,YEARLY_COLUMNS,moneyText,toTsv,toCsv,parseTsv,countsAsSimulationStart} from './sheet-model.js';
+import {rememberView,handOffPlan,takeHandedOffPlan,arrivalReferrer,parseSheetHash,plannerHref} from './view-switch.js';
 
 const STORE_KEY='retirement-readiness-lab-sites-v1',UI_KEY='retirement-sheet-ui',BASIS_KEY='retirement-dollar-basis';
 const $=id=>document.getElementById(id);
 const escapeHTML=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const letter=i=>{let s='';for(let n=i+1;n>0;n=Math.floor((n-1)/26))s=String.fromCharCode(65+(n-1)%26)+s;return s;};
-const NAME_ROW={path:'name',type:'text',label:'Plan',note:'Plan name. Saved plans and the classic planner use it too.'};
+const NAME_ROW={path:'name',type:'text',label:'Plan',note:'Plan name. The planner uses it too.'};
 const PERSONAL_PATHS=['household.birthday','household.retirementDate','accounts.pretax','accounts.roth','accounts.taxable','accounts.cash','spending.annualBaseSpending','socialSecurity.annualBenefitAt67','spouseAccounts.pretax','spouseAccounts.roth','spouseIncome.annualBenefitAt67','healthcare.preMedicareMonthlyPremium','rothHistory.contributionBasis','rothHistory.firstContributionYear','spouseRothHistory.contributionBasis','spouseRothHistory.firstContributionYear',...['contributions','spouseContributions'].flatMap(prefix=>['pretax','employerPretax','roth','taxable','cash'].map(key=>`${prefix}.${key}`))];
 
 // ---------- Saved plans (same store and locking as the classic planner) ----------
@@ -38,6 +39,7 @@ const app={
   plans:[],sources:{},optional:{},exampleIds:new Set(),drafts:new Map(),selectedId:'',saved:{},
   tab:'plan',sel:{r:1,c:2,ar:1,ac:2},edit:null,model:null,collapsed:new Set(),diffOnly:false,basis:'today',yearlyId:'',
   tier:'free',undo:[],redo:[],results:new Map(),lastShown:new Map(),jobs:new Map(),queue:[],full:false,noteOverride:'',
+  startState:'idle', // idle → edit-pending → counted; see countsAsSimulationStart.
 };
 function loadInto(){
   const store=readStore();
@@ -50,7 +52,7 @@ function persist(){
   if(storeBlocked)return Promise.resolve(false);
   const payload=JSON.stringify({...app.saved,scenarios:app.plans,selectedId:app.selectedId,hasStartedPlan:true,inputSources:app.sources,optionalAnswers:app.optional,exampleIds:[...app.exampleIds],accountChecks:app.saved.accountChecks??{},entryPeriods:app.saved.entryPeriods??{},labSets:app.saved.labSets??{}});
   const save=async()=>{
-    if(!navigator.locks){setNote('Automatic saving isn’t available in this browser. Use the classic planner to back up.',true);return false;}
+    if(!navigator.locks){setNote('Automatic saving isn’t available in this browser. Use the planner to back up.',true);return false;}
     return navigator.locks.request(STORE_KEY,()=>{
       if(localStorage.getItem(STORE_KEY)!==lastSavedRaw){
         setNote('Saved plans changed in another tab, so this edit wasn’t saved. Loaded the newer plans.',true);
@@ -62,7 +64,7 @@ function persist(){
   pendingSaves++;saveQueue=saveQueue.then(save,save).finally(()=>{pendingSaves--;});return saveQueue;
 }
 function snapshot(){return structuredClone({plans:app.plans,sources:app.sources,optional:app.optional,exampleIds:[...app.exampleIds],selectedId:app.selectedId,saved:app.saved});}
-function pushUndo(){app.undo.push(snapshot());if(app.undo.length>100)app.undo.shift();app.redo=[];}
+function pushUndo(){app.undo.push(snapshot());if(app.undo.length>100)app.undo.shift();app.redo=[];if(app.startState==='idle')app.startState='edit-pending';}
 function restore(snap){Object.assign(app,{plans:snap.plans,sources:snap.sources,optional:snap.optional,exampleIds:new Set(snap.exampleIds),selectedId:snap.selectedId,saved:snap.saved});if(!app.plans.some(p=>p.id===app.yearlyId))app.yearlyId=app.selectedId;}
 function undo(){if(!app.undo.length)return;app.redo.push(snapshot());restore(app.undo.pop());persist();refresh();}
 function redo(){if(!app.redo.length)return;app.undo.push(snapshot());restore(app.redo.pop());persist();refresh();}
@@ -106,7 +108,9 @@ function pump(){
     };
     worker.onerror=()=>{worker.terminate();if(app.jobs.get(next.id)===job)app.jobs.delete(next.id);setNote('The calculation couldn’t start. Reload the page.',true);renderCalc();pump();};
     worker.postMessage({scenario:simulationScenario(plan,next.count),task:'simulation',options:OPTIONS});
-    if(next.explicit)reportUsage('simulation_start');
+    if(countsAsSimulationStart({explicit:next.explicit,editPending:app.startState==='edit-pending',count:next.count,fullCount:fullPaths(plan)})){
+      app.startState='counted';reportUsage('simulation_start');
+    }
   }
   renderCalc();
 }
@@ -586,8 +590,48 @@ function setTab(tab){
   if(app.edit&&!commitEdit())return;
   const [r,c]={plan:[1,2],forecast:[2,0],yearly:[1,0]}[tab];
   app.tab=tab;app.sel={r,c,ar:r,ac:c};
+  history.replaceState(null,'',location.pathname+location.search+(tab==='plan'?'':'#'+tab));
   app.noteOverride='';scroller.scrollTop=0;scroller.scrollLeft=0;refresh({keepCalc:true});grid.focus({preventScroll:true});
 }
+
+// ---------- Switching to and from the planner ----------
+const focusedPlan=()=>(app.tab==='yearly'&&app.plans.find(p=>p.id===app.yearlyId))||selectedPlan();
+// The planner step that edits the selected row. Results and the plan name have none.
+function selectedStep(){
+  const at=app.model.rows[app.sel.r];
+  if(!at||at.kind==='name'||at.kind==='result')return null;
+  const section=at.section||SECTIONS.find(s=>s.rows.includes(at.row));
+  const path=at.row?.path||section?.rows.find(row=>row.path)?.path;
+  return path?inputTask(path).step:null;
+}
+function placeOnArrival(){
+  const handedOff=takeHandedOffPlan(),plan=app.plans.find(p=>p.id===handedOff)||basePlan();
+  const {tab,step}=parseSheetHash(location.hash);
+  if(tab){app.yearlyId=plan.id;setTab(tab);return;}
+  const c=app.model.cols.findIndex(col=>col.plan?.id===plan.id);
+  if(step===undefined){moveTo(1,c);return;}
+  const section=SECTIONS.find(s=>s.rows.some(row=>row.path&&inputTask(row.path).step===step));
+  if(section&&app.collapsed.has(section.id))toggleSection(section.id);
+  const r=app.model.rows.findIndex(row=>row.kind==='data'&&row.row.path&&inputTask(row.row.path).step===step);
+  moveTo(r>=0?r:1,c);
+  // Show the row's section right under the frozen results, not at the bottom edge.
+  const heading=r>0&&grid.tBodies[0].rows[r-1];
+  if(heading)scroller.scrollTop+=heading.getBoundingClientRect().top-scroller.getBoundingClientRect().top-frozenOffsets().top;
+  history.replaceState(null,'',location.pathname+location.search);
+}
+// Every link into the planner saves first and opens on the plan in focus. Only the
+// switch changes where this visitor lands next time.
+document.addEventListener('click',async e=>{
+  const link=e.target.closest?.('a[href^="./#/"]');
+  if(!link||e.ctrlKey||e.metaKey||e.shiftKey||e.altKey)return;
+  e.preventDefault();
+  if(app.edit&&!commitEdit())return;
+  const isSwitch=link.id==='to-planner',target=isSwitch?plannerHref(app.tab,selectedStep()):link.getAttribute('href'),plan=focusedPlan();
+  await saveQueue;
+  handOffPlan(plan.id);
+  if(isSwitch)rememberView('planner');
+  location.assign(target);
+});
 
 // ---------- Events ----------
 grid.addEventListener('keydown',e=>{
@@ -755,7 +799,7 @@ window.addEventListener('storage',event=>{
   if(event.key!==STORE_KEY&&event.key!==null)return;
   try{if(localStorage.getItem(STORE_KEY)===lastSavedRaw)return;}catch{return;}
   if(app.edit||pendingSaves)return;
-  try{loadInto();app.undo=[];app.redo=[];refresh();setNote('Updated from another tab.');}catch{storeBlocked=true;setNote('Saved plans couldn’t be read. Open the classic planner to recover them.',true);}
+  try{loadInto();app.undo=[];app.redo=[];refresh();setNote('Updated from another tab.');}catch{storeBlocked=true;setNote('Saved plans couldn’t be read. Open the planner to recover them.',true);}
 });
 window.addEventListener('beforeunload',e=>{if(pendingSaves){e.preventDefault();e.returnValue='';}});
 
@@ -781,10 +825,12 @@ async function start(){
     // Never overwrite plans this page can't read.
     storeBlocked=true;
     const plans=originalPlans();Object.assign(app,{plans,sources:normalizeInputSources(null,plans,'Sample/default'),optional:normalizeOptionalAnswers(null,plans),selectedId:plans[0].id,yearlyId:plans[0].id});
-    setNote('Saved plans couldn’t be read, so these are samples and nothing is saved. Open the classic planner to recover them.',true);
+    setNote('Saved plans couldn’t be read, so these are samples and nothing is saved. Open the planner to recover them.',true);
   }
-  refresh();grid.focus({preventScroll:true});
-  reportUsage('arrival',document.referrer);
+  refresh();
+  if(!storeBlocked)placeOnArrival();
+  grid.focus({preventScroll:true});
+  reportUsage('arrival',arrivalReferrer(document.referrer));
   try{await initializeSocialAuth(loadAccess);}catch{}
   loadAccess();
 }

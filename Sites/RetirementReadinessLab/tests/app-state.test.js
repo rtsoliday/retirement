@@ -14,6 +14,7 @@ import * as frontierView from '../dist/frontier-view.js';
 import * as savingsTargets from '../dist/savings-targets.js';
 import * as planLab from '../dist/plan-lab.js';
 import * as planLabView from '../dist/plan-lab-view.js';
+import * as viewSwitch from '../dist/view-switch.js';
 import {runSimulation} from '../dist/engine.js';
 
 test('employer Roth editor preserves records, monthly deposits and history through copies and backups',async()=>{
@@ -764,7 +765,7 @@ function app(saved=null,{fetch=async()=>{throw new Error('offline');},storage={f
     return elements.get(selector);
   }
   const document={activeElement:null,querySelector:element,querySelectorAll:()=>[],addEventListener(){},createElement(){return {click(){downloads.push({name:this.download,blob:downloadBlobs.get(this.href)});}};}};
-  const context=vm.createContext({...model,...format,...guidance,...withdrawalsView,...growthHelper,...moneyInput,...planReview,...resultCaching,...frontierView,...savingsTargets,...planLab,...planLabView,createResultCache:()=>({
+  const context=vm.createContext({...model,...format,...guidance,...withdrawalsView,...growthHelper,...moneyInput,...planReview,...resultCaching,...frontierView,...savingsTargets,...planLab,...planLabView,...viewSwitch,createResultCache:()=>({
       async load(id){const record=resultStorage.fail?null:structuredClone(resultRecords.get(id)||null);await resultStorage.beforeLoad?.(id);return record;},
       async save(s,r,today){if(resultStorage.fail)return null;await resultStorage.beforeSave?.(s,r);resultRecords.set(s.id,{id:s.id,version:1,fingerprint:resultCaching.resultFingerprint(s,today),result:structuredClone(r)});return s.id;},
       async remove(id){resultRecords.delete(id);},async clear(){resultRecords.clear();}
@@ -3280,4 +3281,50 @@ test('hiding all chart plans keeps the legend usable for every measure and resel
   const vm=a.labViewModel();vm.hidden=new Set();vm.rows=vm.rows.map(row=>({...row,result:{...row.result,notFailedByAge:[]}}));vm.measure='funded';
   const noData=planLabView.labPage(vm,{head:'',notices:'',goal:''}).match(/<section class="card lab-chart"[\s\S]*?<\/section>/)[0];
   assert.match(noData,/No data is available for this measure/);assert.doesNotMatch(noData,/NaN|Infinity|<svg|id="lab-chart-age"/);
+});
+
+test('opening the sheet saves first, keeps the plan and remembers only an explicit choice',async()=>{
+  const calls=[];let savedAtLeaving=null,a=null;
+  const location={search:'',pathname:'/',hash:'',assign:url=>{calls.push(['assign',url]);savedAtLeaving=a.saved();}};
+  a=app(null,{location,socialActions:{handOffPlan:id=>calls.push(['plan',id]),rememberView:view=>calls.push(['remember',view])}});
+  const first=a.state.selectedId;
+
+  // A one-off comparison must not change where this visitor lands next time.
+  a.state.view='scenarios';a.state.scenarios[0].name='Edited just now';a.persist();
+  await a.click('compare-in-sheet');
+  assert.deepEqual(calls,[['plan',first],['assign','./sheet.html']]);
+  assert.equal(savedAtLeaving.scenarios[0].name,'Edited just now');
+
+  // Choosing the sheet is remembered, and it opens on the matching rows.
+  calls.length=0;a.state.view='setup';a.state.setupSection=2;
+  await a.click('use-sheet');
+  assert.deepEqual(calls,[['plan',first],['remember','sheet'],['assign','./sheet.html#step-3']]);
+
+  // The switch is a real link: a modified click opens a new tab with no side effects.
+  calls.length=0;let prevented=false;
+  a.element('#to-sheet').listeners.click({ctrlKey:true,preventDefault(){prevented=true;}});
+  assert.equal(prevented,false);assert.deepEqual(calls,[]);
+  a.element('#to-sheet').listeners.click({preventDefault(){prevented=true;}});
+  await a.persist();
+  assert.equal(prevented,true);assert.deepEqual(calls.map(call=>call[0]),['plan','remember','assign']);
+
+  // Its target follows the page you are on, for opening in a new tab.
+  a.state.view='results';a.render();
+  assert.equal(a.element('#to-sheet').href,'./sheet.html#forecast');
+});
+
+test('the planner offers the sheet to new visitors and on Saved plans',()=>{
+  const a=app();
+  assert.match(a.dashboard(),/data-action="use-sheet"/);
+  assert.match(a.scenarios(),/data-action="compare-in-sheet"/);
+});
+
+test('the planner opens on the plan the sheet had in focus without saving that choice',()=>{
+  const samples=model.sampleScenarios(),other=samples[1].id;
+  const a=app(null,{socialActions:{takeHandedOffPlan:()=>other}});
+  assert.equal(a.state.selectedId,other);
+  assert.equal(a.stored(),null,'looking at a plan must not move the sheet base');
+  // A plan deleted in the meantime is ignored rather than breaking the page.
+  const b=app(null,{socialActions:{takeHandedOffPlan:()=>'plan-that-is-gone'}});
+  assert.equal(b.state.selectedId,samples[0].id);
 });

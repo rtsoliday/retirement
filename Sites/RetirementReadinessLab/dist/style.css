@@ -587,3 +587,14 @@ main{container-type:inline-size}
 @media print{.lab-menu,.lab-segments,.lab-builder,.lab-set-tools input,.lab-legend input{display:none!important}.lab-hero{background:#fff;color:#000;border:1px solid #ccc}.lab-hero p,.lab-hero-facts dt{color:#333}}.plan-lab-benefits{margin:12px 0 16px;padding-left:18px;display:grid;gap:6px;font-size:.84rem;line-height:1.45;color:#3e515c}
 .lab-numbers th,.lab-yearly th{text-transform:none;letter-spacing:0}
 .lab-numbers th[scope=row]{font-size:.84rem;color:var(--ink)}
+.view-switch{display:flex;gap:2px;padding:3px;margin-top:-12px;border-radius:8px;background:#eef2f3;font-size:.78rem;font-weight:650;overflow:visible}
+.view-switch>*{flex:1;padding:6px 12px;border-radius:6px;text-align:center;line-height:1.35;color:#51636f;text-decoration:none}
+.view-switch a:hover,.view-switch a:focus-visible{background:#fff;color:var(--ink)}
+.view-switch [aria-current]{background:#fff;color:#125d55;font-weight:750;box-shadow:0 1px 2px #17201c26}
+.forecast-welcome .welcome-sheet{align-self:flex-start;margin-top:12px;font-size:.84rem;font-weight:600;color:#d5e8e2}
+.forecast-welcome .welcome-sheet:hover,.forecast-welcome .welcome-sheet:focus-visible{color:#fff}
+/* On a short laptop screen the whole list must stay reachable, and at 768 tall it should still fit. */
+@media(min-width:1021px){.sidebar{overflow-y:auto;scrollbar-width:thin}}
+@media(min-width:1021px) and (max-height:800px){.sidebar{padding-block:20px;gap:18px}.view-switch{margin-top:-8px}}
+@media(max-width:1020px){.sidebar{grid-template-columns:1fr auto auto;align-items:center;column-gap:10px}.view-switch{margin-top:0}.view-switch>*{padding:5px 10px}}
+@media print{.view-switch,.welcome-sheet{display:none!important}}

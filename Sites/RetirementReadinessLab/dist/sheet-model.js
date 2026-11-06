@@ -65,12 +65,12 @@ export const SECTIONS=[
     row('Cash','$',MONEY,'accounts.cash','Bank savings and cash. Earns 2% a year.'),
     row('Spouse pre-tax','$',MONEY,'spouseAccounts.pretax','Spouse’s own pre-tax balances. Exclude yours.',{show:separate}),
     row('Spouse Roth IRA','$',MONEY,'spouseAccounts.roth','Spouse’s own Roth IRA. Exclude yours.',{show:separate}),
-    calc('employer-roth','Employer Roth','$',s=>employerRothTotal(s),'Roth 401(k) and 403(b) records. Edit them in the classic planner.',{show:hasEmployerRoth,money:true})
+    calc('employer-roth','Employer Roth','$',s=>employerRothTotal(s),'Roth 401(k) and 403(b) records. Edit them in the planner.',{show:hasEmployerRoth,money:true})
   ]},
   {id:'roth',label:'Roth history',rows:[
     row('Regular basis','$',MONEY,'rothHistory.contributionBasis','Regular contributions not yet withdrawn. Excludes conversions and growth.'),
     row('First funded','year',INT,'rothHistory.firstContributionYear','Tax year of your first Roth IRA deposit. 0 if never funded.'),
-    calc('roth-conversions','Past conversions','count',s=>s.rothHistory.conversions.length,'Past conversion records. Edit them in the classic planner.'),
+    calc('roth-conversions','Past conversions','count',s=>s.rothHistory.conversions.length,'Past conversion records. Edit them in the planner.'),
     row('Spouse basis','$',MONEY,'spouseRothHistory.contributionBasis','Spouse’s regular contributions not yet withdrawn.',{show:separate}),
     row('Spouse first funded','year',INT,'spouseRothHistory.firstContributionYear','Spouse’s first Roth IRA tax year. 0 if never funded.',{show:separate})
   ]},
@@ -89,7 +89,7 @@ export const SECTIONS=[
     row('Low-portfolio cut','%',PCT,'spending.lowPortfolioSpendingReduction','Spending cut applied if the portfolio halves.'),
     row('Part-time pay','$/yr',MONEY,'partTimeIncome.annualNet','Take-home pay after retiring, in today’s dollars. 0 if none.'),
     row('Part-time until','age',INT,'partTimeIncome.endAge','Stop working at this age. Must be after retirement.',{active:s=>s.partTimeIncome.annualNet>0}),
-    calc('one-time','One-time costs','count',s=>s.oneTimeExpenses?.length??0,'One-time expense records. Edit them in the classic planner.')
+    calc('one-time','One-time costs','count',s=>s.oneTimeExpenses?.length??0,'One-time expense records. Edit them in the planner.')
   ]},
   {id:'income',label:'Income',rows:[
     row('Social Security at 67','$/yr',MONEY,'socialSecurity.annualBenefitAt67','Your yearly benefit at 67 in today’s dollars, from my Social Security.'),
@@ -287,6 +287,14 @@ export function clearCell(ctx,s,row){
   ctx.sources[s.id][row.path]='Unknown';
 }
 export const isUnknown=(ctx,s,row)=>Boolean(row.path)&&row.path!=='name'&&inputSource(s,ctx.sources,row.path)==='Unknown';
+
+// What counts as a simulation start. F9 always does. Where a live estimate already
+// uses every path, as on the free tier, there is no full run left to press, so the
+// first recalculation a visitor's own edit causes counts instead. Recalculating saved
+// plans on page load never does: the visitor didn't ask for that.
+export function countsAsSimulationStart({explicit,editPending,count,fullCount}){
+  return Boolean(explicit)||(Boolean(editPending)&&count===fullCount);
+}
 
 // Unknown values that stop this plan from running. Same rules as the classic planner.
 export function blockingUnknowns(s,sources){
