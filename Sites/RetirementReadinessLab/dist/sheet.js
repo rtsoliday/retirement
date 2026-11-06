@@ -41,7 +41,7 @@ const app={
   tab:'plan',sel:{r:1,c:2,ar:1,ac:2},edit:null,model:null,collapsed:new Set(),diffOnly:false,basis:'today',yearlyId:'',
   tier:'free',undo:[],redo:[],results:new Map(),lastShown:new Map(),jobs:new Map(),queue:[],full:false,noteOverride:'',
   startState:'idle', // idle → edit-pending → counted; see countsAsSimulationStart.
-  saveFailure:'',calcFailure:'', // Stay on screen until a later save or result works.
+  saveFailure:'',calcFailures:new Map(), // A failure stays on screen until it no longer applies.
 };
 function loadInto(){
   const store=readStore();
@@ -61,9 +61,14 @@ function persist(){
     return navigator.locks.request(STORE_KEY,()=>{
       // This payload was built from plans a conflict has since replaced.
       if(epoch!==saveEpoch)return false;
-      if(localStorage.getItem(STORE_KEY)!==lastSavedRaw){
+      const stored=localStorage.getItem(STORE_KEY);
+      // The failure note says to free up storage. Clearing it leaves nothing newer to protect,
+      // and what's on screen is the only copy of these plans.
+      const clearedAfterFailure=stored===null&&app.saveFailure;
+      if(stored!==lastSavedRaw&&!clearedAfterFailure){
         saveEpoch++;
-        try{loadInto();app.saveFailure='';app.undo=[];app.redo=[];setNote('Saved plans changed in another tab, so this edit wasn’t saved. Loaded the newer plans.',true);refresh();}
+        const lost=app.saveFailure?'your unsaved edits weren’t kept':'this edit wasn’t saved';
+        try{loadInto();app.saveFailure='';app.undo=[];app.redo=[];setNote(`Saved plans changed in another tab, so ${lost}. Loaded the newer plans.`,true);refresh();}
         catch{blockStore();}
         return false;
       }
@@ -120,12 +125,12 @@ function pump(){
     worker.onmessage=e=>{
       if(e.data.type==='progress'){job.progress=e.data.fraction??job.progress;renderCalc();return;}
       worker.terminate();if(app.jobs.get(next.id)===job)app.jobs.delete(next.id);
-      if(e.data.type==='result'){remember(next.key,e.data.result);app.calcFailure='';}
-      else app.calcFailure=`${plan.name}: ${e.data.message}`;
+      if(e.data.type==='result'){remember(next.key,e.data.result);app.calcFailures.delete(next.id);}
+      else app.calcFailures.set(next.id,{key:next.key,text:`${plan.name}: ${e.data.message}`});
       if(!app.jobs.size&&!app.queue.length)app.full=false;
       refresh({keepCalc:true});pump();
     };
-    worker.onerror=()=>{worker.terminate();if(app.jobs.get(next.id)===job)app.jobs.delete(next.id);app.calcFailure='The calculation couldn’t start. Reload the page to load the latest calculator.';renderNote();renderCalc();pump();};
+    worker.onerror=()=>{worker.terminate();if(app.jobs.get(next.id)===job)app.jobs.delete(next.id);app.calcFailures.set(next.id,{key:next.key,text:'The calculation couldn’t start. Reload the page to load the latest calculator.'});renderNote();renderCalc();pump();};
     worker.postMessage({scenario:next.scenario,task:'simulation',options:OPTIONS});
     if(countsAsSimulationStart({explicit:next.explicit,editPending:app.startState==='edit-pending',count:next.count,fullCount:fullPaths(plan)})){
       app.startState='counted';reportUsage('simulation_start');
@@ -137,6 +142,7 @@ function enqueue(plan,count,explicit=false){
   const key=fingerprint(plan)+'|'+count,job=app.jobs.get(plan.id);
   if(app.results.has(key)||job?.key===key)return;
   cancelJob(plan.id);
+  app.calcFailures.delete(plan.id);
   app.jobs.set(plan.id,{key,count,progress:0,worker:null});
   // Snapshot now. The key describes these inputs, and the plan can be edited before a worker is free.
   app.queue.push({id:plan.id,key,count,explicit,scenario:simulationScenario(plan,count)});
@@ -149,7 +155,7 @@ function scheduleRecalc(delay=180){
     recalcPending=false;
     for(const plan of app.plans){
       const blocked=planIssues(plan,app.sources).some(i=>i.level==='unknown'||i.level==='error');
-      if(blocked){cancelJob(plan.id);continue;}
+      if(blocked){cancelJob(plan.id);if(app.calcFailures.delete(plan.id))renderNote();continue;}
       // Undoing an edit can make a running job pointless.
       const job=app.jobs.get(plan.id);
       if(job&&!job.key.startsWith(fingerprint(plan)+'|'))cancelJob(plan.id);
@@ -395,9 +401,17 @@ function setNote(text,error=false){app.noteOverride=text;app.noteError=error;ren
 function renderNote(){
   const el=$('note'),cell=activeCell(),row=app.model?.rows[app.sel.r];
   // Problems that lose work or hide the truth stay until they are fixed.
-  const sticky=app.saveFailure||(storeBlocked?'Saved plans couldn’t be read, so nothing here is saved. Open the planner to recover them.':'')||app.calcFailure;
+  const sticky=app.saveFailure||(storeBlocked?'Saved plans couldn’t be read, so nothing here is saved. Open the planner to recover them.':'')||activeCalcFailure();
   el.classList.toggle('error',Boolean(sticky)||(Boolean(app.noteOverride)&&Boolean(app.noteError)));
   el.textContent=sticky||app.noteOverride||cell?.note||row?.note||(row?.section?`${row.section.label}: Space shows or hides this block.`:'');
+}
+// Only a failure for a plan's current inputs still applies: undo or deleting the plan ends it.
+function activeCalcFailure(){
+  for(const plan of app.plans){
+    const failure=app.calcFailures.get(plan.id);
+    if(failure&&failure.key.startsWith(fingerprint(plan)+'|'))return failure.text;
+  }
+  return '';
 }
 function renderAggregate(){
   const {top,bottom,left,right}=rangeBounds(),values=[];
@@ -421,7 +435,7 @@ function renderCalc(){
   if(running){
     const done=jobs.reduce((n,j)=>n+(j.progress||0),0),totalCount=jobs.reduce((n,j)=>n+(j.count||0),0);
     $('calc').textContent=`Calculating ${Math.round(done/running*100)}%${totalCount>running*LIVE_ESTIMATE_PATHS?` · ${totalCount.toLocaleString('en-US')} paths`:''}`;
-  }else $('calc').textContent=app.calcFailure?'Stopped':recalcPending?'Updating…':app.plans.some(p=>planState(p).stale)?'Out of date':'Ready';
+  }else $('calc').textContent=activeCalcFailure()?'Stopped':recalcPending?'Updating…':app.plans.some(p=>planState(p).stale)?'Out of date':'Ready';
   const stopping=running&&app.full;
   button.classList.toggle('stopping',Boolean(stopping));
   button.innerHTML=stopping?'Stop':'Full run <kbd>F9</kbd>';
@@ -824,7 +838,9 @@ $('issues').addEventListener('click',e=>{
 window.addEventListener('storage',event=>{
   if(event.key!==STORE_KEY&&event.key!==null)return;
   try{if(localStorage.getItem(STORE_KEY)===lastSavedRaw)return;}catch{return;}
-  if(app.edit||pendingSaves)return;
+  // A reload would throw away an edit that couldn't be saved. Keep it on screen; the next
+  // save meets the conflict, which keeps the other tab's work and says this edit wasn't saved.
+  if(app.edit||pendingSaves||(app.saveFailure&&!storeBlocked))return;
   try{loadInto();storeBlocked=false;app.saveFailure='';app.undo=[];app.redo=[];refresh();setNote('Updated from another tab.');}catch{blockStore();}
 });
 window.addEventListener('beforeunload',e=>{if(pendingSaves||app.saveFailure){e.preventDefault();e.returnValue='';}});

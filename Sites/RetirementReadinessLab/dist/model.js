@@ -325,8 +325,12 @@ export function validateRothHistoryStructure(history) {
 export function validateScenarioDraft(s) {
   const errors = [];
   const allNumbers = [];
-  function collect(value) { if (typeof value === 'number') allNumbers.push(value); else if (value && typeof value === 'object') Object.values(value).forEach(collect); }
-  collect(s);
+  let outOfRange = '';
+  function collect(value,path) {
+    if (typeof value === 'number') { allNumbers.push(value); if (!outOfRange && Math.abs(value) > MAX_DOLLAR_AMOUNT) outOfRange = path; }
+    else if (value && typeof value === 'object') for (const [key,item] of Object.entries(value)) collect(item, path ? `${path}.${key}` : key);
+  }
+  collect(s,'');
   if (allNumbers.some(v=>!Number.isFinite(v))) errors.push('Financial and percentage assumptions must be finite numbers.');
   const structureErrors=validateScenarioStructure(s);
   if (structureErrors.length) return [...errors,...structureErrors];
@@ -334,7 +338,7 @@ export function validateScenarioDraft(s) {
   if (!FILING_STATUSES.includes(h.filingStatus)) errors.push('Filing status must be Single, Married, or HeadOfHousehold.');
   if (!GENDERS.includes(h.gender) || (h.filingStatus === 'Married' && !GENDERS.includes(h.spouseGender))) errors.push('Longevity table must be Male or Female.');
   if (!SPENDING_PATH_MODELS.includes(sp.spendingPathModel)) errors.push('Spending path must be EmpiricalAgeDecline or Flat.');
-  if(allNumbers.some(v=>Math.abs(v)>MAX_DOLLAR_AMOUNT))errors.push('Financial amounts exceed the supported dollar range.');
+  if(outOfRange)errors.push(`Financial amounts exceed the supported dollar range: ${outOfRange}.`);
   const dateLabels={birthday:'Your birthday',retirementDate:h.alreadyRetired?'Actual retirement date':'Retirement date',spouseBirthday:'Spouse birthday',spouseRetirementDate:h.spouseAlreadyRetired?'Spouse actual retirement date':'Spouse retirement date',asOfDate:'Calculation date'};
   for(const [key,label] of Object.entries(dateLabels))if(h[key]&&!calendarDate(h[key]))errors.push(`${label} must be a valid calendar date or left blank.`);
   errors.push(...budgetDollarRangeErrors(s.budget));
@@ -509,7 +513,7 @@ export function validateBudget(budget,{requireMonths=false}={}) {
   if(d.estimate < 0)errors.push('The retirement adjustment would make the annual estimate negative.');
   return errors;
 }
-function budgetDollarRangeErrors(budget,d=budgetBreakdown(budget)){
+export function budgetDollarRangeErrors(budget,d=budgetBreakdown(budget)){
   const supported=v=>{const n=amount(v);return Number.isFinite(n)&&Math.abs(n)<=MAX_DOLLAR_AMOUNT;};
   const error=['Budget amounts and calculated totals exceed the supported dollar range.'];
   if([...ANNUAL_BILLS.map(([,key])=>budget[key]),budget.retirementAnnualAdjustment,budget.appliedAnnualHomeCosts].some(v=>!supported(v)))return error;

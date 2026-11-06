@@ -3466,3 +3466,68 @@ test('a complete backup and an old flat backup are not marked Unknown by restore
   assert.equal(b.current().accounts.roth,0,'the old flat format has always defaulted to zero');
   assert.doesNotMatch(b.state.message,/doesn’t look like|marked Unknown/);
 });
+
+test('the planner refuses any number beyond the range a plan can hold, so its backups always restore',async()=>{
+  const a=app();await a.persist();const s=a.current();
+  for(const [path,type] of [['rothHistory.firstContributionYear','number'],['household.targetEndAge','number'],['guaranteedIncome.startAge','number'],['spending.generalInflationMean','percent']]){
+    const before=path.split('.').reduce((o,k)=>o[k],s);
+    await a.change('#main',{dataset:{field:path,type},value:'1e20'});
+    assert.equal(path.split('.').reduce((o,k)=>o[k],s),before,path);
+    assert.match(a.state.message,/previous value was kept/,path);
+  }
+  const b=app();await restoreFile(b,a.stored());
+  assert.doesNotMatch(b.state.message,/^Error/,'the backup restores');
+});
+
+test('a refused restore names the field that is out of range',async()=>{
+  const source=app();await source.persist();
+  const bad=JSON.parse(source.stored());bad.scenarios[0].rothHistory.firstContributionYear=1e20;
+  const a=app();await restoreFile(a,JSON.stringify(bad));
+  assert.match(a.state.message,/rothHistory\.firstContributionYear/);
+  assert.match(a.state.message,/^Error/);
+});
+
+test('budget edits cannot push totals past what a backup can restore',async()=>{
+  const month=(id,cash)=>({month:id,cashAndAtmWithdrawals:cash,checkingSavingsBills:[],creditCardBills:[]});
+  const a=app();await a.persist();
+  const s=a.current();s.budget.monthlyBudgets=[month('2026-01',100)];
+  await a.persist();let before=a.stored();
+  // One month is within the per-field limit, but its annual total is not.
+  await a.change('#main',{dataset:{month:'0',part:'cashAndAtmWithdrawals'},value:'1000000000000000'});
+  assert.equal(a.stored(),before,'a monthly amount must not reach the store');
+  assert.equal(s.budget.monthlyBudgets[0].cashAndAtmWithdrawals,100,'and the value on the plan is unchanged');
+  assert.match(a.state.message,/previous value was kept/);
+  // Two annual bills, each fine alone.
+  const [first,second]=['annualPropertyTaxes','annualHomeInsurance'];
+  await a.change('#main',{dataset:{budget:first},value:'5000000000000000'});
+  before=a.stored();
+  await a.change('#main',{dataset:{budget:second},value:'5000000000000000'});
+  assert.equal(a.stored(),before,'the second annual bill must not reach the store');
+  await a.change('#main',{dataset:{budget:first},value:'0'});
+  // Removing the small month raises the average the annual total is built from.
+  s.budget.monthlyBudgets=[month('2026-01',800000000000000),month('2026-02',0)];await a.persist();before=a.stored();
+  await a.click('remove-month',{index:'1'});
+  assert.equal(s.budget.monthlyBudgets.length,2,'the month stays');assert.equal(a.stored(),before);
+  assert.match(a.state.message,/month was kept/);
+  await a.click('remove-month',{index:'0'});
+  assert.equal(s.budget.monthlyBudgets.length,1,'removing the large month is fine');
+  // The retirement adjustment feeds the same estimate.
+  s.budget.monthlyBudgets=[month('2026-01',750000000000000)];await a.persist();
+  await a.change('#main',{dataset:{budgetAdjustment:'direction'},value:'more'});
+  before=a.stored();
+  await a.change('#main',{dataset:{budgetAdjustment:'amount'},value:'100000000000000'});
+  assert.equal(a.stored(),before,'an adjustment that overflows the estimate must not reach the store');
+  assert.equal(s.budget.retirementAnnualAdjustment,0);
+  const b=app();await restoreFile(b,a.stored());
+  assert.doesNotMatch(b.state.message,/^Error/,'and the backup restores');
+});
+
+test('a budget saved past the limit before this check can still be corrected',async()=>{
+  const month=id=>({month:id,cashAndAtmWithdrawals:1000000000000000,checkingSavingsBills:[],creditCardBills:[]});
+  const a=app();await a.persist();
+  const s=a.current();s.budget.monthlyBudgets=Array.from({length:12},(_,i)=>month('2026-'+String(i+1).padStart(2,'0')));await a.persist();
+  // Lowering one of twelve months still leaves the total over. It must not be refused.
+  await a.change('#main',{dataset:{month:'0',part:'cashAndAtmWithdrawals'},value:'1000'});
+  assert.equal(s.budget.monthlyBudgets[0].cashAndAtmWithdrawals,1000);
+  assert.equal(a.saved().scenarios.find(p=>p.id===s.id).budget.monthlyBudgets[0].cashAndAtmWithdrawals,1000);
+});

@@ -13,7 +13,7 @@ import {LAB_LEVERS,LAB_PRESETS,LAB_MAX_WHAT_IFS,LAB_FREE_WHAT_IFS,LAB_MAX_SETS,L
 import {labPage,allocationCard} from './plan-lab-view.js';
 import {chartCard,mountCharts,disposeCharts} from './charts.js';
 import {initializeSocialAuth,socialState,authHeaders,signInSocial,linkSocialProvider,signOutSocial} from './auth.js';
-import {looksLikePlan,absentPersonalAmounts,repairScenarios,markRepairedUnknown,repairNotice,baseScenario,employerRothDefaults,employerRothTotal,hasEmployerRoth,retirementAge,primaryRetirementAge,ageLabel,calendarDate,calendarMonthsBetween,addCalendarMonths,partTimeIncomeActive,homePlanActive,localCalendarDate,prepareCalendarScenario,scenarioTimeline,forecastRetirementDate,dateLabel,syncCalendarAges,setRetirementAge,delayRetirement,sampleScenarios,normalizeScenarios,applyProSimulationDefault,validateScenario,validateScenarioDraft,validateScenarioStructure,budgetBreakdown,budgetMonthTotals,validateBudget,markBudgetEdited,applyBudgetEstimate,setAnnualBaseSpending,ruleOf55Applies,earlyWithdrawalContext,ANNUAL_BILLS,SEPARATE_COSTS,ROTH_CONVERSION_RATES,scenarioWarnings,ENGINE_VERSION,scenarioEngineVersion,DEFAULT_SEED,FREE_SIMULATION_PATHS,SMALL_SAMPLE_PATHS,MIN_SIMULATION_PATHS,MAX_SIMULATION_PATHS,MAX_DOLLAR_AMOUNT} from './model.js';
+import {budgetDollarRangeErrors,looksLikePlan,absentPersonalAmounts,repairScenarios,markRepairedUnknown,repairNotice,baseScenario,employerRothDefaults,employerRothTotal,hasEmployerRoth,retirementAge,primaryRetirementAge,ageLabel,calendarDate,calendarMonthsBetween,addCalendarMonths,partTimeIncomeActive,homePlanActive,localCalendarDate,prepareCalendarScenario,scenarioTimeline,forecastRetirementDate,dateLabel,syncCalendarAges,setRetirementAge,delayRetirement,sampleScenarios,normalizeScenarios,applyProSimulationDefault,validateScenario,validateScenarioDraft,validateScenarioStructure,budgetBreakdown,budgetMonthTotals,validateBudget,markBudgetEdited,applyBudgetEstimate,setAnnualBaseSpending,ruleOf55Applies,earlyWithdrawalContext,ANNUAL_BILLS,SEPARATE_COSTS,ROTH_CONVERSION_RATES,scenarioWarnings,ENGINE_VERSION,scenarioEngineVersion,DEFAULT_SEED,FREE_SIMULATION_PATHS,SMALL_SAMPLE_PATHS,MIN_SIMULATION_PATHS,MAX_SIMULATION_PATHS,MAX_DOLLAR_AMOUNT} from './model.js';
 
 const $=s=>document.querySelector(s),escapeHTML=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=(v,d=0)=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:d}).format(v||0);
@@ -1726,6 +1726,8 @@ $('#main').addEventListener('click',async e=>{const runPlan=e.target.closest('[d
     const i=Number(el.dataset.index),ui=budgetView();
     if(i===s.budget.monthlyBudgets.length&&ui.pending){ui.pending=null;render();return;}
     if(!s.budget.monthlyBudgets[i])return;
+    // Removing a small month raises the average the annual total is built from.
+    if(budgetOverflows({...s.budget,monthlyBudgets:s.budget.monthlyBudgets.filter((_,n)=>n!==i)},s.budget)){refuseBudgetEdit(null,'The month was kept.');return;}
     markBudgetEdited(s.budget);s.budget.monthlyBudgets.splice(i,1);budgetViews.delete(s.id);await persist();render();return;
   }
   if(a==='review-budget-deductions'){const ui=budgetView(),months=budgetBreakdown(s.budget).months;for(const m of months){const i=s.budget.monthlyBudgets.indexOf(m);ui.open['month-'+i]=true;$('#budget-month-'+i).open=true;}const first=unreviewedBudgetMonths()[0]||months.find(m=>SEPARATE_COSTS.some(([,key])=>monthCostIncluded(m,s.budget.monthlyBudgets.indexOf(m),key)&&!(m.adjustments?.[key]>0)))||months[0];if(first)$('#budget-month-'+s.budget.monthlyBudgets.indexOf(first)+' .monthly-costs')?.scrollIntoView({block:'center'});return;}
@@ -1781,6 +1783,13 @@ $('#main').addEventListener('click',async e=>{const runPlan=e.target.closest('[d
   if(a==='export-backup')download('retirement-scenarios.json',JSON.stringify({format:'retirement-readiness-lab-web-v1',inputSources:state.inputSources,optionalAnswers:state.optionalAnswers,accountChecks:state.accountChecks,exampleIds:[...state.exampleIds],entryPeriods:state.entryPeriods,labSets:state.labSets,scenarios:state.scenarios.map(({seed,...scenario})=>scenario)},null,2),'application/json');
   if(a==='import-backup')$('#import-file').click();
 });
+// Budget totals have a limit as well as each entry: past it the plan's own backup can't be
+// restored. A budget already over it, saved before this check, stays editable so it can be corrected.
+const budgetOverflows=(next,now)=>budgetDollarRangeErrors(next).length>0&&!budgetDollarRangeErrors(now).length;
+function refuseBudgetEdit(el,text='The previous value was kept.'){
+  state.message=`Error: That would push the budget totals past the supported dollar range. ${text}`;refreshNotice();
+  if(el)showFieldError(el,'Not saved. The budget total would be too large.');
+}
 function numericEdit(el,{dollars=false,percent=false}={}){
   if(el.dataset.field&&!el.validity?.badInput&&el.value.trim()===''){personalize();state.inputSources[current().id][el.dataset.field]='Unknown';state.results.delete(current().id);invalidateExploration();persist();$('#result-state').textContent='Review Unknown inputs';state.message='Error: A cleared input is Unknown, not zero. Enter a number before running; 0 means none.';refreshNotice();markFieldUnknown(el,true);refreshBasicSummaries(current());refreshOptionalInputs(current());return null;}
   const raw=dollars?parseMoneyInput(el.value):Number(el.value),path=el.dataset.field;
@@ -1794,6 +1803,10 @@ function numericEdit(el,{dollars=false,percent=false}={}){
   }
   if(dollars&&Math.abs(value)>MAX_DOLLAR_AMOUNT){
     state.message='Error: The amount exceeds the supported dollar range. The previous value was kept.';refreshNotice();showFieldError(el,'Not saved. This amount is too large.');return null;
+  }
+  // Any number past this makes the plan's own backup impossible to restore.
+  if(Math.abs(value)>MAX_DOLLAR_AMOUNT){
+    state.message='Error: That number is outside the supported range. The previous value was kept.';refreshNotice();showFieldError(el,'Not saved. This number is too large.');return null;
   }
   return value;
 }
@@ -1873,14 +1886,18 @@ if(el.name==='dollar-basis'){state.dollarBasis=el.value==='today'?'today':'futur
       if(direction==='less')annual=-annual;
     }
     if(annual===0)annual=0;
+    if(budgetOverflows({...b,retirementAnnualAdjustment:annual},b)){refuseBudgetEdit(el);return;}
     if(annual!==b.retirementAnnualAdjustment){personalize(s);markBudgetEdited(b);b.retirementAnnualAdjustment=annual;await persist();}
     refreshBudget();return;
   }
-  if(el.dataset.budget){const value=numericEdit(el,{dollars:true});if(value===null)return;personalize(s);markBudgetEdited(s.budget);s.budget[el.dataset.budget]=value;await persist();refreshBudget();return;}
+  if(el.dataset.budget){const value=numericEdit(el,{dollars:true});if(value===null)return;if(budgetOverflows({...s.budget,[el.dataset.budget]:value},s.budget)){refuseBudgetEdit(el);return;}personalize(s);markBudgetEdited(s.budget);s.budget[el.dataset.budget]=value;await persist();refreshBudget();return;}
   if(el.dataset.month!==undefined){
     const part=el.dataset.part,value=part==='month'?el.value:numericEdit(el,{dollars:true});if(value===null)return;
     const ui=budgetView(),i=Number(el.dataset.month),pending=i===s.budget.monthlyBudgets.length&&ui.pending,m=s.budget.monthlyBudgets[i]||pending;if(!m)return;
-    if(part==='month')m.month=value;else if(part==='cashAndAtmWithdrawals')m.cashAndAtmWithdrawals=value;else if(part==='checking'||part==='credit')m[part==='checking'?'checkingSavingsBills':'creditCardBills']=[{id:part,name:part==='checking'?'Checking / savings spending':'Credit card purchases',monthlyAmount:value}];else{m.adjustments??={};m.adjustments[part]=value;}
+    const write=t=>{if(part==='month')t.month=value;else if(part==='cashAndAtmWithdrawals')t.cashAndAtmWithdrawals=value;else if(part==='checking'||part==='credit')t[part==='checking'?'checkingSavingsBills':'creditCardBills']=[{id:part,name:part==='checking'?'Checking / savings spending':'Credit card purchases',monthlyAmount:value}];else{t.adjustments??={};t.adjustments[part]=value;}};
+    const edited=deep(m),months=[...s.budget.monthlyBudgets];write(edited);months[i]=edited;
+    if(budgetOverflows({...s.budget,monthlyBudgets:months},s.budget)){refuseBudgetEdit(el);return;}
+    write(m);
     if(pending&&part==='month'){refreshBudget();return;}
     if(pending){s.budget.monthlyBudgets.push(m);ui.pending=null;ui.open['month-'+i]=true;}
     ui.costConfirmed=false;

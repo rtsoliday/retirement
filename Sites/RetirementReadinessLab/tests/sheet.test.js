@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readFileSync,readdirSync} from 'node:fs';
 import vm from 'node:vm';
 import * as sheetModel from '../dist/sheet-model.js';
 import * as model from '../dist/model.js';
@@ -236,7 +236,7 @@ test('a queued plan runs on the inputs it was queued with, so an edit cannot fil
   const workers=[],remembered=new Map();
   class Worker{constructor(){workers.push(this);}postMessage(message){this.posted=structuredClone(message);}terminate(){this.terminated=true;}}
   const running=plan(s=>{s.id='running';}),queued=plan(s=>{s.id='queued';s.spending.annualBaseSpending=60000;});
-  const context=vm.createContext({app:{plans:[running,queued],jobs:new Map(),queue:[],results:new Map(),full:false,startState:'idle'},navigator:{hardwareConcurrency:2},Worker,URL,
+  const context=vm.createContext({app:{plans:[running,queued],jobs:new Map(),queue:[],results:new Map(),calcFailures:new Map(),full:false,startState:'idle'},navigator:{hardwareConcurrency:2},Worker,URL,
     simulationScenario:sheetModel.simulationScenario,countsAsSimulationStart:sheetModel.countsAsSimulationStart,fingerprint,fullPaths:()=>100,OPTIONS:{},
     remember:(key,result)=>remembered.set(key,result),refresh(){},setNote(){},renderCalc(){},reportUsage(){}});
   vm.runInContext(block+';this.enqueue=enqueue;this.pump=pump;',context);
@@ -338,7 +338,7 @@ function displayHarness(state,extra={}){
   const source=readFileSync(new URL('../dist/sheet.js',import.meta.url),'utf8');
   const els={calc:{textContent:''},recalc:{classList:{toggle(){}},innerHTML:''},note:{classList:{toggle(_c,on){els.note.error=on;}},textContent:''}};
   const context=vm.createContext({...sheetModel,letter:i=>String(i),$:id=>els[id],basePlan:()=>extra.plan,activeCell:()=>null,LIVE_ESTIMATE_PATHS:200,planState:()=>state,
-    storeBlocked:false,recalcPending:false,app:{plans:[extra.plan],basis:'today',yearlyId:extra.plan.id,jobs:new Map(),queue:[],sel:{r:0,c:0},noteOverride:'',saveFailure:'',calcFailure:'',...extra.app}});
+    storeBlocked:false,recalcPending:false,fingerprint:s=>resultFingerprint(s,localCalendarDate()),app:{plans:[extra.plan],basis:'today',yearlyId:extra.plan.id,jobs:new Map(),queue:[],sel:{r:0,c:0},noteOverride:'',saveFailure:'',calcFailures:new Map(),...extra.app}});
   const pick=(from,to)=>source.slice(source.indexOf(from),source.indexOf(to));
   vm.runInContext(pick('function forecastModel','const buildModel')+pick('function renderNote','function renderAggregate')+pick('function renderCalc','function renderToolbar')+';this.d={forecastModel,yearlyModel,renderNote,renderCalc};',context);
   return {...context.d,els};
@@ -356,10 +356,39 @@ test('old numbers are marked as old on Forecast and Yearly, and the status does 
   old.renderCalc();assert.equal(old.els.calc.textContent,'Out of date');
 });
 
-test('a worker failure stays on screen and in the status',()=>{
-  const s=plan(),failed=displayHarness({result:null,stale:false,blocked:false},{plan:s,app:{calcFailure:'The calculation couldn’t start.'}});
+test('a worker failure stays on screen while it still applies, and not after',()=>{
+  const s=plan(),key=resultFingerprint(s,localCalendarDate())+'|100';
+  const failed=displayHarness({result:null,stale:false,blocked:false},{plan:s,app:{calcFailures:new Map([[s.id,{key,text:'The calculation couldn’t start.'}]])}});
   failed.renderCalc();assert.equal(failed.els.calc.textContent,'Stopped');
   failed.renderNote();assert.match(failed.els.note.textContent,/couldn’t start/);assert.equal(failed.els.note.error,true);
+  // Undo put the plan back on inputs that have a good result, so the failure no longer applies.
+  const undone=displayHarness({result:{},stale:false,blocked:false},{plan:s,app:{calcFailures:new Map([[s.id,{key:'other inputs|100',text:'The calculation couldn’t start.'}]])}});
+  undone.renderCalc();assert.equal(undone.els.calc.textContent,'Ready');
+  undone.renderNote();assert.doesNotMatch(undone.els.note.textContent,/couldn’t start/);
+  // A failure for a plan that has since been deleted does not linger either.
+  const gone=displayHarness({result:{},stale:false,blocked:false},{plan:s,app:{calcFailures:new Map([['deleted-plan',{key,text:'The calculation couldn’t start.'}]])}});
+  gone.renderCalc();assert.equal(gone.els.calc.textContent,'Ready');
+});
+
+test('one plan’s result does not clear another plan’s failure',()=>{
+  const today=localCalendarDate(),fingerprint=s=>resultFingerprint(s,today);
+  const source=readFileSync(new URL('../dist/sheet.js',import.meta.url),'utf8');
+  const block=source.slice(source.indexOf('function cancelJob'),source.indexOf('let recalcTimer')).replaceAll('import.meta.url',JSON.stringify('https://example.test/sheet.js'));
+  const workers=[];
+  class Worker{constructor(){workers.push(this);}postMessage(){}terminate(){}}
+  const failing=plan(s=>{s.id='failing';}),working=plan(s=>{s.id='working';s.spending.annualBaseSpending=60000;});
+  const app={plans:[failing,working],jobs:new Map(),queue:[],results:new Map(),calcFailures:new Map(),full:false,startState:'idle'};
+  const context=vm.createContext({app,navigator:{hardwareConcurrency:8},Worker,URL,simulationScenario:sheetModel.simulationScenario,countsAsSimulationStart:sheetModel.countsAsSimulationStart,fingerprint,fullPaths:()=>100,OPTIONS:{},
+    remember(){},refresh(){},setNote(){},renderCalc(){},renderNote(){},reportUsage(){}});
+  vm.runInContext(block+';this.enqueue=enqueue;this.pump=pump;',context);
+  context.enqueue(failing,100);context.enqueue(working,100);context.pump();
+  workers[0].onerror();
+  workers[1].onmessage({data:{type:'result',result:{}}});
+  assert.equal(app.calcFailures.get('failing')?.key,fingerprint(failing)+'|100','the failure stays with its plan');
+  assert.equal(app.calcFailures.has('working'),false);
+  // Trying that plan again clears it, and its next outcome decides.
+  context.enqueue(failing,100);
+  assert.equal(app.calcFailures.has('failing'),false);
 });
 
 test('a failed save outranks other notes in the status bar',()=>{
@@ -398,9 +427,8 @@ test('text that only looks like a number is refused, never misread',()=>{
   for(const text of ['2,5','0x10','10/1','1-2'])assert.ok(parseCell(pct,text,s).error,`percent ${text}`);
   for(const text of ['6,7','0x10','1/2'])assert.ok(parseCell(int,text,s).error,`whole number ${text}`);
   for(const text of ['2018-10-1','2018/1'])assert.ok(parseCell(year,text,s).error,`year ${text}`);
-  // A percent sign in a percent cell means that percent, not a percent of a percent.
-  assert.equal(parseCell(pct,'=2.5%*2',s).value,.05);
-  assert.equal(parseCell(pct,'=2.5*2',s).value,.05);
+  // Percent signs in a percent cell keep their ordinary arithmetic meaning.
+  for(const [text,expected] of [['=2.5%*2',.05],['=2.5*2',.05],['=5%*10%',.005],['=50%*50%',.25],['=2.5%+1%',.035],['=5%',.05],['2.5 %',.025],['2.5\u00a0%',.025]])assert.equal(parseCell(pct,text,s).value,expected,text);
   // Everything the sheet documents still works, and = still opens every operator.
   for(const [text,expected] of [['40k',40000],['$1.2M',1200000],['1,250,000',1250000],['$1,000.50',1000.5],['=3500*12',42000],['3500*12',42000],['1000+500',1500],['=1,000*12',12000],['=3500/12*12',3500],['=100-20',80],['=(1000+500)*2',3000],['(1000+500)*2',3000],['-5',-5],['1e3',1000]])assert.equal(parseCell(money,text,s).value,expected,text);
   for(const [text,expected] of [['2.5',.025],['2.5%',.025],['-1',-.01],['=5/2',.025]])assert.equal(parseCell(pct,text,s).value,expected,text);
@@ -441,4 +469,88 @@ test('a change of access restarts running jobs, so no column is left waiting',as
   assert.deepEqual(calls,['stopAll','refresh'],'jobs at the old path count must stop before the plans recalculate');
   calls.length=0;await context.loadAccess();
   assert.deepEqual(calls,[],'no change means running jobs carry on');
+});
+
+test('a save that failed is not silently replaced when another tab saves',async()=>{
+  const h=storeHarness({raw:validStore()});h.loadInto();
+  h.stored.full=true;
+  h.app.plans[0].accounts.roth=222222;
+  assert.equal(await h.persist(),false);
+  h.stored.full=false;
+  const other=validStore(s=>{s.name='Other tab edit';});h.stored.value=other;
+  h.fire('storage')({key:'retirement-readiness-lab-sites-v1'});
+  assert.equal(h.app.plans[0].accounts.roth,222222,'the unsaved edit stays on screen');
+  assert.match(h.app.saveFailure,/lost when you leave/,'and the warning stays');
+  let warned=false;h.fire('beforeunload')({preventDefault(){warned=true;}});assert.ok(warned,'leaving still warns');
+  // The next edit meets the conflict, which keeps the other tab's work and says so.
+  assert.equal(await h.persist(),false);
+  assert.equal(h.stored.value,other);
+  assert.match(h.notes.at(-1).text,/unsaved edits/,'it must not understate what was lost');assert.equal(h.notes.at(-1).error,true);
+});
+
+test('no shipped code uses a regular expression older Safari cannot parse',()=>{
+  // Safari below 16.4 has no lookbehind. One literal is a syntax error that stops the whole module.
+  for(const name of readdirSync(new URL('../dist/',import.meta.url)).filter(file=>file.endsWith('.js')))assert.doesNotMatch(readFileSync(new URL('../dist/'+name,import.meta.url),'utf8'),/\(\?<[!=]/,name);
+});
+
+test('number grouping stays strict without lookbehind',()=>{
+  const s=plan(),money=rowFor('accounts.pretax');
+  for(const [text,expected] of [['=1,000*12',12000],['=1,000+2,000',3000],['=(1,000+500)*2',3000],['=$1,000*2',2000],['=1,000,000/2',500000],['=.5*1,000',500]])assert.equal(parseCell(money,text,s).value,expected,text);
+  for(const text of ['=12,34+1','=1234,567*2','=1,000,2,000','=1.5,000*2','=1,0000*2'])assert.ok(parseCell(money,text,s).error,text);
+});
+
+test('the sheet refuses numbers beyond the range a plan can hold',()=>{
+  const s=plan();
+  for(const [path,text] of [['household.targetEndAge','1e20'],['socialSecurity.claimAge','1e20'],['guaranteedIncome.startAge','1e20'],['rothHistory.firstContributionYear','1e20'],['market.stockMeanReturn','1e20'],['spending.generalInflationMean','1e20']]){
+    const out=parseCell(rowFor(path),text,s);assert.match(out.error||'',/too large/,`${path} ${JSON.stringify(out)}`);
+  }
+});
+
+test('a percent formula cannot mix a percent with a bare number',()=>{
+  const s=plan(),pct=rowFor('market.stockMeanReturn');
+  // Each of these used to change the meaning of the bare number, with no error for the first two.
+  for(const text of ['=0.1+2%','=0.5+10%','=2.5+1%','=100%-20','=2.5%*2+1','2.5+1%'])assert.match(String(parseCell(pct,text,s).error),/every number being added/,`${text} -> ${JSON.stringify(parseCell(pct,text,s))}`);
+  // 1/5% is 2000% by the math, but someone typing it into a percent cell likely means 0.2%.
+  for(const text of ['=1/5%','=10/12%','=10%/2%','=1/(2%+3%)'])assert.match(String(parseCell(pct,text,s).error),/Dividing by a percent/,`${text} -> ${JSON.stringify(parseCell(pct,text,s))}`);
+  for(const [text,expected] of [['=0.1+2',.021],['=2.5%+1%',.035],['=2.5%*2+1%',.06],['=100%-20%',.8],['=(2%+3%)*2',.1],['=10%/2',.05]])assert.equal(parseCell(pct,text,s).value,expected,text);
+  // Money cells keep ordinary arithmetic, where a percent is simply a fraction.
+  assert.equal(parseCell(rowFor('accounts.pretax'),'=1000*10%',s).value,100);
+  assert.equal(parseCell(rowFor('accounts.pretax'),'=100/10%',s).value,1000);
+});
+
+test('a tab can recover after a failed save and then an unreadable store',async()=>{
+  const h=storeHarness({raw:validStore()});h.loadInto();
+  h.stored.full=true;assert.equal(await h.persist(),false);h.stored.full=false;
+  h.stored.value='{"scenarios":"UNREADABLE"}';
+  assert.equal(await h.persist(),false);assert.equal(h.block(),true);
+  h.stored.value=validStore(s=>{s.name='Repaired';});
+  h.fire('storage')({key:'retirement-readiness-lab-sites-v1'});
+  assert.equal(h.block(),false,'the repair must unblock it');
+  assert.equal(h.app.plans[0].name,'Repaired');assert.equal(h.app.saveFailure,'');
+  h.app.plans[0].accounts.pretax=123;assert.equal(await h.persist(),true);
+});
+
+test('clearing browser storage after a failed save keeps the plans on screen',async()=>{
+  const h=storeHarness({raw:validStore()});h.loadInto();
+  h.stored.full=true;h.app.plans[0].accounts.roth=222222;assert.equal(await h.persist(),false);h.stored.full=false;
+  // The warning tells people to free up storage, so this has to be safe.
+  h.stored.value=null;
+  assert.equal(await h.persist(),true);
+  assert.equal(JSON.parse(h.stored.value).scenarios[0].accounts.roth,222222);
+  assert.equal(h.app.plans[0].accounts.roth,222222);assert.equal(h.app.saveFailure,'');
+});
+
+test('blanking a cell ends a calculation failure for that plan',()=>{
+  const today=localCalendarDate(),fingerprint=s=>resultFingerprint(s,today);
+  const source=readFileSync(new URL('../dist/sheet.js',import.meta.url),'utf8');
+  const block=source.slice(source.indexOf('function cancelJob'),source.indexOf('function fullRun')).replaceAll('import.meta.url',JSON.stringify('https://example.test/sheet.js'));
+  let noteDrawn=0;
+  const blocked=plan(s=>{s.id='blocked';});
+  const app={plans:[blocked],sources:{},jobs:new Map(),queue:[],results:new Map(),calcFailures:new Map([['blocked',{key:fingerprint(blocked)+'|100',text:'failed'}]]),full:false,startState:'idle'};
+  const context=vm.createContext({app,navigator:{hardwareConcurrency:2},URL,simulationScenario:sheetModel.simulationScenario,fingerprint,fullPaths:()=>100,livePaths:()=>100,currentResult:()=>({result:null}),renderCalc(){},planIssues:()=>[{level:'unknown'}],clearTimeout(){},setTimeout:fn=>{fn();return 1;},
+    countsAsSimulationStart:sheetModel.countsAsSimulationStart,OPTIONS:{},Worker:class{},remember(){},refresh(){},setNote(){},renderNote(){noteDrawn++;},reportUsage(){}});
+  vm.runInContext(block+';this.scheduleRecalc=scheduleRecalc;',context);
+  context.scheduleRecalc();
+  assert.equal(app.calcFailures.has('blocked'),false);
+  assert.equal(noteDrawn,1,'and the note on screen goes with it');
 });

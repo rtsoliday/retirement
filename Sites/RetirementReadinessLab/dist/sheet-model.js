@@ -173,13 +173,16 @@ export function editText(row,value){return row.type===MONEY?String(value):cellTe
 
 // Arithmetic only: =2500*12 is worked out once and the answer is stored. Parsed
 // by hand so nothing a person pastes is ever evaluated as code.
-export function evaluateArithmetic(text,{percentScale=.01}={}){
+const MIXED_PERCENT='Use % on every number being added, or on none, such as =2%+0.5%.';
+const DIVIDE_BY_PERCENT='Dividing by a percent isn’t supported in this cell. Try a form such as =10%/2.';
+export function evaluateArithmetic(text,{percentCell=false}={}){
   // A comma only counts as thousands grouping, so 2,5 can never be read as 25.
-  const ungrouped=text.replace(/(?<![\d.])\d{1,3}(?:,\d{3})+(?!\d)/g,group=>group.replace(/,/g,''));
+  // No lookbehind here: Safari below 16.4 can't parse it, which would stop the whole page.
+  const ungrouped=text.replace(/(^|[^\d.])(\d{1,3}(?:,\d{3})+)(?!\d)/g,(_,before,group)=>before+group.replace(/,/g,''));
   if(ungrouped.includes(','))return {error:'That arithmetic can’t be worked out.'};
   const source=ungrouped.replace(/^=/,'').replace(/[\s$]/g,'');
   if(/[a-jl-zA-JL-Z]/.test(source.replace(/[kKmM](?![a-zA-Z0-9])/g,'')))return {error:'Cell references aren’t supported. Use numbers, such as =2500*12.'};
-  let at=0;
+  let at=0,percents=0,refusal='';
   const peek=()=>source[at];
   function atom(){
     if(peek()==='-'){at++;return -atom();}
@@ -188,16 +191,36 @@ export function evaluateArithmetic(text,{percentScale=.01}={}){
     const match=/^(\d+(?:\.\d*)?|\.\d+)([kKmM%]?)/.exec(source.slice(at));
     if(!match)throw new Error('number');
     at+=match[0].length;
-    const scale={k:1e3,K:1e3,m:1e6,M:1e6,'%':percentScale}[match[2]]??1;
+    if(match[2]==='%')percents++;
+    const scale={k:1e3,K:1e3,m:1e6,M:1e6,'%':.01}[match[2]]??1;
     return Number(match[1])*scale;
   }
-  function product(){let value=atom();while(peek()==='*'||peek()==='/'){const op=source[at++],next=atom();value=op==='*'?value*next:value/next;}return value;}
-  function sumExpression(){let value=product();while(peek()==='+'||peek()==='-'){const op=source[at++],next=product();value=op==='+'?value+next:value-next;}return value;}
+  function product(){
+    let value=atom();
+    while(peek()==='*'||peek()==='/'){
+      const op=source[at++],before=percents,next=atom();
+      // 1/5% is 2000% by the math, but someone typing it into a percent cell likely means 0.2%.
+      if(percentCell&&op==='/'&&percents>before){refusal=DIVIDE_BY_PERCENT;throw new Error('refused');}
+      value=op==='*'?value*next:value/next;
+    }
+    return value;
+  }
+  function term(){const before=percents,value=product();return [value,percents>before];}
+  function sumExpression(){
+    let [value,percent]=term();
+    while(peek()==='+'||peek()==='-'){
+      const op=source[at++],[next,nextPercent]=term();
+      // A percent cell holds percent points, so 0.1+2% could mean 2.1% or 12%. Don't guess.
+      if(percentCell&&percent!==nextPercent){refusal=MIXED_PERCENT;throw new Error('refused');}
+      value=op==='+'?value+next:value-next;
+    }
+    return value;
+  }
   try{
     const value=sumExpression();
     if(at!==source.length||!Number.isFinite(value))return {error:'That arithmetic can’t be worked out.'};
     return {value:Number(value.toPrecision(15))};
-  }catch{return {error:'That arithmetic can’t be worked out.'};}
+  }catch{return {error:refusal||'That arithmetic can’t be worked out.'};}
 }
 // Without a leading =, only * and + count as arithmetic. A / or - there is far more
 // likely to be a date or a pasted accounting value, and reading it as arithmetic would
@@ -207,8 +230,13 @@ const looksLikeArithmetic=text=>text.startsWith('=')||/\d\s*[*+]/.test(text);
 const plainNumber=text=>/^[+-]?(?:(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/.test(text)?Number(text.replace(/,/g,'')):NaN;
 
 function parseNumberText(text,{money=false,percentCell=false}={}){
-  // In a percent cell the answer is already in percent, so 2.5% means 2.5 there.
-  if(looksLikeArithmetic(text)){const out=evaluateArithmetic(text,percentCell?{percentScale:1}:{});return out.error?out:{value:out.value};}
+  if(looksLikeArithmetic(text)){
+    const out=evaluateArithmetic(text,{percentCell});
+    if(out.error)return out;
+    // A percent cell holds percent points. With a % sign the arithmetic worked in
+    // fractions (5%*10% is 0.005), so turn that back into points. Without one, =2.5*2 is 5.
+    return {value:percentCell&&text.includes('%')?Number((out.value*100).toPrecision(15)):out.value};
+  }
   const value=money?parseMoneyInput(text):plainNumber(text);
   return Number.isFinite(value)?{value}:{error:money?'Enter an amount such as 40000, 40k or =3500*12.':'Enter a number.'};
 }
@@ -244,8 +272,18 @@ export function parseCell(row,text,s){
   }
   switch(row.type){
     case MONEY:{const out=parseNumberText(value,{money:true});if(out.error)return out;return Math.abs(out.value)>MAX_DOLLAR_AMOUNT?{error:'That amount is too large.'}:out;}
-    case PCT:{const out=parseNumberText(value.replace(/%$/,''),{percentCell:true});return out.error?{error:'Enter a percent such as 2.5.'}:{value:Number((out.value/100).toPrecision(15))};}
-    case INT:{const out=parseNumberText(value);if(out.error)return {error:'Enter a whole number.'};return Number.isInteger(out.value)?out:{error:'Enter a whole number.'};}
+    case PCT:{
+      const out=parseNumberText(looksLikeArithmetic(value)?value:value.replace(/\s*%$/,''),{percentCell:true});
+      if(out.error)return {error:[MIXED_PERCENT,DIVIDE_BY_PERCENT].includes(out.error)?out.error:'Enter a percent such as 2.5.'};
+      const share=Number((out.value/100).toPrecision(15));
+      return Math.abs(share)>MAX_DOLLAR_AMOUNT?{error:'That number is too large.'}:{value:share};
+    }
+    case INT:{
+      const out=parseNumberText(value);
+      if(out.error)return {error:'Enter a whole number.'};
+      if(Math.abs(out.value)>MAX_DOLLAR_AMOUNT)return {error:'That number is too large.'};
+      return Number.isInteger(out.value)?out:{error:'Enter a whole number.'};
+    }
     case DATE:{const date=parseDateText(value);if(!date)return {error:'Enter a date such as 10/1/2029.'};const problem=dateProblem(row,date,s);return problem?{error:problem}:{value:date};}
     case YES_NO:{const v=value.toLowerCase();if(['y','yes','true','1','x'].includes(v))return {value:true};if(['n','no','false','0'].includes(v))return {value:false};return {error:'Enter Yes or No.'};}
     case ENUM:{
