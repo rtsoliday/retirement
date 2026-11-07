@@ -111,6 +111,35 @@ test('Stripe outages and broken pagination produce unavailable, never false zero
   }
 });
 
+test('a failed Stripe lookup names the step and cause without repeating what Stripe said', async () => {
+  const secret = 'rk_live_secretvalue cus_private';
+  const lists = ({ subscriptions = [], invoices = [] }) => async input => Response.json({ data: new URL(input).pathname.endsWith('/subscriptions') ? subscriptions : invoices, has_more: false });
+  const failInvoices = async input => new URL(input).pathname.endsWith('/invoices') ? Response.json({ error: { type: 'not <a> code', message: secret } }, { status: 500 }) : Response.json({ data: [], has_more: false });
+  const euro = { ...sub('euro', 500), items: { has_more: false, data: [{ quantity: 1, price: { ...price(500), currency: 'eur' } }] } };
+  const undated = { id: 'in_undated', subscription: 'plain', amount_paid: 500, currency: 'usd', status_transitions: {} };
+  for (const [STRIPE_FETCH, expected] of [
+    [async () => Response.json({ error: { type: 'invalid_request_error', code: 'resource_missing', message: secret } }, { status: 403 }), 'Reading subscriptions: Stripe answered 403 (invalid_request_error, resource_missing).'],
+    [failInvoices, 'Reading invoices: Stripe answered 500.'],
+    [async () => Response.json({ error: { type: 'cus_abcdefgh', code: 'sk_live_abc123def456', message: secret } }, { status: 402 }), 'Reading subscriptions: Stripe answered 402.'],
+    [async () => { throw Error(secret); }, 'Reading subscriptions: The lookup did not finish (Error).'],
+    [async () => new Response(`not json ${secret}`), 'Reading subscriptions: The lookup did not finish (SyntaxError).'],
+    [async () => Response.json({ data: [], has_more: true }), 'Reading subscriptions: Incomplete Stripe pagination.'],
+    [lists({ subscriptions: [euro] }), 'Checking subscription prices: Unsupported recurring price.'],
+    [lists({ subscriptions: [null] }), 'Checking subscription prices: The lookup did not finish (TypeError).'],
+    [lists({ subscriptions: [sub('plain', 500)], invoices: [undated] }), 'Checking invoices: Missing Stripe payment date.'],
+  ]) {
+    const response = await worker.fetch(get('/api/admin/billing'), { STRIPE_SECRET_KEY: 'sk_live_example', STRIPE_FETCH });
+    assert.equal(response.status, 503);
+    const { error } = await response.json();
+    assert.equal(error, `Subscription statistics unavailable. ${expected}`);
+    for (const hidden of ['rk_live', 'cus_private', 'sk_live_example']) assert.ok(!error.includes(hidden), error);
+  }
+  const noKey = await worker.fetch(get('/api/admin/billing'), {});
+  assert.equal((await noKey.json()).error, 'Subscription statistics unavailable. Stripe is not connected yet.');
+  // Only the owner gets a reason. Everyone else is refused before Stripe is asked.
+  assert.deepEqual(await (await worker.fetch(get('/api/admin/billing', 'other'), { STRIPE_SECRET_KEY: 'sk_live_example', STRIPE_FETCH: async () => { throw Error('must not run'); } })).json(), { error: 'Admin access required' });
+});
+
 test('browser usage sends only a hostname or marker and tolerates offline failures', async () => {
   const oldFetch = globalThis.fetch, payloads = [];
   globalThis.fetch = async (_url, options) => { payloads.push(JSON.parse(options.body)); throw Error('offline'); };

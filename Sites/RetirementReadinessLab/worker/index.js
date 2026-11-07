@@ -1,7 +1,7 @@
 import { billing } from './billing.js';
 import { authConfig, OWNER_CHATGPT_USER_ID } from './auth.js';
 import { recordMetric, usageMetrics } from './metrics.js';
-import { billingMetrics } from './admin-billing.js';
+import { billingFailureReason, billingMetrics } from './admin-billing.js';
 import { mcp } from './mcp.js';
 import { mcpMetrics } from './mcp-storage.js';
 import { verificationApi,verificationRpc } from './mcp-verification.js';
@@ -135,7 +135,7 @@ export default {
       if (!ALLOWED_DAYS.has(days)) return json({ error: 'Choose 7 or 30 days' }, 400);
       try {
         return json(await (url.pathname.endsWith('/usage') ? usageMetrics(env, utcWindow(days), days) : billingMetrics(env, utcWindow(days))));
-      } catch { return json({ error: url.pathname.endsWith('/usage') ? 'Usage statistics unavailable. Please retry.' : 'Subscription statistics unavailable. Check the Stripe connection and retry.' }, 503); }
+      } catch (error) { return json({ error: url.pathname.endsWith('/usage') ? 'Usage statistics unavailable. Please retry.' : `Subscription statistics unavailable. ${billingFailureReason(error)}` }, 503); }
     }
     if (url.pathname === '/api/auth/config') return authConfig(request, env);
     if (url.pathname.startsWith('/api/billing/')) return billing(request, env, url.pathname, owner(request));

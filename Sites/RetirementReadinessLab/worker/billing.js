@@ -60,11 +60,10 @@ async function stripe(env, path, params = null, method = 'GET', idempotencyKey =
   });
   if (allowMissing && response.status === 404) return null;
   if (!response.ok) {
-    if (idempotencyKey && [400,409].includes(response.status)) {
-      const payload=await response.json().catch(()=>null);
-      if (payload?.error?.type==='idempotency_error' || payload?.error?.code==='idempotency_key_in_use') throw new BillingConflict('Billing is already being updated. Please retry.');
-    }
-    throw new Error('Stripe request failed');
+    const payload=await response.json().catch(()=>null);
+    if (idempotencyKey && [400,409].includes(response.status) && (payload?.error?.type==='idempotency_error' || payload?.error?.code==='idempotency_key_in_use')) throw new BillingConflict('Billing is already being updated. Please retry.');
+    // Status and codes only. Stripe's own message can name keys, customers and IDs.
+    throw Object.assign(new Error('Stripe request failed'),{stripeFailure:{status:response.status,type:payload?.error?.type,code:payload?.error?.code}});
   }
   return response.json();
 }
