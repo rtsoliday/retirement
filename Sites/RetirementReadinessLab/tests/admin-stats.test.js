@@ -4,12 +4,13 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import worker from '../worker/index.js';
+import { OWNER_CHATGPT_USER_ID } from '../worker/auth.js';
 import { referralSource } from '../worker/metrics.js';
 import { billingMetrics } from '../worker/admin-billing.js';
 import { reportUsage } from '../dist/usage-metrics.js';
 
 const origin = 'https://retirementforecast.us';
-const owner = '028696a7-7846-4822-a4c1-67026aa2383f';
+const owner = OWNER_CHATGPT_USER_ID;
 function database() {
   const db = new DatabaseSync(':memory:');
   db.exec(readFileSync(new URL('../drizzle/0000_opposite_morlocks.sql', import.meta.url), 'utf8'));

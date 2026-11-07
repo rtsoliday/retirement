@@ -1,5 +1,5 @@
 import { billing } from './billing.js';
-import { authConfig, OWNER_CHATGPT_USER_ID, OWNER_GOOGLE_EMAIL } from './auth.js';
+import { authConfig, OWNER_CHATGPT_USER_ID } from './auth.js';
 import { recordMetric, usageMetrics } from './metrics.js';
 import { billingMetrics } from './admin-billing.js';
 import { mcp } from './mcp.js';
@@ -97,10 +97,8 @@ async function analytics(request, env) {
 }
 
 function owner(request) {
-  const userId = request.headers.get('oai-authenticated-user-id');
-  if (!userId) return false;
-  const email = request.headers.get('oai-authenticated-user-email')?.trim().toLowerCase();
-  return userId === OWNER_CHATGPT_USER_ID || email === OWNER_GOOGLE_EMAIL;
+  // Sites documents the ID as the user's key and the email as a display or contact field.
+  return request.headers.get('oai-authenticated-user-id') === OWNER_CHATGPT_USER_ID;
 }
 
 export default {

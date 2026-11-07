@@ -1,5 +1,6 @@
 // Firebase issues the Google identity token; this Worker verifies it before billing.
-export const OWNER_CHATGPT_USER_ID = '028696a7-7846-4822-a4c1-67026aa2383f';
+// Sites gives each user a different ID on each Site, so this holds only for this Site.
+export const OWNER_CHATGPT_USER_ID = 'CSj1bj94ceGTrOKQ1NhJisoLHqfqIYSwz5aLYXXiosJiAhNDp7Ye9r';
 export const OWNER_GOOGLE_EMAIL = 'rtsoliday@gmail.com';
 export const OWNER_FIREBASE_UID = 'xYPnJEpGrHfTJmBtFUnXlAQSdzU2';
 const JWKS_URL = 'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';

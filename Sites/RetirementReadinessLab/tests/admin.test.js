@@ -3,8 +3,9 @@ import {readFileSync,existsSync} from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker, { analyticsQuery, normalizeDaily, utcWindow } from '../worker/index.js';
+import { OWNER_CHATGPT_USER_ID } from '../worker/auth.js';
 
-const owner = '028696a7-7846-4822-a4c1-67026aa2383f';
+const owner = OWNER_CHATGPT_USER_ID;
 const ownerEmail = 'rtsoliday@gmail.com';
 const assets = { fetch: async request => new Response(request.url.includes('admin.html') ? 'admin page' : 'planner', { headers: { 'Content-Type': 'text/html' } }) };
 const request = (path, user, email) => new Request(`https://retirementforecast.us${path}`, { headers: { ...(user ? { 'oai-authenticated-user-id': user } : {}), ...(email ? { 'oai-authenticated-user-email': email } : {}) } });
@@ -21,7 +22,10 @@ test('admin route redirects anonymous visitors and rejects other signed-in users
   assert.equal(allowed.status, 200);
   assert.equal(await allowed.text(), '__ADMIN_HTML__');
   assert.equal(allowed.headers.get('cache-control'), 'no-store');
-  assert.equal((await worker.fetch(request('/admin', 'site-scoped-owner-id', ' RTSOLIDAY@gmail.com '), { ASSETS: assets })).status, 200);
+  // Only the ID makes someone the owner. An email header with another ID grants nothing.
+  for (const path of ['/admin', '/mcp-verification', '/api/admin/mcp-verification', '/api/admin/mcp-verification/rpc', '/api/admin/traffic?days=7', '/api/admin/usage?days=7', '/api/admin/billing?days=7', '/api/admin/mcp?days=7']) {
+    assert.equal((await worker.fetch(request(path, 'someone-else', ' RTSOLIDAY@gmail.com '), { ASSETS: assets })).status, 403, path);
+  }
 });
 
 test('admin assets and planner links resolve to existing files from every supported route',async()=>{
@@ -48,7 +52,6 @@ test('analytics API fails closed and never calls Cloudflare for unauthorized vis
   assert.equal(called, false);
   assert.equal((await worker.fetch(request('/api/admin/traffic?days=7', 'other-user', 'other@example.com'), env)).status, 403);
   assert.equal(called, false);
-  assert.equal((await worker.fetch(request('/api/admin/traffic?days=9', 'site-scoped-owner-id', ownerEmail), env)).status, 400);
   assert.equal((await worker.fetch(request('/api/admin/traffic?days=9', owner), env)).status, 400);
   assert.equal(called, false);
 });

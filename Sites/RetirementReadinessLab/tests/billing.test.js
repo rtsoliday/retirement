@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../worker/index.js';
+import { OWNER_CHATGPT_USER_ID } from '../worker/auth.js';
 import { access as billingAccess, activeSubscription } from '../worker/billing.js';
 import { baseScenario, normalizeScenario, applyProSimulationDefault, DEFAULT_SEED, FREE_SIMULATION_PATHS, MAX_SIMULATION_PATHS } from '../dist/model.js';
 import { runSimulation } from '../dist/engine.js';
@@ -72,19 +73,19 @@ test('anonymous and unconfigured accounts remain at 100 paths without Stripe cal
   assert.equal(calls.length, 0);
 });
 
-test('Sites owner has complimentary Pro without Stripe; anonymous email does not grant it', async () => {
+test('Sites owner has complimentary Pro without Stripe; an email header does not grant it', async () => {
   calls.length = 0;
   const noStripe = { ASSETS: assets };
-  const owner = await (await worker.fetch(request('/api/billing/status', { user: '028696a7-7846-4822-a4c1-67026aa2383f' }), noStripe)).json();
+  const owner = await (await worker.fetch(request('/api/billing/status', { user: OWNER_CHATGPT_USER_ID }), noStripe)).json();
   assert.equal(owner.tier, 'pro'); assert.equal(owner.maxPaths, 10000);
   assert.equal(owner.ownerAccess, true); assert.equal(owner.checkoutAvailable, false);
-  const emailOwner = await (await worker.fetch(request('/api/billing/status', { user: 'current-owner-id', email: 'rtsoliday@gmail.com' }), noStripe)).json();
-  assert.equal(emailOwner.tier, 'pro'); assert.equal(emailOwner.maxPaths, 10000);
+  const emailOnly = await (await worker.fetch(request('/api/billing/status', { user: 'someone-else', email: 'rtsoliday@gmail.com' }), noStripe)).json();
+  assert.equal(emailOnly.tier, 'free'); assert.equal(emailOnly.maxPaths, 100); assert.equal(emailOnly.ownerAccess, undefined);
   const emailWithoutSignIn = await (await worker.fetch(request('/api/billing/status', { email: 'rtsoliday@gmail.com' }), noStripe)).json();
   assert.equal(emailWithoutSignIn.tier, 'free');
   const otherUser = await (await worker.fetch(request('/api/billing/status', { user: 'someone-else', email: 'other@example.com' }), noStripe)).json();
   assert.equal(otherUser.tier, 'free');
-  const checkout = await worker.fetch(request('/api/billing/checkout', { method: 'POST', origin: site, user: '028696a7-7846-4822-a4c1-67026aa2383f' }), stripeEnv);
+  const checkout = await worker.fetch(request('/api/billing/checkout', { method: 'POST', origin: site, user: OWNER_CHATGPT_USER_ID }), stripeEnv);
   assert.equal(checkout.status, 409);
   assert.equal(calls.length, 0);
 });
@@ -277,7 +278,7 @@ test('sandbox visitors cannot check out and the signed-in owner can test Checkou
   assert.equal(visitor.maxPaths, 100);
   assert.equal((await worker.fetch(request('/api/billing/checkout', { method: 'POST', origin: site, user: 'someone-else' }), testEnv)).status, 403);
   assert.equal(calls.length, 0);
-  const ownerCustomer={id:'cus_owner',metadata:{retirement_site_user_id:'site-owner-id'}};
+  const ownerCustomer={id:'cus_owner',metadata:{retirement_site_user_id:OWNER_CHATGPT_USER_ID}};
   const ownerEnv={...testEnv,STRIPE_FETCH:async(url,init)=>{
     const path=new URL(url).pathname;
     if(path==='/v1/customers/search'||path==='/v1/customers'&&init.method==='GET')return Response.json({data:[ownerCustomer],has_more:false});
@@ -285,15 +286,15 @@ test('sandbox visitors cannot check out and the signed-in owner can test Checkou
     if(path==='/v1/subscriptions')return Response.json({data:[]});
     return stripeEnv.STRIPE_FETCH(url,init);
   }};
-  const owner = await (await worker.fetch(request('/api/billing/status', { user: 'site-owner-id', email: 'rtsoliday@gmail.com' }), ownerEnv)).json();
+  const owner = await (await worker.fetch(request('/api/billing/status', { user: OWNER_CHATGPT_USER_ID }), ownerEnv)).json();
   assert.equal(owner.tier, 'pro'); assert.equal(owner.checkoutAvailable, true);assert.equal(owner.testBilling,true);
-  assert.equal((await worker.fetch(request('/api/billing/checkout', { method: 'POST', origin: site, user: 'site-owner-id', email: 'rtsoliday@gmail.com' }), ownerEnv)).status, 200);
+  assert.equal((await worker.fetch(request('/api/billing/checkout', { method: 'POST', origin: site, user: OWNER_CHATGPT_USER_ID }), ownerEnv)).status, 200);
   const session=calls.find(call=>call.path==='/v1/checkout/sessions' && call.method==='POST');
   assert.equal(new URLSearchParams(session.body).get('line_items[0][price]'),'price_test_monthly');
 });
 
 test('owner billing lookup retains portal access for paid and canceled subscriptions without affecting complimentary Pro',async()=>{
-  const ownerId='028696a7-7846-4822-a4c1-67026aa2383f',ownerCustomer={...customer,metadata:{retirement_site_user_id:ownerId}};
+  const ownerId=OWNER_CHATGPT_USER_ID,ownerCustomer={...customer,metadata:{retirement_site_user_id:ownerId}};
   for(const status of ['active','canceled']){
     const env={...stripeEnv,STRIPE_FETCH:async(url,init)=>{
       const path=new URL(url).pathname;
@@ -312,14 +313,14 @@ test('owner billing lookup retains portal access for paid and canceled subscript
 
 test('Stripe outages preserve owner Pro and offer an ownership-checked portal retry',async()=>{
   const env={...stripeEnv,STRIPE_FETCH:async()=>{throw new Error('offline');}};
-  const owner='028696a7-7846-4822-a4c1-67026aa2383f';
+  const owner=OWNER_CHATGPT_USER_ID;
   const access=await (await worker.fetch(request('/api/billing/status',{user:owner}),env)).json();
   assert.equal(access.tier,'pro');assert.equal(access.billingLookupUnavailable,true);assert.equal(access.billingPortalAvailable,true);assert.equal(access.checkoutAvailable,false);
   assert.equal((await worker.fetch(request('/api/billing/portal',{method:'POST',origin:site,user:owner}),env)).status,502);
 });
 
 test('an active owner test subscription blocks duplicate sandbox checkout',async()=>{
-  const user='028696a7-7846-4822-a4c1-67026aa2383f';
+  const user=OWNER_CHATGPT_USER_ID;
   const env={...stripeEnv,STRIPE_SECRET_KEY:'sk_test_fake',STRIPE_FETCH:async(url)=>{
     const path=new URL(url).pathname;
     if(path==='/v1/customers/search'||path==='/v1/customers')return Response.json({data:[{id:'cus_owner',metadata:{retirement_site_user_id:user}}],has_more:false});
@@ -332,7 +333,7 @@ test('an active owner test subscription blocks duplicate sandbox checkout',async
 });
 
 test('owner can manage existing billing when Checkout prices are missing',async()=>{
-  const user='028696a7-7846-4822-a4c1-67026aa2383f';
+  const user=OWNER_CHATGPT_USER_ID;
   const env={...stripeEnv,STRIPE_PRO_LIVE_MONTHLY_PRICE_ID:undefined,STRIPE_FETCH:async(url,init)=>{
     if(new URL(url).pathname==='/v1/customers/search')return Response.json({data:[{id:customer.id,metadata:{retirement_site_user_id:user}}]});
     return stripeEnv.STRIPE_FETCH(url,init);

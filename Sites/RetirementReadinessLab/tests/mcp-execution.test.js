@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync} from 'node:fs';
 import worker from '../worker/index.js';
+import { OWNER_CHATGPT_USER_ID } from '../worker/auth.js';
 import {CalculationGate, calculationGate, hostedExecution, CALCULATION_LEASE_MS,EXECUTION_CHECK_SQL} from '../worker/mcp-execution.js';
 import {acquireUsage,startExecution,cancelExecution,finishUsage} from '../worker/mcp-storage.js';
 import {verificationScenarios} from '../worker/verification-scenarios.js';
 import {baseScenario} from '../dist/model.js';
 
-const origin='https://retirementforecast.us',owner='028696a7-7846-4822-a4c1-67026aa2383f';
+const origin='https://retirementforecast.us',owner=OWNER_CHATGPT_USER_ID;
 function database(checkpoint=async()=>{}){
   const db=new DatabaseSync(':memory:');
   for(const name of ['0000_opposite_morlocks','0001_chilly_ultron','0002_moaning_rhodey'])db.exec(readFileSync(new URL(`../drizzle/${name}.sql`,import.meta.url),'utf8'));

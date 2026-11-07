@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { CfWorkerJsonSchemaValidator } from '@modelcontextprotocol/server/validators/cf-worker';
 import worker from '../worker/index.js';
+import { OWNER_CHATGPT_USER_ID } from '../worker/auth.js';
 import { calculateForecast, summarizeForecast } from '../worker/mcp.js';
 import { forecastInput, compareInput, forecastOutput } from '../worker/mcp-schema.js';
 import { acquireUsage, finishUsage, accountKey } from '../worker/mcp-storage.js';
@@ -13,7 +14,7 @@ import { baseScenario, employerRothDefaults } from '../dist/model.js';
 import { resolveModelDefaults, websiteModelDefaults, MODEL_DEFAULT_GROUPS } from '../worker/mcp-defaults.js';
 import { runSimulation, runSimulationAsync } from '../dist/engine.js';
 
-const origin = 'https://retirementforecast.us', owner = '028696a7-7846-4822-a4c1-67026aa2383f';
+const origin = 'https://retirementforecast.us', owner = OWNER_CHATGPT_USER_ID;
 function database() {
   const db = new DatabaseSync(':memory:');
   for (const name of ['0000_opposite_morlocks', '0001_chilly_ultron', '0002_moaning_rhodey']) db.exec(readFileSync(new URL(`../drizzle/${name}.sql`, import.meta.url), 'utf8'));

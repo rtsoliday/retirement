@@ -1658,6 +1658,37 @@ test('failed budget saves display a warning without leaving the editor',async()=
   assert.match(a.element('#main > .notice').textContent,/could not be saved/);assert.equal(a.saved(),null);assert.equal(a.state.view,'budget');
 });
 
+test('the saved label and sidebar note never claim a save that did not happen',async()=>{
+  const html=readFileSync(new URL('../dist/index.html',import.meta.url),'utf8');
+  assert.match(html,/id="save-status"[^>]*>● Saved on this device</);assert.match(html,/id="sidebar-save-note"[^>]*>Your plans are saved/);
+  const shown=a=>[a.element('#save-status').textContent,a.element('#sidebar-save-note').textContent].join(' | ');
+  const SAVED=/^● Saved on this device \| Your plans are saved/,UNSAVED=/^▲ Not saved on this device \| Changes are not being saved/;
+  // A failed write, then the same page recovering when writes work again.
+  const storage={fail:true},a=app(null,{storage});
+  a.render();assert.match(shown(a),SAVED);
+  await a.click('new-scenario');assert.match(a.state.storageError,/could not be saved/);assert.match(shown(a),UNSAVED);
+  storage.fail=false;await a.click('new-scenario');assert.equal(a.state.storageError,'');assert.match(shown(a),SAVED);
+  // A store changed elsewhere: this tab's edits can no longer be saved.
+  const shared={raw:JSON.stringify({scenarios:[model.baseScenario()],selectedId:'base-plan'})},b=app(null,{storage:shared});
+  b.render();assert.match(shown(b),SAVED);
+  shared.raw=JSON.stringify({scenarios:[model.baseScenario()],selectedId:'base-plan',hasStartedPlan:true});b.storageChanged();assert.match(shown(b),UNSAVED);
+  // An unreadable store, and a browser that can't save at all.
+  const unreadable=app(null,{storage:{raw:JSON.stringify({scenarios:[null]})}});unreadable.render();assert.match(shown(unreadable),UNSAVED);
+  await unreadable.click('replace-unreadable-plans');assert.match(shown(unreadable),SAVED);
+  const noLocks=app(null,{locks:null});noLocks.render();assert.match(shown(noLocks),UNSAVED);
+  // A change refused because it would stop the plans from opening updates the label at once.
+  const refused=app();refused.render();refused.current().employerRothAccounts=[{...model.employerRothDefaults(),name:''}];
+  assert.equal(await refused.persist(),false);assert.match(shown(refused),UNSAVED);
+  // Other wording about saved plans follows the same state.
+  const store={raw:JSON.stringify({scenarios:[model.baseScenario()],selectedId:'base-plan'})},c=app(JSON.parse(store.raw),{storage:store});
+  await c.resultRestoreReady;
+  assert.match(c.results(),/Your inputs are saved in this browser/);assert.match(c.reports(),/Your plans are saved only in this browser/);
+  store.fail=true;assert.equal(await c.persist(),false);
+  assert.doesNotMatch(c.results(),/Your inputs are saved/);assert.match(c.results(),/Recent changes are not saved/);
+  assert.doesNotMatch(c.reports(),/Your plans are saved/);assert.match(c.reports(),/Changes are not being saved/);
+  await c.click('roth-finish-later');assert.match(c.state.message,/^This draft is not saved|could not be saved/);
+  store.fail=false;await c.click('roth-finish-later');assert.match(c.state.message,/^Draft saved/);
+});
 test('copy, reset, apply and import cannot overwrite a failed-save warning',async()=>{
   for(const action of ['new-scenario','reset-assumptions','apply-budget']){
     const a=app(null,{storage:{fail:true}});a.current().budget.monthlyBudgets=[{month:'2026-01',creditCardBills:[{monthlyAmount:1000}]}];

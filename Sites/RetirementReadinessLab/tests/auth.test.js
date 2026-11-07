@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import worker from '../worker/index.js';
-import { identityKeyCache, IdentityKeysUnavailableError } from '../worker/auth.js';
+import { identityKeyCache, IdentityKeysUnavailableError, OWNER_CHATGPT_USER_ID } from '../worker/auth.js';
 
 const origin = 'https://retirementforecast.us';
 const project = 'retirement-auth-test';
@@ -138,7 +138,7 @@ test('only the signed, verified owner Google identity receives complimentary Pro
   const checkout = await worker.fetch(request('/api/billing/checkout', { bearer: ownerToken, method: 'POST', body: { interval: 'monthly' } }), fixture.env);
   assert.equal(checkout.status, 409);
   assert.equal(fixture.writes.filter(call=>call.method==='POST').length, 0);
-  const otherGoogle = await (await worker.fetch(request('/api/billing/status', { user: '028696a7-7846-4822-a4c1-67026aa2383f', bearer: await token({ email: 'other@example.com', email_verified: true }) }), fixture.env)).json();
+  const otherGoogle = await (await worker.fetch(request('/api/billing/status', { user: OWNER_CHATGPT_USER_ID, bearer: await token({ email: 'other@example.com', email_verified: true }) }), fixture.env)).json();
   assert.equal(otherGoogle.tier, 'free');
   for (const claims of [
     { email: 'rtsoliday@gmail.com', email_verified: false },
@@ -157,7 +157,7 @@ test('verified Google owner can use sandbox Checkout but other Google identities
   assert.equal(access.tier,'pro');assert.equal(access.checkoutAvailable,true);assert.equal(access.testBilling,true);
   assert.equal((await worker.fetch(request('/api/billing/checkout',{bearer,method:'POST',body:{interval:'monthly'}}),env)).status,200);
   assert.equal(fixture.writes.find(call=>call.path==='/v1/checkout/sessions' && call.method==='POST').values.get('line_items[0][price]'),'price_test_monthly');
-  assert.equal((await worker.fetch(request('/api/billing/checkout',{user:'028696a7-7846-4822-a4c1-67026aa2383f',bearer:await token(),method:'POST',body:{interval:'monthly'}}),env)).status,403);
+  assert.equal((await worker.fetch(request('/api/billing/checkout',{user:OWNER_CHATGPT_USER_ID,bearer:await token(),method:'POST',body:{interval:'monthly'}}),env)).status,403);
 });
 
 test('forged, expired, wrong-project and unsupported tokens never fall back to ChatGPT', async () => {

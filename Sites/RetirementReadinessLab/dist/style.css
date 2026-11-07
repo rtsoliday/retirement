@@ -33,7 +33,7 @@
 .nav-group{font-size:.64rem;text-transform:uppercase;letter-spacing:.12em;font-weight:750;color:#7a8892;padding:17px 12px 7px}.nav-group:first-child{padding-top:0}
 .sidebar-foot{padding:16px 7px 0;color:#79868e;border-top:1px solid var(--line);font-size:.71rem}
 .topbar{position:sticky;top:0;z-index:40;padding:14px 32px;min-height:84px;box-shadow:0 2px 6px #223b4b04;gap:16px}
-.eyebrow{text-transform:none;letter-spacing:0;font-size:.9rem;color:#354c58;font-weight:700}.privacy{font-size:.7rem;color:#71818a}.topline{gap:4px}
+.eyebrow{text-transform:none;letter-spacing:0;font-size:.9rem;color:#354c58;font-weight:700}.privacy{font-size:.7rem;color:#71818a}.privacy.unsaved,.sidebar-foot.unsaved{color:#90332d;font-weight:700}.topline{gap:4px}
 .topactions{align-items:center;gap:16px}.scenario-select-wrap{gap:3px}.scenario-select-wrap label{font-size:.63rem;letter-spacing:.09em}.topactions select{min-width:180px;max-width:250px;padding:7px 10px;min-height:36px;font-size:.83rem}
 .run-state{font-size:.7rem;color:#76888a}.topbar .primary{font-size:.81rem;min-height:38px;padding:9px 14px}
 main{padding:34px 32px 56px;max-width:1400px;scroll-margin-top:100px}
